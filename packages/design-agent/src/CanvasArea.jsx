@@ -2061,7 +2061,8 @@ const CanvasArea = forwardRef(
                   return null;
                 })}
               {activeTasks
-                .filter((t) => !t.fullyMounted)
+                /* x 未分配前不渲染：杜绝占位框闪现在世界原点（左上角） */
+                .filter((t) => !t.fullyMounted && t.x !== undefined)
                 .map((task) => (
                   <LoaderNode
                     key={task.taskId}

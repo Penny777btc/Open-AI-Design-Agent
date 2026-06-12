@@ -381,7 +381,7 @@ export default function CreativeCanvas({
       // generate_* (no source) keeps the default centre placement.
       let x, y;
       const a = flat.args || {};
-      const srcLabel = a.image || a.video || a.audio;
+      const srcLabel = a.image || a.video || a.audio || a.source_asset;
       if (srcLabel && typeof srcLabel === "string" && srcLabel.startsWith("asset_")) {
         try {
           const cs = canvasRef.current?.getCanvasState?.();
