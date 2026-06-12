@@ -55,8 +55,33 @@ async def upload_reference_doc(session_id: str, request: Request, user=Depends(g
         parsed = doc_parser.parse(filename, data)
     except Exception:
         raise HTTPException(status_code=422, detail="文档解析失败，请确认文件未加密且格式正确")
-    if not parsed.text.strip() and not parsed.images:
-        raise HTTPException(status_code=422, detail="未能从文档中提取到内容（可能是扫描件，暂不支持 OCR）")
+
+    # 视觉理解：结构化摘要 + 定位产品页（mock 模式跳过；失败静默降级）
+    from app.config import settings as cfg
+    from app.services import doc_vision
+
+    vision = None
+    if cfg.provider_mode != "mock" and parsed.page_renders:
+        vision = await doc_vision.analyze(parsed.page_renders)
+
+    extracted_text = parsed.text
+    if vision and vision.get("summary"):
+        extracted_text = (extracted_text + "\n\n[AI 视觉解析摘要]\n" + vision["summary"])[:28_000]
+
+    # 选图三级策略：逐图视觉分类（最准）→ 产品页优先 → 文档顺序
+    selected = None
+    if cfg.provider_mode != "mock" and parsed.images:
+        candidates = sorted(parsed.images, key=lambda im: -len(im[0]))[:16]  # 最大的 16 张做候选
+        product_idx = await doc_vision.classify_images([c[0] for c in candidates])
+        if product_idx is not None:
+            product = [candidates[i] for i in product_idx if i < len(candidates)]
+            rest = [c for j, c in enumerate(candidates) if j not in set(product_idx)]
+            selected = (product + rest)[:8] if product else None
+    if selected is None:
+        selected = doc_parser.select_images(parsed.images, vision.get("product_pages") if vision else None)
+
+    if not extracted_text.strip() and not selected:
+        raise HTTPException(status_code=422, detail="未能从文档中提取到内容（文件可能已加密或为空）")
 
     async with SessionLocal() as db:
         session = await db.get(DesignSession, session_id)
@@ -65,7 +90,7 @@ async def upload_reference_doc(session_id: str, request: Request, user=Depends(g
 
         db.add(ReferenceDoc(
             session_id=session_id, user_id=user.id, filename=filename[:255],
-            extracted_text=parsed.text, image_count=len(parsed.images),
+            extracted_text=extracted_text, image_count=len(selected),
         ))
 
         # 提取图按现有内容排布登上画布
@@ -79,7 +104,7 @@ async def upload_reference_doc(session_id: str, request: Request, user=Depends(g
         planner = PlacementPlanner(nodes)
         labels = []
         count = len(existing)
-        for idx, (img_bytes, mime) in enumerate(parsed.images):
+        for idx, (img_bytes, mime, _page) in enumerate(selected):
             from PIL import Image
             from io import BytesIO
 
@@ -103,7 +128,7 @@ async def upload_reference_doc(session_id: str, request: Request, user=Depends(g
             labels.append(label)
 
         # 历史留痕：上下文对用户可见
-        note = f"📄 已解析参考文档「{filename}」：提取 {len(parsed.text)} 字"
+        note = f"📄 已解析参考文档「{filename}」：提取 {len(extracted_text)} 字" + ("（含 AI 视觉摘要）" if vision else "")
         if labels:
             note += f"，{len(labels)} 张图片已添加到画布（{', '.join(labels)}）"
         note += "。后续设计将参考该文档内容。"
@@ -117,7 +142,9 @@ async def upload_reference_doc(session_id: str, request: Request, user=Depends(g
 
     return {
         "filename": filename,
-        "text_chars": len(parsed.text),
+        "text_chars": len(extracted_text),
+        "vision": bool(vision),
+        "product_pages": (vision or {}).get("product_pages", []),
         "images_extracted": len(labels),
         "asset_labels": labels,
         "note": note,

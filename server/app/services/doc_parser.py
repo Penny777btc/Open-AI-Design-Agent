@@ -1,6 +1,6 @@
-"""参考文档解析：PDF / DOCX → 文字 + 内嵌图片。
+"""参考文档解析：PDF / DOCX → 文字 + 内嵌图片（带页码）+ 页面渲染图。
 
-提取的文字进入 Agent 规划上下文；图片作为画布资产供参考与改图。
+页面渲染图供视觉模型理解（doc_vision），嵌入图按"产品页优先"被挑选登上画布。
 """
 
 from dataclasses import dataclass, field
@@ -10,38 +10,52 @@ from io import BytesIO
 @dataclass
 class ParsedDoc:
     text: str = ""
-    images: list[tuple[bytes, str]] = field(default_factory=list)  # (data, mime)
+    # (data, mime, page_no 从1开始；docx 无页码概念恒为 0)
+    images: list[tuple[bytes, str, int]] = field(default_factory=list)
+    # (page_no, png bytes)，仅 PDF 有
+    page_renders: list[tuple[int, bytes]] = field(default_factory=list)
 
 
 _MIN_IMAGE_BYTES = 8 * 1024  # 过滤图标/装饰小图
-_MAX_IMAGES = 8
 _MAX_TEXT_CHARS = 20_000
+_RENDER_DPI = 72
+_MAX_RENDER_PAGES = 16
 
 
 def parse_pdf(data: bytes) -> ParsedDoc:
     from pypdf import PdfReader
 
-    reader = PdfReader(BytesIO(data))
     out = ParsedDoc()
+    reader = PdfReader(BytesIO(data))
     texts = []
-    for page in reader.pages:
+    for page_no, page in enumerate(reader.pages, start=1):
         try:
             if t := page.extract_text():
                 texts.append(t)
         except Exception:
+            pass
+        try:
+            for img in page.images:
+                raw = img.data
+                if len(raw) >= _MIN_IMAGE_BYTES and (mime := _sniff(raw)):
+                    out.images.append((raw, mime, page_no))
+        except Exception:
             continue
-        if len(out.images) < _MAX_IMAGES:
-            try:
-                for img in page.images:
-                    raw = img.data
-                    if len(raw) < _MIN_IMAGE_BYTES or len(out.images) >= _MAX_IMAGES:
-                        continue
-                    mime = _sniff(raw)
-                    if mime:
-                        out.images.append((raw, mime))
-            except Exception:
-                continue
     out.text = "\n".join(texts)[:_MAX_TEXT_CHARS]
+
+    # 页面渲染（视觉理解用）
+    try:
+        import fitz  # pymupdf
+
+        doc = fitz.open(stream=data, filetype="pdf")
+        for i, page in enumerate(doc):
+            if i >= _MAX_RENDER_PAGES:
+                break
+            pix = page.get_pixmap(dpi=_RENDER_DPI)
+            out.page_renders.append((i + 1, pix.tobytes("png")))
+        doc.close()
+    except Exception:
+        pass
     return out
 
 
@@ -57,14 +71,28 @@ def parse_docx(data: bytes) -> ParsedDoc:
     out.text = "\n".join(paragraphs)[:_MAX_TEXT_CHARS]
 
     for rel in document.part.rels.values():
-        if "image" in rel.reltype and len(out.images) < _MAX_IMAGES:
+        if "image" in rel.reltype:
             try:
                 raw = rel.target_part.blob
                 if len(raw) >= _MIN_IMAGE_BYTES and (mime := _sniff(raw)):
-                    out.images.append((raw, mime))
+                    out.images.append((raw, mime, 0))
             except Exception:
                 continue
     return out
+
+
+def select_images(
+    images: list[tuple[bytes, str, int]], product_pages: list[int] | None, limit: int = 8
+) -> list[tuple[bytes, str, int]]:
+    """挑选登上画布的图：产品页的图优先（页内按尺寸降序），其余补位。"""
+    if not product_pages:
+        return images[:limit]
+    product = sorted(
+        [im for im in images if im[2] in product_pages],
+        key=lambda im: (product_pages.index(im[2]), -len(im[0])),
+    )
+    rest = [im for im in images if im[2] not in product_pages]
+    return (product + rest)[:limit]
 
 
 def _sniff(data: bytes) -> str | None:
