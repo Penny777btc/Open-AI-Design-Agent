@@ -58,7 +58,12 @@ def _extract_json(text: str) -> dict:
     return json.loads(text)
 
 
-async def make_plan(brief: str, history: list[dict] | None = None, assets: list[dict] | None = None) -> Plan:
+async def make_plan(
+    brief: str,
+    history: list[dict] | None = None,
+    assets: list[dict] | None = None,
+    docs: list[dict] | None = None,
+) -> Plan:
     llm = get_llm()
     system = SYSTEM_PROMPT.replace("{max_nodes}", str(settings.max_plan_nodes))
     if assets:
@@ -67,6 +72,19 @@ async def make_plan(brief: str, history: list[dict] | None = None, assets: list[
             for a in assets[-20:]
         )
         system += f"\n\n当前会话已有资产（edit_image 的 source_asset 只能从这里选）：\n{lines}"
+    if docs:
+        # 用户上传的参考文档：产品信息/品牌资料优先于一般假设
+        budget = 6000  # 控制上下文长度
+        chunks = []
+        for d in docs[-3:]:
+            text = (d.get("text") or "")[: budget // max(len(docs[-3:]), 1)]
+            if text.strip():
+                chunks.append(f"《{d.get('filename', '文档')}》:\n{text}")
+        if chunks:
+            system += (
+                "\n\n用户上传的参考资料（设计中的产品名/卖点/参数/品牌信息以此为准，"
+                "可直接引用其中文案）：\n" + "\n---\n".join(chunks)
+            )
     messages = [{"role": "system", "content": system}]
     for msg in (history or [])[-6:]:
         if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):

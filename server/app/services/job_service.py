@@ -115,7 +115,16 @@ async def _run_job(job_id: str) -> None:
             {"asset_label": a.asset_label, "kind": a.kind, "prompt": a.prompt, "source_tool": a.source_tool}
             for a in asset_rows
         ]
-        plan = await make_plan(brief, job_input.get("messages_snapshot"), assets_ctx)
+        async with SessionLocal() as db:
+            from app.models import ReferenceDoc
+
+            doc_rows = (
+                await db.execute(
+                    select(ReferenceDoc).where(ReferenceDoc.session_id == session_id).order_by(ReferenceDoc.created_at)
+                )
+            ).scalars().all()
+        docs_ctx = [{"filename": d.filename, "text": d.extracted_text} for d in doc_rows]
+        plan = await make_plan(brief, job_input.get("messages_snapshot"), assets_ctx, docs_ctx)
 
         if plan.mode == "direct":
             await emit(job_id, "text", {"content": plan.reply or "好的。"})

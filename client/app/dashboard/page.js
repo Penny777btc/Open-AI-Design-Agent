@@ -179,10 +179,16 @@ export default function AssistantDashboard() {
 
   const processFile = async (file) => {
     if (!file) return;
-    // 类型校验：仅支持图片/视频/音频（PDF 等会以 broken image 摧毁画布）
+    // 文档（PDF/Word）需要会话上下文：引导进入项目后上传解析
+    const docExt = (file.name.split(".").pop() || "").toLowerCase();
+    if (["pdf", "docx", "doc"].includes(docExt)) {
+      toast("📄 文档解析请在项目内进行：先创建/打开一个项目，再上传文档", { duration: 5000 });
+      return;
+    }
+    // 媒体类型校验
     const okType = /^(image|video|audio)\//.test(file.type || "");
     if (!okType) {
-      toast.error(`暂不支持「${file.name.split('.').pop()}」格式，请上传图片、视频或音频`);
+      toast.error(`暂不支持「${docExt}」格式，请上传图片、视频或音频`);
       return;
     }
 

@@ -134,6 +134,20 @@ class Order(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class ReferenceDoc(Base):
+    """上传的参考文档：解析出的文字进入规划上下文。"""
+
+    __tablename__ = "reference_docs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id"), index=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    extracted_text: Mapped[str] = mapped_column(Text, default="")
+    image_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class UploadedFile(Base):
     __tablename__ = "upload_files"
 

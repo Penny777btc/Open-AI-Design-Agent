@@ -668,12 +668,45 @@ export default function CreativeCanvas({
     return data.id;
   };
 
+  // 参考文档（PDF/DOCX）：解析文字进规划上下文，内嵌图片登画布
+  const processReferenceDoc = async (file) => {
+    setUploading(true);
+    setUploadProgress(0);
+    try {
+      const activeSessionId = await ensureSession();
+      const formData = new FormData();
+      formData.append("file", file);
+      const { data } = await axios.post(
+        `/api/v1/sessions/${activeSessionId}/reference-docs`,
+        formData,
+        {
+          headers: { "Content-Type": "multipart/form-data", ...getHeaders() },
+          onUploadProgress: (pe) => setUploadProgress(Math.round((pe.loaded * 100) / pe.total)),
+        }
+      );
+      toast.success(`📄 已解析：${data.text_chars} 字${data.images_extracted ? ` + ${data.images_extracted} 张图片` : ""}`);
+      await loadAssets();
+      await loadHistory();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "文档解析失败");
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
   const processFile = async (file) => {
     if (!file) return;
-    // 类型校验：仅支持图片/视频/音频（PDF 等会以 broken image 摧毁画布）
+    // 文档类型走解析通道（文字进上下文、图片登画布）
+    const docExt = (file.name.split(".").pop() || "").toLowerCase();
+    if (["pdf", "docx", "doc"].includes(docExt)) {
+      return processReferenceDoc(file);
+    }
+    // 媒体类型校验：其他格式会以 broken image 摧毁画布
     const okType = /^(image|video|audio)\//.test(file.type || "");
     if (!okType) {
-      toast.error(`暂不支持「${file.name.split('.').pop()}」格式，请上传图片、视频或音频`);
+      toast.error(`暂不支持「${docExt}」格式，请上传图片、视频、音频或 PDF/Word 文档`);
       return;
     }
 

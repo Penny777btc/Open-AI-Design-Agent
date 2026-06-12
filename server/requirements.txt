@@ -10,3 +10,5 @@ python-multipart
 bcrypt
 pyjwt
 email-validator
+pypdf
+python-docx
