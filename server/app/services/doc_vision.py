@@ -30,11 +30,14 @@ PROMPT = """这是一份用户上传的产品/品牌资料文档的逐页截图�
 
 CLASSIFY_PROMPT = """以下是从产品资料中提取的候选图片（按序号标注）。逐张判断哪些是「产品照片」——产品本体的清晰展示图（如商品白底图/包装图/产品特写），不包括：风景、人物合影、logo、奖牌、装饰图。
 
-只输出 JSON：{"product_indices": [产品照片的序号列表，按作为设计参考的价值降序]}"""
+仔细阅读每张图中产品标签/包装上的文字（产品名、型号、品种、规格），写进描述——后续要靠它区分同系列的不同产品。
+
+只输出 JSON（按作为设计参考的价值降序）：
+{"products": [{"index": <序号>, "caption": "<这是什么产品的什么图，必须含标签上可辨认的产品名/型号/品种，30字内>"}]}"""
 
 
-async def classify_images(images: list[bytes]) -> list[int] | None:
-    """对候选图分类，返回产品图序号（0 起）按价值降序；失败返回 None。"""
+async def classify_images(images: list[bytes]) -> list[dict] | None:
+    """对候选图分类，返回产品图 [{"index": 序号(0起), "caption": 描述}] 按价值降序；失败返回 None。"""
     if not settings.gemini_api_key or not images:
         return None
     from io import BytesIO
@@ -45,9 +48,9 @@ async def classify_images(images: list[bytes]) -> list[int] | None:
     for i, raw in enumerate(images):
         try:
             img = Image.open(BytesIO(raw)).convert("RGB")
-            img.thumbnail((256, 256))
+            img.thumbnail((512, 512))  # 256px 读不清标签上的品种/型号小字
             buf = BytesIO()
-            img.save(buf, "JPEG", quality=70)
+            img.save(buf, "JPEG", quality=80)
             parts.append({"text": f"#{i}"})
             parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}})
         except Exception:
@@ -63,8 +66,12 @@ async def classify_images(images: list[bytes]) -> list[int] | None:
             resp.raise_for_status()
             text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
         if m := re.search(r"\{.*\}", text, re.DOTALL):
-            indices = json.loads(m.group(0)).get("product_indices", [])
-            return [int(i) for i in indices if isinstance(i, int) or str(i).isdigit()]
+            items = json.loads(m.group(0)).get("products", [])
+            out = []
+            for it in items:
+                if isinstance(it, dict) and str(it.get("index", "")).lstrip("-").isdigit():
+                    out.append({"index": int(it["index"]), "caption": str(it.get("caption", ""))[:120]})
+            return out
     except Exception as exc:
         logger.warning("doc vision classify failed: %s", str(exc)[:200])
     return None

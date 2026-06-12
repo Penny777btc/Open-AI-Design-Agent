@@ -26,22 +26,27 @@ async def ingest(job_id: str, session_id: str, user_id: str, filename: str, doc_
         await emit(job_id, "info", {"content": f"AI 正在通读 {len(parsed.page_renders)} 页内容（约 1-2 分钟）…"})
         vision = await doc_vision.analyze(parsed.page_renders)
 
+    # 摘要前置：截断喂给 planner 时优先保住结构化产品信息，原文殿后
     extracted_text = parsed.text
     if vision and vision.get("summary"):
-        extracted_text = (extracted_text + "\n\n[AI 视觉解析摘要]\n" + vision["summary"])[:28_000]
+        extracted_text = ("[AI 视觉解析摘要]\n" + vision["summary"] + "\n\n[文档原文]\n" + parsed.text)[:28_000]
 
-    # 选图三级策略：逐图视觉分类 → 产品页优先 → 文档顺序
-    selected = None
+    # 选图三级策略：逐图视觉分类（带描述）→ 产品页优先 → 文档顺序
+    selected = None  # [(bytes, mime, page_no, caption)]
     if settings.provider_mode != "mock" and parsed.images:
         await emit(job_id, "info", {"content": f"正在从 {len(parsed.images)} 张图中识别产品图…"})
         candidates = sorted(parsed.images, key=lambda im: -len(im[0]))[:16]
-        product_idx = await doc_vision.classify_images([c[0] for c in candidates])
-        if product_idx is not None:
-            product = [candidates[i] for i in product_idx if i < len(candidates)]
-            rest = [c for j, c in enumerate(candidates) if j not in set(product_idx)]
-            selected = (product + rest)[:8] if product else None
+        classified = await doc_vision.classify_images([c[0] for c in candidates])
+        if classified:
+            idxs = [it["index"] for it in classified if 0 <= it["index"] < len(candidates)]
+            captions = {it["index"]: it["caption"] for it in classified}
+            product = [(*candidates[i], captions.get(i, "")) for i in idxs]
+            rest = [(*c, "") for j, c in enumerate(candidates) if j not in set(idxs)]
+            selected = (product + rest)[:8]
     if selected is None:
-        selected = doc_parser.select_images(parsed.images, vision.get("product_pages") if vision else None)
+        selected = [
+            (*im, "") for im in doc_parser.select_images(parsed.images, vision.get("product_pages") if vision else None)
+        ]
 
     if not extracted_text.strip() and not selected:
         raise ValueError("未能从文档中提取到内容（文件可能已加密或为空）")
@@ -62,7 +67,7 @@ async def ingest(job_id: str, session_id: str, user_id: str, filename: str, doc_
         planner = PlacementPlanner(nodes)
         count = len(existing)
         await db.commit()  # 立即落库并释放写锁（无图文档也要记录 ReferenceDoc）
-        for img_bytes, mime, _page in selected:
+        for img_bytes, mime, _page, caption in selected:
             from io import BytesIO
 
             from PIL import Image
@@ -78,7 +83,8 @@ async def ingest(job_id: str, session_id: str, user_id: str, filename: str, doc_
             label = f"asset_{count}"
             cx, cy = planner.next(width, height)
             url = storage.public_url(key)
-            prompt = f"来自文档 {filename}"
+            # caption 让 planner 能分辨每张产品图是什么，从而正确选 edit_image 的源图
+            prompt = f"产品图：{caption}（来自文档 {filename}）" if caption else f"来自文档 {filename}"
             db.add(Asset(
                 session_id=session_id, user_id=user_id, asset_label=label,
                 url=url, storage_key=key, kind="image", mime=mime,
@@ -103,6 +109,6 @@ async def ingest(job_id: str, session_id: str, user_id: str, filename: str, doc_
         note += "（含 AI 视觉摘要）"
     if labels:
         note += f"，{len(labels)} 张产品/关键图片已添加到画布"
-    note += "。后续设计将自动参考该文档。"
+    note += "。\n\n直接告诉我你要做什么，我会结合文档内容和产品图来设计，例如：「为文档里的产品做一张电商主图海报」。"
     await emit(job_id, "text", {"content": note})
     return {"labels": labels, "text_chars": len(extracted_text)}
