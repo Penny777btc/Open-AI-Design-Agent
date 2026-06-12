@@ -4,7 +4,6 @@ import React, { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useApi } from "@/context/ApiContext";
 import { CreativeCanvas } from "design-agent";
-import "design-agent/dist/tailwind.css";
 import { useTheme } from "next-themes";
 
 function CanvasLoader() {
@@ -19,6 +18,7 @@ function CanvasLoader() {
       sessionId={sessionId}
       initialAssetParam={initialAssetParam}
       user={userData}
+      userBalanceLabel={`CREDITS ${userData?.balance ?? 0}`}
       isAuthorized={true}
       theme={resolvedTheme}
       setTheme={setTheme}

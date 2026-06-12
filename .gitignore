@@ -117,3 +117,8 @@ venv.bak/
 .vscode/
 *.swp
 *.swo
+
+# local dev artifacts
+server/dev.db
+server/storage/
+server/scripts/samples/

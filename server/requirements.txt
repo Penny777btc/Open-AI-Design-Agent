@@ -1,5 +1,9 @@
 fastapi
-uvicorn
+uvicorn[standard]
+sqlalchemy[asyncio]
+aiosqlite
+greenlet
+pydantic-settings
 httpx
-python-dotenv
+pillow
 python-multipart

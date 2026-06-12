@@ -121,12 +121,30 @@ export default function AssistantDashboard() {
   };
 
 
+  // 软删除 + toast 撤销（替代原生 confirm 弹窗）
   const deleteSession = async (sessionId, sessionName) => {
-    if (!window.confirm(`Delete chat "${sessionName || "Untitled"}"? This cannot be undone.`)) return;
     try {
       await axios.delete(`${API}/sessions/${sessionId}`);
       setSessions(prev => prev.filter(s => s.id !== sessionId));
-      toast.success("Chat deleted");
+      toast((t) => (
+        <span className="flex items-center gap-3 text-[12px]">
+          Deleted “{(sessionName || "Untitled").slice(0, 20)}”
+          <button
+            className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider"
+            onClick={async () => {
+              toast.dismiss(t.id);
+              try {
+                await axios.post(`${API}/sessions/${sessionId}/restore`);
+                fetchSessions();
+              } catch {
+                toast.error("Restore failed");
+              }
+            }}
+          >
+            Undo
+          </button>
+        </span>
+      ), { duration: 5000 });
     } catch (err) {
       toast.error("Failed to delete chat");
     }
@@ -179,7 +197,7 @@ export default function AssistantDashboard() {
       });
 
       // 3. Final URL
-      const uploadedUrl = `https://cdn.muapi.ai/${fields.key}`;
+      const uploadedUrl = signData.public_url || `https://cdn.muapi.ai/${fields.key}`;
       const kind = file.type?.startsWith("video/") ? "video"
                  : file.type?.startsWith("audio/") ? "audio"
                  : "image";
@@ -199,61 +217,35 @@ export default function AssistantDashboard() {
 
   const handleFileUpload = (e) => processFile(e.target.files?.[0]);
 
+  // 只创建会话并带参跳转；消息发送统一由画布执行（避免双发与历史不一致）
+  const submittingRef = React.useRef(false);
   const startNewSession = async (initialMsg = "", skill = null, initialAttachments = []) => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     try {
       const { data } = await axios.post(`${API}/sessions`, {});
       const sessionId = data.id;
       let url = `/canvas?session=${sessionId}`;
-      let registeredAssets = [];
 
       if (initialAttachments.length > 0) {
-        const results = await Promise.all(initialAttachments.map(a => 
-          axios.post(`${API}/sessions/${sessionId}/assets`, { 
-            url: a.url, 
-            kind: a.kind, 
-            source_tool: "upload" 
+        const results = await Promise.all(initialAttachments.map(a =>
+          axios.post(`${API}/sessions/${sessionId}/assets`, {
+            url: a.url,
+            kind: a.kind,
+            source_tool: "upload"
           })
         ));
-        registeredAssets = results.map(r => r.data);
-        const labels = registeredAssets.map(a => a.asset_label).join(",");
+        const labels = results.map(r => r.data.asset_label).join(",");
         url += `&a=${encodeURIComponent(labels)}`;
       }
-      
-      if (initialMsg) {
-        const attachmentNote = registeredAssets.length
-          ? "\n\n[Attached " + registeredAssets.map(a => `${a.asset_label} (${a.kind})`).join(", ") + "]"
-          : "";
-        
-        const userMsg = {
-          role: "user",
-          content: initialMsg + attachmentNote,
-          attachments: registeredAssets,
-          timestamp: new Date().toISOString(),
-          skill_name: skill?.name
-        };
 
-        if (skill) {
-          url += `&skill=${encodeURIComponent(skill.name)}`;
-          const primaryInputKey = skill.inputs?.[0] || "premise";
-          await axios.post(`${API}/sessions/${sessionId}/run-skill`, {
-            skill_name: skill.name,
-            inputs: { [primaryInputKey]: initialMsg },
-            messages_snapshot: [userMsg],
-            model: "gpt-4o"
-          });
-        } else {
-          url += `&q=${encodeURIComponent(initialMsg)}`;
-          await axios.post(`${API}/sessions/${sessionId}/chat`, {
-            message: initialMsg,
-            messages_snapshot: [userMsg],
-            model: "gpt-4o"
-          });
-        }
-      }
-      
+      if (skill) url += `&skill=${encodeURIComponent(skill.name)}`;
+      if (initialMsg) url += `&q=${encodeURIComponent(initialMsg)}`;
+
       router.push(url);
     } catch (err) {
       toast.error("Failed to start session");
+      submittingRef.current = false;
     }
   };
 
@@ -277,17 +269,17 @@ export default function AssistantDashboard() {
       <Navbar />
       <main className="flex flex-col gap-6 items-center w-full h-full overflow-y-auto">
         <div className="flex-1 flex flex-col gap-6 sm:gap-8 items-center w-full max-w-7xl pt-6 sm:pt-8 pb-12 px-4 sm:px-8 lg:px-0">
-          <h1 className="text-5xl font-bold tracking-tight text-center flex items-center gap-3">
-            Design is easier with <span className="text-primary">Agents</span>
+          {/* 不用 flex 排标题：窄屏会逐词竖排（H4） */}
+          <h1 className="font-display text-3xl sm:text-5xl font-extrabold tracking-tight text-center">
+            From brief to <span className="brand-gradient-text">finished designs</span>
           </h1>
-          <p className="text-secondary-text text-lg text-center">
-            The open-source design agent that gets you and gets the job done
+          <p className="text-secondary-text text-base sm:text-lg text-center px-4">
+            AI design agent for e-commerce visuals, logos &amp; social covers
           </p>
-          <div className="flex items-center gap-6 text-[10px] font-bold uppercase tracking-widest">
-            <a href="https://github.com/Anil-matcha/Open-Lovart" target="_blank" className="flex items-center gap-2 px-4 py-2 bg-bg-card border border-divider rounded-full shadow-sm hover:shadow-md hover:border-primary/30 transition-all text-secondary-text hover:text-primary">
-              <CgTerminal size={12} className="text-primary" />
-              View Source
-            </a>
+          <div className="flex items-center gap-2 micro-label">
+            <span>// E-COMMERCE</span>
+            <span>// LOGO</span>
+            <span>// SOCIAL</span>
           </div>
           <div className="w-full max-w-3xl relative">
             <div className="bg-bg-card border border-divider rounded-md shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-1 focus-within:shadow-[0_8px_40px_rgb(0,0,0,0.08)] transition-all">
@@ -470,7 +462,7 @@ export default function AssistantDashboard() {
                               >
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center gap-3">
-                                    <div className={`w-8 h-8 rounded flex items-center justify-center transition-all ${activeSkill?.name === s.name ? "bg-primary text-white scale-110 shadow-lg shadow-primary/20" : "bg-bg-card text-primary border border-divider group-hover:scale-110"}`}>
+                                    <div className={`w-8 h-8 rounded flex items-center justify-center transition-all ${activeSkill?.name === s.name ? "bg-primary text-black scale-110 shadow-lg shadow-primary/20" : "bg-bg-card text-primary border border-divider group-hover:scale-110"}`}>
                                       <RiSparklingLine size={16} />
                                     </div>
                                     <div className="font-bold text-sm tracking-tight capitalize group-hover:text-primary transition-colors">{s.name.replace(/-/g, ' ')}</div>
@@ -518,10 +510,12 @@ export default function AssistantDashboard() {
                       </button>
                     </div>
                   )}
-                  <button 
+                  <button
                     onClick={() => (input.trim() || attachments.length > 0) && startNewSession(input.trim(), activeSkill, attachments)}
                     disabled={!input.trim() && attachments.length === 0}
-                    className={`p-2 rounded-full transition-all ${input.trim() || attachments.length > 0 ? "bg-primary text-white shadow-lg shadow-primary/20 hover:scale-105" : "bg-bg-page text-secondary-text/30"}`}
+                    aria-label="Send"
+                    title="Send"
+                    className={`p-2 rounded-full transition-all ${input.trim() || attachments.length > 0 ? "bg-primary text-black shadow-lg shadow-primary/20 hover:scale-105" : "bg-bg-page text-secondary-text/30"}`}
                   >
                     <FiSend size={18} />
                   </button>

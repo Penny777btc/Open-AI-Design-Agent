@@ -152,6 +152,8 @@ export default function CreativeCanvas({
   const fileInputRef = useRef(null);
   const syncedUrlsRef = useRef(new Set());
   const justCreatedSessionRef = useRef(false);
+  // 发送进行中标记：阻止异步 loadHistory 用空历史覆盖刚写入的消息（H1 根因之一）
+  const sendingRef = useRef(false);
   const initialHandoffProcessed = useRef(false);
 
   const getHeaders = useCallback(() => {
@@ -311,7 +313,7 @@ export default function CreativeCanvas({
         case "text":         return { type: "text", content: p.content };
         case "info":         return { type: "info", content: p.content };
         case "error":        return { type: "error", message: p.message };
-        case "tool_call":    return { type: "tool_call", name: p.name, args: p.args };
+        case "tool_call":    return { type: "tool_call", name: p.name, args: p.args, est_seconds: p.est_seconds };
         case "tool_result":  return { type: "tool_result", name: p.name, result: p.result, asset: p.asset };
         case "plan_propose": return { type: "plan_propose", title: p.title, nodes: p.nodes, total_credits: p.total_credits };
         default:             return { type: ev.type, ...p };
@@ -461,7 +463,20 @@ export default function CreativeCanvas({
         if (data.done) break;
         if (Date.now() - lastProgress > MAX_DEAD_AIR) throw new Error("Stalled");
       } catch (err) {
-        if (Date.now() - lastProgress > MAX_DEAD_AIR) break;
+        if (Date.now() - lastProgress > MAX_DEAD_AIR) {
+          // 长时间无进展时不再静默退出：告知用户任务仍在后台，刷新可重连
+          setMessages(prev => {
+            const arr = [...prev];
+            if (assistantIdx >= 0 && assistantIdx < arr.length) {
+              const m = { ...arr[assistantIdx], events: [...(arr[assistantIdx].events || [])] };
+              m.events.push({ id: `stall-${jobId}`, type: "info", job_id: jobId,
+                content: "Still running in background — refresh this page to reconnect." });
+              arr[assistantIdx] = m;
+            }
+            return arr;
+          });
+          break;
+        }
       }
       await new Promise(r => setTimeout(r, POLL_INTERVAL));
     }
@@ -500,6 +515,7 @@ export default function CreativeCanvas({
   const loadHistory = async () => {
     try {
       const { data } = await axios.get(`${API}/sessions/${sessionId}/messages`, { headers: getHeaders() });
+      if (sendingRef.current) return; // 发送中：不要用旧历史覆盖正在构建的消息流
       if (data && data.length > 0) {
         // Cleanup: Hide approval cards that already have results or are for inactive jobs
         const cleaned = data.map(m => ({
@@ -528,7 +544,9 @@ export default function CreativeCanvas({
     if (!sessionId) return;
     try {
       const { data } = await axios.get(`${API}/sessions/${sessionId}/jobs`, { headers: getHeaders() });
-      const active = data.find(j => (j.status === "pending" || j.status === "processing") && j.id);
+      // 非终态全部恢复（含等待审批），刷新/跨页后重建事件流与审批卡片
+      const ACTIVE = ["pending", "processing", "planning", "awaiting_approval", "running"];
+      const active = data.find(j => ACTIVE.includes(j.status) && j.id);
       if (active) {
         // If the last message is assistant but empty/no events, it might be the one for this job.
         let aIdx = currentMessages.length - 1;
@@ -606,7 +624,7 @@ export default function CreativeCanvas({
       });
 
       // 3. Final URL
-      const uploadedUrl = `https://cdn.muapi.ai/${fields.key}`;
+      const uploadedUrl = signData.public_url || `https://cdn.muapi.ai/${fields.key}`;
 
       // 4. Register as a real session asset so the agent can address it as asset_N.
       const kind = file.type?.startsWith("video/") ? "video"
@@ -666,7 +684,8 @@ export default function CreativeCanvas({
   const sendMessage = async (textOverride = null, skillOverride = null, attachmentsOverride = null) => {
     const typed = (typeof textOverride === 'string' ? textOverride : input).trim();
     const currentAttachments = attachmentsOverride || attachments;
-    if ((!typed && currentAttachments.length === 0) || busy) return;
+    if ((!typed && currentAttachments.length === 0) || busy || sendingRef.current) return;
+    sendingRef.current = true;
     
     const currentSkill = skillOverride || activeSkill;
 
@@ -733,6 +752,10 @@ export default function CreativeCanvas({
         if (!skillOverride) setActiveSkill(null); // Clear skill after sending if not override
       }
 
+      // 幂等键：双击/重试不会产生重复任务（后端按 session+key 去重）
+      payload.client_request_id =
+        (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+
       const enqueueRes = await axios.post(endpoint, payload, { headers: getHeaders() });
       await resumePolling(enqueueRes.data.job_id, aIdx);
     } catch (err) {
@@ -742,6 +765,7 @@ export default function CreativeCanvas({
         return arr;
       });
     } finally {
+      sendingRef.current = false;
       setBusy(false);
       await loadAssets();
       if (activeSessionId) {
@@ -822,9 +846,12 @@ export default function CreativeCanvas({
           
           const kind = a.kind || (a.url.match(/\.(mp4|webm|mov)$/i) ? "video" : a.url.match(/\.(mp3|wav|ogg|m4a)$/i) ? "audio" : "image");
           const label = a.asset_label || null;
-          if (kind === "image") canvasRef.current.addImage(a.url, undefined, undefined, undefined, undefined, undefined, label);
-          else if (kind === "video") canvasRef.current.addVideo(a.url, undefined, undefined, undefined, undefined, undefined, label);
-          else if (kind === "audio") canvasRef.current.addAudio(a.url, undefined, undefined, undefined, label);
+          // 后端持久化的画布坐标：刷新后恢复布局，避免叠图
+          const px = a.canvas_x ?? undefined;
+          const py = a.canvas_y ?? undefined;
+          if (kind === "image") canvasRef.current.addImage(a.url, px, py, undefined, undefined, undefined, label);
+          else if (kind === "video") canvasRef.current.addVideo(a.url, px, py, undefined, undefined, undefined, label);
+          else if (kind === "audio") canvasRef.current.addAudio(a.url, px, py, undefined, label);
         });
         return true;
       }
@@ -865,12 +892,28 @@ export default function CreativeCanvas({
   };
 
   const deleteSession = async (id) => {
-    // We use a simple confirm for safety, but with a premium look via toast if we had a custom one.
-    // For now, standard confirm is reliable.
-    if (!window.confirm("Are you sure you want to delete this session?")) return;
+    // 软删除 + toast 撤销（替代原生 confirm 弹窗）
     try {
       await axios.delete(`${API}/sessions/${id}`, { headers: getHeaders() });
-      toast.success("Session deleted");
+      toast((t) => (
+        <span className="flex items-center gap-3 text-[12px]">
+          Session deleted
+          <button
+            className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider"
+            onClick={async () => {
+              toast.dismiss(t.id);
+              try {
+                await axios.post(`${API}/sessions/${id}/restore`, {}, { headers: getHeaders() });
+                fetchSessions();
+              } catch {
+                toast.error("Restore failed");
+              }
+            }}
+          >
+            Undo
+          </button>
+        </span>
+      ), { duration: 5000 });
       if (inEmbedMode) {
         if (id === sessionId) setActiveEmbedSession(null);
       } else {
@@ -1158,7 +1201,7 @@ export default function CreativeCanvas({
                         {user?.username || "User"}
                       </span>
                       {user?.plan === "pro" ? (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-primary text-white uppercase tracking-wider">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-primary text-black uppercase tracking-wider">
                           Pro
                         </span>
                       ) : (
@@ -1253,7 +1296,7 @@ export default function CreativeCanvas({
           <div className="p-4 flex items-center justify-between border-b border-divider bg-bg-card">
             <div className="flex flex-col">
               <h2 className="font-bold text-[13px] text-primary-text uppercase tracking-widest leading-none flex items-center gap-2">
-                <RiSparklingLine className="text-primary" /> Creative Agent
+                <RiSparklingLine className="text-primary" /> Design Agent
               </h2>
               <span className="text-[10px] text-secondary-text mt-1.5">Auto Model • Multi-tool Access</span>
             </div>
@@ -1398,7 +1441,28 @@ export default function CreativeCanvas({
                 </React.Fragment>
               );
             })}
-            
+
+            {/* 空会话快捷示例：三个垂直场景一键开始 */}
+            {!busy && messages.length === 1 && messages[0]?.role === "assistant" && (
+              <div className="flex flex-col gap-2 px-1 animate-fade-in-up">
+                <div className="micro-label">QUICK START</div>
+                {[
+                  { label: "🛍️ E-commerce hero image", prompt: "为一款保温杯生成 2 张电商主图，白底，突出产品质感" },
+                  { label: "⭐ Logo design", prompt: "为一家手冲咖啡店设计 3 个 logo 方案，极简风格" },
+                  { label: "📱 Social media cover", prompt: "做 2 张小红书封面图，主题是居家收纳技巧，明亮治愈风" },
+                ].map((s) => (
+                  <button
+                    key={s.label}
+                    onClick={() => sendMessage(s.prompt)}
+                    className="text-left px-3 py-2 rounded bg-bg-page border border-divider text-[12px] text-secondary-text hover:border-primary/40 hover:text-primary-text transition-all"
+                  >
+                    {s.label}
+                    <span className="block text-[10px] opacity-60 mt-0.5">{s.prompt}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div ref={chatEndRef} />
           </div>
 
@@ -1641,7 +1705,7 @@ export default function CreativeCanvas({
                               }}
                               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded hover:bg-bg-page transition-all text-left group ${activeSkill?.name === skill.name ? "bg-primary/5 border border-primary" : "border border-transparent"}`}
                             >
-                              <div className={`w-8 h-8 rounded flex items-center justify-center transition-colors shadow-sm ${activeSkill?.name === skill.name ? "bg-primary text-white" : "bg-bg-page text-primary border border-divider group-hover:bg-primary group-hover:text-white"}`}>
+                              <div className={`w-8 h-8 rounded flex items-center justify-center transition-colors shadow-sm ${activeSkill?.name === skill.name ? "bg-primary text-black" : "bg-bg-page text-primary border border-divider group-hover:bg-primary group-hover:text-black"}`}>
                                 <RiSparklingLine size={16} />
                               </div>
                               <div className="flex-1 min-w-0">
@@ -1728,7 +1792,7 @@ export default function CreativeCanvas({
                     className={`w-8 h-8 rounded-full flex items-center justify-center transition-all shadow-sm ml-1
                       ${busy || (!input.trim() && attachments.length === 0)
                         ? "bg-[var(--bg-card-hover)] text-[var(--text-muted)] cursor-not-allowed"
-                        : "bg-primary text-white hover:scale-105"}`}
+                        : "bg-primary text-black hover:scale-105"}`}
                   >
                     {busy ? <BiLoaderAlt size={14} className="animate-spin" /> : <FiSend size={14} />}
                   </button>
@@ -1758,6 +1822,9 @@ function EventPill({ event }) {
     <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-primary/10 border border-primary text-primary text-[11px] mt-1 shadow-sm">
       <span>{TOOL_ICONS[event.name] || "🔧"}</span>
       <span className="font-semibold">{event.name}</span>
+      {event.est_seconds ? (
+        <span className="text-[9px] opacity-60 font-mono">≈{event.est_seconds}s</span>
+      ) : null}
     </div>
   );
 
@@ -1816,7 +1883,7 @@ function EventPill({ event }) {
       <div className="flex items-center gap-2 px-2 pb-2">
         <button 
           onClick={() => event.onAction?.(event.job_id, "approve")}
-          className="flex-1 py-2 rounded bg-primary text-white text-[12px] font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2"
+          className="flex-1 py-2 rounded bg-primary text-black text-[12px] font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2"
         >
           <FiCheck /> Approve & Execute
         </button>
@@ -1852,7 +1919,7 @@ function EventPill({ event }) {
           <div className="flex items-center gap-1 ml-4">
             <button 
               onClick={() => event.onAction?.(event.job_id, "approve")}
-              className="px-2 py-1 rounded bg-primary text-white text-[10px] font-bold hover:brightness-110 transition-all"
+              className="px-2 py-1 rounded bg-primary text-black text-[10px] font-bold hover:brightness-110 transition-all"
             >
               Approve
             </button>

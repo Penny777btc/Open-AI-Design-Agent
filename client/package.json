@@ -12,6 +12,7 @@
   "dependencies": {
     "axios": "^1.16.0",
     "clsx": "^2.1.1",
+    "design-agent": "*",
     "js-cookie": "^3.0.5",
     "konva": "^10.3.0",
     "lucide-react": "^1.14.0",
@@ -24,13 +25,16 @@
     "react-konva": "^19.2.3",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "tailwind-merge": "^3.5.0",
-    "design-agent": "*"
+    "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4"
+  },
+  "optionalDependencies": {
+    "@tailwindcss/oxide-darwin-arm64": "^4.2.4",
+    "lightningcss-darwin-arm64": "^1.32.0"
   }
 }

@@ -1,35 +1,35 @@
 @import "tailwindcss";
 @custom-variant dark (&:is(.dark *));
 
-
 @theme {
-  --color-primary: #3898ec;
-  --color-brand-primary: #3898ec;
+  --color-primary: var(--primary);
+  --color-brand-primary: var(--primary);
   --color-bg-page: var(--bg-page);
   --color-bg-card: var(--bg-card);
   --color-primary-text: var(--text-primary);
   --color-secondary-text: var(--text-secondary);
   --color-divider: var(--border-subtle);
+  /* 工业风：圆角整体收紧 */
+  --radius-sm: 0.125rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.375rem;
+  --radius-xl: 0.5rem;
+  --radius-2xl: 0.75rem;
 }
 
-:root {
-  --bg-page: #F8FAFC;
-  --bg-card: #FFFFFF;
-  --bg-card-hover: #F1F5F9;
-  --text-primary: #0F172A;
-  --text-secondary: #475569;
-  --border-subtle: #E2E8F0;
-  --primary: #3898ec;
-}
-
+/* Tectonic Industrial（参考 flash-ui-template-hub）：纯暗色、无彩色、白透明度梯度。
+   产品为 dark-only，:root 与 .dark 同值。 */
+:root,
 .dark {
-  --bg-page: #121212;
-  --bg-card: #1E1E1E;
-  --bg-card-hover: #2A2A2A;
-  --text-primary: #E0E0E0;
-  --text-secondary: #94A3B8;
-  --border-subtle: #333333;
-  --primary: #3898ec;
+  --bg-page: #09090b;
+  --bg-card: #0d0d0f;
+  --bg-card-hover: #131316;
+  --text-primary: #ffffff;
+  --text-secondary: #7d8590; /* 较 gray-500 提亮一档，保住小字号的对比度 */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --primary: #fafafa;
+  --color-error: #f87171;
+  --color-error-bg: rgba(239, 68, 68, 0.1);
 }
 
 body {
@@ -37,10 +37,42 @@ body {
   color: var(--text-primary);
 }
 
+/* 网格背景（工业感核心元素） */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+
+/* 品牌标题字体（Syne，layout.js 注入变量） */
+.font-display {
+  font-family: var(--font-syne), ui-sans-serif, sans-serif;
+  letter-spacing: -0.04em;
+}
+
+/* 微标签：等宽 + 大字距 + 全大写 */
+.micro-label {
+  font-family: var(--font-roboto-mono), ui-monospace, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--text-secondary);
+}
+
+/* 品牌文字渐变（白→灰） */
+.brand-gradient-text {
+  background: linear-gradient(to bottom, #ffffff 40%, #777777);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -48,12 +80,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-subtle);
-  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.2);
 }
 
 /* Markdown Styles */
@@ -85,13 +117,9 @@ body {
 }
 
 .markdown-content code {
-  background: rgba(0, 0, 0, 0.1);
+  background: rgba(255, 255, 255, 0.08);
   padding: 0.1rem 0.3rem;
-  border-radius: 4px;
-}
-
-.dark .markdown-content code {
-  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
 }
 
 .scrollbar-subtle::-webkit-scrollbar {
@@ -108,9 +136,9 @@ body {
 }
 
 .glass-morphism {
-  background: rgba(30, 30, 30, 0.7);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(9, 9, 11, 0.8);
+  backdrop-filter: blur(15px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 /* ===== TYPING INDICATOR ===== */
@@ -138,11 +166,11 @@ body {
 }
 
 @keyframes typing-bounce {
-  0%, 80%, 100% { 
+  0%, 80%, 100% {
     transform: scale(0);
     opacity: 0.6;
-  } 
-  40% { 
+  }
+  40% {
     transform: scale(1);
     opacity: 1;
   }

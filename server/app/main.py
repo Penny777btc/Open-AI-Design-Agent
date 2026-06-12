@@ -1,33 +1,48 @@
-import os
-from pathlib import Path
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-env_path = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import creative_agent_router
+from fastapi.staticfiles import StaticFiles
 
-app = FastAPI(title="Creative Agent Proxy API", version="1.0.0")
+from app.config import settings
+from app.db import Base, engine
+from app.routers import assets, chat, jobs, misc, sessions, uploads
+from app.services.job_service import mark_stale_jobs_failed
 
-app.include_router(creative_agent_router.router, prefix="/api/v1/creative-agent", tags=["creative-agent"])
-app.include_router(creative_agent_router.app_router, prefix="/api/v1", tags=["app"])
+logging.basicConfig(level=logging.INFO)
 
-# Configure CORS
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    settings.storage_dir.mkdir(parents=True, exist_ok=True)
+    await mark_stale_jobs_failed()
+    yield
+
+
+app = FastAPI(title="Design Agent API", version="0.1.0", lifespan=lifespan)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Next.js default port
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get("/")
-async def root():
-    return {"message": "Welcome to Creative Agent Proxy API"}
+PREFIX = "/api/v1/creative-agent"
+for router_module in (sessions, chat, jobs, assets):
+    app.include_router(router_module.router, prefix=PREFIX)
+app.include_router(misc.router, prefix=PREFIX)
+app.include_router(misc.router, prefix="/api/v1")  # /api/v1/account/balance 兼容路径
+app.include_router(uploads.router, prefix="/api/v1")
 
-@app.get("/api/health")
-async def health_check():
-    return {"status": "healthy"}
+settings.storage_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/files", StaticFiles(directory=settings.storage_dir), name="files")
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok", "provider_mode": settings.provider_mode}

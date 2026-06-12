@@ -1,0 +1,88 @@
+"""Planner：把 brief 变成结构化计划（或 direct 直答）。
+
+输出信封格式（对 mock 和 sub2api 一致）：
+  {"mode": "plan", "title": str, "nodes": [...], "notes": [str]}
+  {"mode": "direct", "reply": str}
+"""
+
+import json
+import re
+
+from pydantic import BaseModel, Field, ValidationError
+
+from app.config import settings
+from app.providers import get_llm
+
+SYSTEM_PROMPT = """你是一个 AI 设计 Agent 的规划器，专长电商设计（主图/详情页/活动海报）、Logo 设计、自媒体配图（封面/海报）。
+
+你的任务：把需求拆解成一个生成计划，只输出一个 JSON 对象，不要任何其他文字。
+
+可用工具：
+1. generate_image —— 全新生成。args: {"prompt": "<英文提示词，具体、含风格/构图/配色/文字内容>", "aspect_ratio": "1:1|16:9|9:16|4:3"}
+2. edit_image —— 修改已有图片（改色调/换背景/加文字/局部调整/风格迁移）。args: {"prompt": "<英文编辑指令，描述要改什么、保留什么>", "source_asset": "asset_N"}
+
+输出格式：
+{"mode": "plan", "title": "<计划标题，用户的语言>", "nodes": [{"id": "node_1", "tool": "generate_image|edit_image", "label": "<这一步做什么，用户的语言>", "args": {...}, "depends": []}], "notes": ["<给用户的说明>"]}
+
+规则：
+- 用户明确数量时严格遵守数量（说 5 张就是 5 个节点），未明确时 2-4 个节点；节点上限 {max_nodes} 个
+- prompt 必须是英文且各节点差异化；图中需要渲染的文字（品牌名/标语/价格）原样写进 prompt 并标注 render the text exactly
+- 用户提到"改/换/调整某张图"且上下文有可用资产时，必须用 edit_image 并正确填 source_asset；不要重新生成
+- 修改类需求默认 1 个节点；用户要"几个版本"时才多节点
+- 如果用户只是闲聊或提问（不需要生成/修改图片），改为输出 {"mode": "direct", "reply": "<用用户的语言回复>"}
+"""
+
+
+class PlanNode(BaseModel):
+    id: str
+    tool: str = "generate_image"
+    label: str
+    args: dict = Field(default_factory=dict)
+    depends: list[str] = Field(default_factory=list)
+
+
+class Plan(BaseModel):
+    mode: str = "plan"
+    title: str = "Design Plan"
+    nodes: list[PlanNode] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    reply: str | None = None
+
+
+def _extract_json(text: str) -> dict:
+    text = text.strip()
+    if m := re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL):
+        text = m.group(1)
+    elif m := re.search(r"\{.*\}", text, re.DOTALL):
+        text = m.group(0)
+    return json.loads(text)
+
+
+async def make_plan(brief: str, history: list[dict] | None = None, assets: list[dict] | None = None) -> Plan:
+    llm = get_llm()
+    system = SYSTEM_PROMPT.replace("{max_nodes}", str(settings.max_plan_nodes))
+    if assets:
+        lines = "\n".join(
+            f"- {a['asset_label']} ({a.get('kind', 'image')}): {(a.get('prompt') or a.get('source_tool') or '')[:120]}"
+            for a in assets[-20:]
+        )
+        system += f"\n\n当前会话已有资产（edit_image 的 source_asset 只能从这里选）：\n{lines}"
+    messages = [{"role": "system", "content": system}]
+    for msg in (history or [])[-6:]:
+        if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):
+            messages.append({"role": msg["role"], "content": msg["content"][:2000]})
+    messages.append({"role": "user", "content": brief})
+
+    last_error = None
+    for _ in range(3):  # 校验失败回喂重试
+        raw = await llm.complete(messages, json_only=True)
+        try:
+            plan = Plan.model_validate(_extract_json(raw))
+        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+            last_error = exc
+            messages.append({"role": "assistant", "content": raw[:2000]})
+            messages.append({"role": "user", "content": f"输出不符合 JSON 格式要求（{exc}），请重新只输出一个合法 JSON 对象。"})
+            continue
+        plan.nodes = plan.nodes[: settings.max_plan_nodes]
+        return plan
+    raise RuntimeError(f"Planner 连续 3 次输出非法 JSON: {last_error}")
