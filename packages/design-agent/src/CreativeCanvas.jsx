@@ -668,10 +668,25 @@ export default function CreativeCanvas({
     return data.id;
   };
 
-  // 参考文档（PDF/DOCX）：解析文字进规划上下文，内嵌图片登画布
+  // 参考文档（PDF/DOCX）：上传秒回 job，解析进度走聊天事件流（与生图一致）
   const processReferenceDoc = async (file) => {
+    if (busy || sendingRef.current) {
+      toast.error("Another task is running");
+      return;
+    }
     setUploading(true);
     setUploadProgress(0);
+    sendingRef.current = true;
+    const userMsg = {
+      role: "user",
+      content: `📄 上传参考文档「${file.name}」`,
+      timestamp: new Date().toISOString(),
+    };
+    let aIdx = -1;
+    setMessages(prev => {
+      aIdx = prev.length + 1;
+      return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
+    });
     try {
       const activeSessionId = await ensureSession();
       const formData = new FormData();
@@ -684,11 +699,19 @@ export default function CreativeCanvas({
           onUploadProgress: (pe) => setUploadProgress(Math.round((pe.loaded * 100) / pe.total)),
         }
       );
-      toast.success(`📄 已解析：${data.text_chars} 字${data.images_extracted ? ` + ${data.images_extracted} 张图片` : ""}`);
-      await loadAssets();
-      await loadHistory();
+      setUploading(false);
+      sendingRef.current = false;
+      setBusy(true);
+      await resumePolling(data.job_id, aIdx);
     } catch (err) {
-      toast.error(err.response?.data?.detail || "文档解析失败");
+      sendingRef.current = false;
+      setBusy(false);
+      toast.error(err.response?.data?.detail || "文档上传失败");
+      setMessages(prev => {
+        const arr = [...prev];
+        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: "❌ 文档上传失败" };
+        return arr;
+      });
     } finally {
       setUploading(false);
       setUploadProgress(0);

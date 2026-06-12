@@ -83,6 +83,22 @@ async def _run_job(job_id: str) -> None:
                 return
             job_input, session_id, user_id = job.input, job.session_id, job.user_id
 
+        # 文档摄取：异步解析 + 视觉理解，进度事件推到聊天区（不扣积分）
+        if job.kind == "doc_parse":
+            from app.services import doc_ingest
+
+            await _set_status(job_id, "running")
+            try:
+                await doc_ingest.ingest(
+                    job_id, session_id, user_id,
+                    job_input.get("filename", "document"), job_input.get("doc_key"), emit,
+                )
+                await _set_status(job_id, "done")
+            except ValueError as exc:
+                await emit(job_id, "error", {"message": str(exc)})
+                await _set_status(job_id, "failed")
+            return
+
         # 局部编辑：用户已圈选区域并确认消耗，跳过规划与审批直接执行
         if job.kind == "region_edit":
             from app.agents.planner import PlanNode

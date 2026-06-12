@@ -188,11 +188,11 @@ export default function AssistantDashboard() {
         const { data: session } = await axios.post(`${API}/sessions`, {});
         const formData = new FormData();
         formData.append("file", file);
-        const { data } = await axios.post(`/api/v1/sessions/${session.id}/reference-docs`, formData, {
+        await axios.post(`/api/v1/sessions/${session.id}/reference-docs`, formData, {
           headers: { "Content-Type": "multipart/form-data" },
           onUploadProgress: (pe) => setUploadProgress(Math.round((pe.loaded * 100) / pe.total)),
         });
-        toast.success(`📄 已解析：${data.text_chars} 字${data.images_extracted ? ` + ${data.images_extracted} 张图片` : ""}，正在打开项目…`);
+        toast.success("📄 文档已上传，正在打开项目（解析进度见聊天区）…");
         // 输入框里已有的需求一并带入（画布会自动发送）
         const q = input.trim();
         router.push(`/canvas?session=${session.id}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
