@@ -756,6 +756,8 @@ const CanvasArea = forwardRef(
       activeTasks = [],
       setActiveTasks = () => {},
       onZoomChange,
+      // 局部编辑：用户在选中图片上涂抹蒙版后回调 { assetLabel, prompt, maskDataUrl }
+      onRegionEdit = null,
     },
     ref,
   ) => {
@@ -766,6 +768,85 @@ const CanvasArea = forwardRef(
     const [selectedId, setSelectedId] = useState(null);
     const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
     const [zoom, setZoom] = useState(1);
+
+    // ===== 局部编辑（蒙版涂抹）=====
+    const [maskMode, setMaskMode] = useState(null); // 进入编辑的 image id
+    const [maskStrokes, setMaskStrokes] = useState([]); // 世界坐标笔迹 [{size, points:[x,y,...]}]
+    const [brushSize, setBrushSize] = useState(48); // 屏幕像素
+    const [maskPrompt, setMaskPrompt] = useState("");
+    const paintingRef = useRef(false);
+
+    const maskWorldPos = () => {
+      const stage = stageRef.current;
+      const p = stage?.getPointerPosition();
+      if (!p) return null;
+      return { x: (p.x - stage.x()) / zoom, y: (p.y - stage.y()) / zoom };
+    };
+
+    const maskPaintBegin = () => {
+      const p = maskWorldPos();
+      if (!p) return;
+      paintingRef.current = true;
+      setMaskStrokes((prev) => [...prev, { size: brushSize / zoom, points: [p.x, p.y, p.x + 0.01, p.y] }]);
+    };
+
+    const maskPaintMove = () => {
+      if (!paintingRef.current) return;
+      const p = maskWorldPos();
+      if (!p) return;
+      setMaskStrokes((prev) => {
+        const next = [...prev];
+        const last = { ...next[next.length - 1] };
+        last.points = [...last.points, p.x, p.y];
+        next[next.length - 1] = last;
+        return next;
+      });
+    };
+
+    const maskPaintEnd = () => { paintingRef.current = false; };
+
+    const exitMaskMode = () => {
+      setMaskMode(null);
+      setMaskStrokes([]);
+      setMaskPrompt("");
+      paintingRef.current = false;
+    };
+
+    const applyRegionEdit = () => {
+      const img = images.find((i) => i.id === maskMode);
+      if (!img || !img.assetLabel || !maskPrompt.trim() || maskStrokes.length === 0) return;
+      const nw = img.image?.naturalWidth || 1024;
+      const nh = img.image?.naturalHeight || 1024;
+      const canvas = document.createElement("canvas");
+      canvas.width = nw;
+      canvas.height = nh;
+      const ctx = canvas.getContext("2d");
+      // 全图不透明（保留），涂抹处打穿成透明（= 重绘范围，OpenAI mask 规范）
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, nw, nh);
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      const sx = nw / img.width;
+      const sy = nh / img.height;
+      maskStrokes.forEach((s) => {
+        ctx.lineWidth = s.size * ((sx + sy) / 2);
+        ctx.beginPath();
+        for (let i = 0; i < s.points.length; i += 2) {
+          const px = (s.points[i] - img.x) * sx;
+          const py = (s.points[i + 1] - img.y) * sy;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      });
+      onRegionEdit?.({
+        assetLabel: img.assetLabel,
+        prompt: maskPrompt.trim(),
+        maskDataUrl: canvas.toDataURL("image/png"),
+      });
+      exitMaskMode();
+    };
     const [editingTextId, setEditingTextId] = useState(null);
     const [contextMenu, setContextMenu] = useState(null);
     const [clipboardNode, setClipboardNode] = useState(null);
@@ -1830,10 +1911,15 @@ const CanvasArea = forwardRef(
             width={canvasSize.width}
             height={canvasSize.height}
             onMouseDown={(e) => {
+              if (maskMode) return; // 蒙版模式：绘制走 pointer 事件
               if (e.evt.button === 2) return;
               if (e.target === e.target.getStage()) setSelectedId(null);
               setContextMenu(null);
             }}
+            onPointerDown={maskMode ? () => { if (!paintingRef.current) maskPaintBegin(); } : undefined}
+            onPointerMove={maskMode ? maskPaintMove : undefined}
+            onPointerUp={maskMode ? maskPaintEnd : undefined}
+            onPointerLeave={maskMode ? maskPaintEnd : undefined}
             onContextMenu={(e) => {
               e.evt.preventDefault();
               const stage = e.target.getStage();
@@ -1851,7 +1937,7 @@ const CanvasArea = forwardRef(
             scaleX={zoom}
             scaleY={zoom}
             ref={stageRef}
-            draggable
+            draggable={!maskMode}
             onDragMove={(e) => {
               if (e.target === stageRef.current && containerRef.current) {
                 containerRef.current.style.backgroundPosition = `${e.target.x()}px ${e.target.y()}px`;
@@ -1967,8 +2053,84 @@ const CanvasArea = forwardRef(
                 <Line key={i} {...line} />
               ))}
             </Layer>
+
+            {/* 局部编辑蒙版层：暗化目标图 + 高亮笔迹 */}
+            {maskMode && (() => {
+              const img = images.find((i) => i.id === maskMode);
+              if (!img) return null;
+              return (
+                <Layer listening={false}>
+                  <Rect x={img.x} y={img.y} width={img.width} height={img.height} fill="rgba(0,0,0,0.55)" />
+                  {maskStrokes.map((s, i) => (
+                    <Line
+                      key={i}
+                      points={s.points}
+                      stroke="rgba(96,165,250,0.8)"
+                      strokeWidth={s.size}
+                      lineCap="round"
+                      lineJoin="round"
+                    />
+                  ))}
+                  <Rect
+                    x={img.x} y={img.y} width={img.width} height={img.height}
+                    stroke="#60a5fa" strokeWidth={2 / zoom} dash={[8 / zoom, 6 / zoom]}
+                  />
+                </Layer>
+              );
+            })()}
           </Stage>
         </div>
+
+        {/* 局部编辑入口：选中带 assetLabel 的图片时出现 */}
+        {onRegionEdit && !maskMode && selectedId?.startsWith("img") &&
+          images.find((i) => i.id === selectedId)?.assetLabel && (
+          <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
+            <button
+              onClick={() => { setMaskMode(selectedId); setMaskStrokes([]); setMaskPrompt(""); }}
+              className="px-4 py-2 bg-white text-black rounded text-[11px] font-bold uppercase tracking-wider shadow-lg hover:bg-gray-200 transition-all"
+            >
+              🖌 局部编辑 · Edit Region
+            </button>
+          </div>
+        )}
+
+        {/* 局部编辑操作面板 */}
+        {maskMode && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 w-[min(560px,90%)]">
+            <div className="flex items-center gap-3 px-4 py-2 rounded bg-bg-card border border-divider shadow-2xl text-[11px] text-secondary-text">
+              <span className="font-bold uppercase tracking-wider">涂抹要修改的区域</span>
+              <span>笔刷</span>
+              <input
+                type="range" min="12" max="160" value={brushSize}
+                onChange={(e) => setBrushSize(Number(e.target.value))}
+                className="w-28 accent-white"
+              />
+              <button onClick={() => setMaskStrokes([])} className="px-2 py-1 border border-divider rounded hover:text-primary-text transition-colors">
+                清除
+              </button>
+              <button onClick={exitMaskMode} className="px-2 py-1 border border-divider rounded hover:text-primary-text transition-colors">
+                取消
+              </button>
+            </div>
+            <div className="flex items-center gap-2 w-full px-3 py-2 rounded bg-bg-card border border-divider shadow-2xl">
+              <input
+                value={maskPrompt}
+                onChange={(e) => setMaskPrompt(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") applyRegionEdit(); }}
+                placeholder="描述这块区域要怎么改，如：把文字改成「限时 8 折」"
+                className="flex-1 bg-transparent text-[13px] text-primary-text placeholder:text-secondary-text/50 focus:outline-none"
+                autoFocus
+              />
+              <button
+                onClick={applyRegionEdit}
+                disabled={!maskPrompt.trim() || maskStrokes.length === 0}
+                className="shrink-0 px-4 py-1.5 bg-white text-black rounded text-[11px] font-bold uppercase tracking-wider hover:bg-gray-200 transition-all disabled:opacity-40"
+              >
+                应用 · 15 CR
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Text Editor Overlay */}
         {editingTextId &&

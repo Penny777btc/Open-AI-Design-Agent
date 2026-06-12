@@ -83,6 +83,28 @@ async def _run_job(job_id: str) -> None:
                 return
             job_input, session_id, user_id = job.input, job.session_id, job.user_id
 
+        # 局部编辑：用户已圈选区域并确认消耗，跳过规划与审批直接执行
+        if job.kind == "region_edit":
+            from app.agents.planner import PlanNode
+
+            node = PlanNode(
+                id="node_1",
+                tool="edit_image",
+                label=f"局部编辑 {job_input.get('source_asset')}",
+                args={
+                    "prompt": job_input.get("message", ""),
+                    "source_asset": job_input.get("source_asset"),
+                    "mask_key": job_input.get("mask_key"),
+                },
+            )
+            await _set_status(job_id, "running", approved=True)
+            ok, failed = await _execute_plan(job_id, session_id, user_id, Plan(nodes=[node]))
+            zh_edit = any("一" <= ch <= "鿿" for ch in job_input.get("message", ""))
+            if ok:
+                await emit(job_id, "text", {"content": "✅ 局部编辑完成，结果已放在原图旁" if zh_edit else "✅ Region edit done — placed next to the original"})
+            await _set_status(job_id, "done" if ok else "failed")
+            return
+
         await _set_status(job_id, "planning")
         brief = job_input.get("message") or _skill_brief(job_input)
         async with SessionLocal() as db:
@@ -238,7 +260,10 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             if node.tool == "edit_image":
                 source_label = node.args.get("source_asset", "")
                 source = await _load_asset_bytes(session_id, source_label)
-                image = await provider.edit(prompt, source, node.args.get("aspect_ratio", "1:1"))
+                mask = None
+                if mask_key := node.args.get("mask_key"):
+                    mask = (settings.storage_dir / mask_key).read_bytes()
+                image = await provider.edit(prompt, source, node.args.get("aspect_ratio", "1:1"), mask=mask)
             else:
                 image = await provider.generate(prompt, node.args.get("aspect_ratio", "1:1"))
             break

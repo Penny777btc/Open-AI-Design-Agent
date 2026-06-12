@@ -72,15 +72,26 @@ class PlaceholderImage:
         img.save(buf, format="PNG")
         return GeneratedImage(data=buf.getvalue(), mime="image/png", width=width, height=height, model="mock")
 
-    async def edit(self, prompt: str, image: bytes, aspect_ratio: str = "1:1") -> GeneratedImage:
-        """mock 改图：把原图加色调蒙层 + 编辑说明文字。"""
+    async def edit(
+        self, prompt: str, image: bytes, aspect_ratio: str = "1:1", mask: bytes | None = None
+    ) -> GeneratedImage:
+        """mock 改图：整图编辑加色调蒙层；带 mask 时只给透明区域上色（验证局部性）。"""
         await asyncio.sleep(1.0)
         src = Image.open(BytesIO(image)).convert("RGB")
         hue = int(hashlib.md5(prompt.encode()).hexdigest()[:2], 16)
         overlay = Image.new("RGB", src.size, color=f"hsl({hue * 360 // 255}, 60%, 50%)")
-        img = Image.blend(src, overlay, 0.35)
+        if mask:
+            mask_img = Image.open(BytesIO(mask)).convert("RGBA").resize(src.size)
+            # 透明区域 = 编辑范围：alpha 反转后作为粘贴蒙版
+            inverted = mask_img.split()[3].point(lambda a: 255 - a)
+            img = src.copy()
+            img.paste(Image.blend(src, overlay, 0.55), (0, 0), inverted)
+            tag = "[MOCK REGION EDIT]"
+        else:
+            img = Image.blend(src, overlay, 0.35)
+            tag = "[MOCK EDIT]"
         draw = ImageDraw.Draw(img)
-        draw.multiline_text((30, 30), "[MOCK EDIT]\n" + "\n".join(textwrap.wrap(prompt, width=30)[:6]), fill="#ffffff", spacing=8)
+        draw.multiline_text((30, 30), tag + "\n" + "\n".join(textwrap.wrap(prompt, width=30)[:6]), fill="#ffffff", spacing=8)
         buf = BytesIO()
         img.save(buf, format="PNG")
         return GeneratedImage(data=buf.getvalue(), mime="image/png", width=img.width, height=img.height, model="mock")

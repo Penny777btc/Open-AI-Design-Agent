@@ -161,10 +161,15 @@ class GptImageProvider:
 
         return self._to_generated(data)
 
-    async def edit(self, prompt: str, image: bytes, aspect_ratio: str = "1:1") -> GeneratedImage:
-        """图生图/改图：/v1/images/edits（multipart）。M0 实测可用。"""
+    async def edit(
+        self, prompt: str, image: bytes, aspect_ratio: str = "1:1", mask: bytes | None = None
+    ) -> GeneratedImage:
+        """图生图/改图：/v1/images/edits（multipart）。
+        mask: RGBA PNG，透明区域 = 重绘范围（局部编辑，实测站点透传可用）。"""
         headers = {"Authorization": f"Bearer {self.api_key}"}
         files = {"image": ("source.png", image, "image/png")}
+        if mask:
+            files["mask"] = ("mask.png", mask, "image/png")
         form = {"model": self.model, "prompt": prompt}
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
             resp = await client.post(

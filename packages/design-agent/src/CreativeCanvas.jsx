@@ -493,6 +493,62 @@ export default function CreativeCanvas({
     });
   };
 
+  // 画布局部编辑：涂抹蒙版 + 指令 → 跳过审批直接执行（面板已展示消耗）
+  const handleRegionEdit = async ({ assetLabel, prompt, maskDataUrl }) => {
+    if (busy || sendingRef.current) {
+      toast.error("Another task is running");
+      return;
+    }
+    sendingRef.current = true;
+    setBusy(true);
+    const userMsg = {
+      role: "user",
+      content: `🖌 局部编辑 ${assetLabel}: ${prompt}`,
+      timestamp: new Date().toISOString(),
+    };
+    let aIdx = -1;
+    setMessages(prev => {
+      aIdx = prev.length + 1;
+      return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
+    });
+    try {
+      const activeSessionId = await ensureSession();
+      const { data } = await axios.post(
+        `${API}/sessions/${activeSessionId}/region-edit`,
+        {
+          source_asset: assetLabel,
+          prompt,
+          mask_b64: maskDataUrl,
+          client_request_id:
+            (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+        },
+        { headers: getHeaders() }
+      );
+      sendingRef.current = false;
+      await resumePolling(data.job_id, aIdx);
+    } catch (err) {
+      sendingRef.current = false;
+      setBusy(false);
+      if (err.response?.status === 402) {
+        toast((t) => (
+          <span className="flex items-center gap-3 text-[12px]">
+            {err.response?.data?.detail || "积分不足"}
+            <a href="/billing" className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider shrink-0" onClick={() => toast.dismiss(t.id)}>
+              去充值 →
+            </a>
+          </span>
+        ), { duration: 8000 });
+      } else {
+        toast.error(err.response?.data?.detail || "Region edit failed");
+      }
+      setMessages(prev => {
+        const arr = [...prev];
+        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: "❌ Region edit failed" };
+        return arr;
+      });
+    }
+  };
+
   const handleJobAction = async (jobId, action) => {
     try {
       await axios.post(`${API}/jobs/${jobId}/${action}`, {}, { headers: getHeaders() });
@@ -1273,12 +1329,13 @@ export default function CreativeCanvas({
 
           {/* Main Canvas View */}
           <div className="flex-1 relative overflow-hidden bg-bg-page/50 w-full">
-            <CanvasArea 
-              ref={canvasRef} 
+            <CanvasArea
+              ref={canvasRef}
               theme={resolvedTheme}
               activeTasks={activeTasks}
               setActiveTasks={setActiveTasks}
-              onZoomChange={setZoomLevel} 
+              onZoomChange={setZoomLevel}
+              onRegionEdit={handleRegionEdit}
             />
 
             {/* Floating Toolbar */}

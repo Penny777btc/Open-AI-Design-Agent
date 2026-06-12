@@ -69,6 +69,88 @@ async def chat(session_id: str, request: Request, db: AsyncSession = Depends(get
     return await _enqueue(db, user, session_id, "chat", await request.json())
 
 
+@router.post("/sessions/{session_id}/region-edit", dependencies=[Depends(rate_limit("chat", 20, 60))])
+async def region_edit(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    """画布局部编辑：用户已显式圈选区域并确认消耗，跳过计划审批直接执行。"""
+    import base64
+    import uuid as uuidlib
+
+    from fastapi import HTTPException
+
+    from app.config import settings, tool_cost
+    from app.services import credit_service, storage
+
+    payload = await request.json()
+    session = await _owned_session(db, user, session_id)
+    source_asset = payload.get("source_asset")
+    prompt = (payload.get("prompt") or "").strip()
+    mask_b64 = payload.get("mask_b64") or ""
+    if not source_asset or not prompt:
+        raise HTTPException(status_code=422, detail="缺少 source_asset 或 prompt")
+
+    # 幂等
+    request_id = payload.get("client_request_id")
+    if request_id:
+        from sqlalchemy import select
+
+        existing = (
+            await db.execute(
+                select(Job).where(Job.session_id == session_id, Job.client_request_id == request_id)
+            )
+        ).scalars().first()
+        if existing:
+            return {"job_id": existing.id, "deduplicated": True}
+
+    # 蒙版落盘（透明区域 = 重绘范围）
+    mask_key = None
+    if mask_b64:
+        try:
+            raw = base64.b64decode(mask_b64.split(",")[-1])
+            if len(raw) > 8 * 1024 * 1024:
+                raise ValueError("mask too large")
+            mask_key = f"masks/{session_id}/{uuidlib.uuid4().hex[:12]}.png"
+            storage.save_bytes(mask_key, raw)
+        except Exception:
+            raise HTTPException(status_code=422, detail="蒙版数据无效")
+
+    job = Job(
+        session_id=session_id,
+        user_id=user.id,
+        kind="region_edit",
+        client_request_id=request_id,
+        input={"message": prompt, "source_asset": source_asset, "mask_key": mask_key},
+    )
+    db.add(job)
+    await db.flush()
+
+    # 用户显式操作：直接预扣（操作面板已展示消耗），余额不足 402
+    cost = tool_cost("edit_image")
+    try:
+        await credit_service.apply(db, user.id, -cost, "reserve", job_id=job.id, memo=f"region edit {source_asset}")
+    except credit_service.InsufficientCredits as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=402,
+            detail=f"积分不足：需要 {exc.required}，当前余额 {exc.balance}。请先充值。",
+        )
+    job.credits_reserved = cost
+
+    # 用户消息落库（历史可见）
+    message_text = f"🖌 局部编辑 {source_asset}: {prompt}"
+    row = await db.get(SessionMessages, session_id)
+    user_msg = {"role": "user", "content": message_text, "timestamp": datetime.now(timezone.utc).isoformat()}
+    if row is None:
+        db.add(SessionMessages(session_id=session_id, payload=[user_msg]))
+    else:
+        row.payload = list(row.payload or []) + [user_msg]
+    if session.name in ("Untitled", "", None):
+        session.name = message_text[:40]
+
+    await db.commit()
+    job_service.start_job(job.id)
+    return {"job_id": job.id}
+
+
 @router.post("/sessions/{session_id}/run-skill", dependencies=[Depends(rate_limit("chat", 20, 60))])
 async def run_skill(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     return await _enqueue(db, user, session_id, "skill", await request.json())
