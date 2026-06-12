@@ -24,6 +24,9 @@ async def get_upload_url(filename: str = "file", user=Depends(get_current_user))
     }
 
 
+ALLOWED_EXT = {"png", "jpg", "jpeg", "webp", "gif", "avif", "mp4", "webm", "mov", "mp3", "wav", "ogg", "m4a"}
+
+
 @router.post("/upload-binary")
 async def upload_binary(request: Request, user=Depends(get_current_user)):
     form = await request.form()
@@ -31,6 +34,14 @@ async def upload_binary(request: Request, user=Depends(get_current_user)):
     file = form.get("file")
     if not key or file is None or not hasattr(file, "read"):
         raise HTTPException(status_code=400, detail="Missing key or file in form data")
+
+    # 类型闸（审计补充）：非媒体文件会以 broken image 形态破坏画布渲染
+    ext = str(key).rsplit(".", 1)[-1].lower() if "." in str(key) else ""
+    mime = (getattr(file, "content_type", "") or "").split(";")[0]
+    mime_ok = mime.startswith(("image/", "video/", "audio/"))
+    if ext not in ALLOWED_EXT or not mime_ok:
+        raise HTTPException(status_code=415, detail=f"不支持的文件类型（.{ext or '?'}），仅支持图片/视频/音频")
+
     data = await file.read()
     if len(data) > 50 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 50MB)")

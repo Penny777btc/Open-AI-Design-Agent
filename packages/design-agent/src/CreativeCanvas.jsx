@@ -670,6 +670,13 @@ export default function CreativeCanvas({
 
   const processFile = async (file) => {
     if (!file) return;
+    // 类型校验：仅支持图片/视频/音频（PDF 等会以 broken image 摧毁画布）
+    const okType = /^(image|video|audio)\//.test(file.type || "");
+    if (!okType) {
+      toast.error(`暂不支持「${file.name.split('.').pop()}」格式，请上传图片、视频或音频`);
+      return;
+    }
+
 
     setUploading(true);
     setUploadProgress(0);

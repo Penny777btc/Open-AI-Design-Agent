@@ -36,6 +36,14 @@ async def list_assets(session_id: str, db: AsyncSession = Depends(get_db), user=
 async def register_asset(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     await _owned_session(db, user, session_id)
     body = await request.json()
+    # URL 扩展名校验：阻止非媒体资源注册为画布资产
+    from fastapi import HTTPException
+
+    url = str(body.get("url", ""))
+    ext = url.split("?")[0].rsplit(".", 1)[-1].lower() if "." in url.split("?")[0] else ""
+    allowed = {"png", "jpg", "jpeg", "webp", "gif", "avif", "mp4", "webm", "mov", "mp3", "wav", "ogg", "m4a"}
+    if ext and ext not in allowed:
+        raise HTTPException(status_code=415, detail=f"不支持的资产类型（.{ext}）")
     async with _label_lock(session_id):
         count = (
             await db.execute(select(func.count()).select_from(Asset).where(Asset.session_id == session_id))

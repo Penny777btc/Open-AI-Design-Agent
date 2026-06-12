@@ -1144,9 +1144,11 @@ const CanvasArea = forwardRef(
           img.removeAttribute("crossOrigin");
           img.src = src;
         } else {
+          // 加载失败的图片绝不能上画布：broken 状态的 HTMLImageElement
+          // 会让 Konva drawImage 抛 InvalidStateError 并进入崩溃循环
           console.error("Failed to load image after retry:", src);
-          // Add it anyway so it shows up in the layers list / has a presence
-          commitImage(img);
+          toast.error("素材加载失败，已跳过（仅支持图片格式）");
+          if (typeof onLoaded === "function") onLoaded();
         }
       };
 
