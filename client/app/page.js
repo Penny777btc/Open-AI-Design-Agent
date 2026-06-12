@@ -447,9 +447,9 @@ export default function Landing() {
 
         {/* 统计条（滚动计数） */}
         <div className="flex justify-center gap-10 py-10 micro-label reveal">
-          <span><span className="text-white text-lg font-display font-extrabold"><CountUp to={totalCases} /></span>&nbsp;真实案例</span>
-          <span><span className="text-white text-lg font-display font-extrabold"><CountUp to={CATEGORIES.length} /></span>&nbsp;垂直场景</span>
-          <span><span className="text-white text-lg font-display font-extrabold">0</span>&nbsp;人工修饰</span>
+          <span><span className="text-white text-lg font-data"><CountUp to={totalCases} /></span>&nbsp;真实案例</span>
+          <span><span className="text-white text-lg font-data"><CountUp to={CATEGORIES.length} /></span>&nbsp;垂直场景</span>
+          <span><span className="text-white text-lg font-data">0</span>&nbsp;人工修饰</span>
         </div>
 
         {/* 统一大墙：品类混排 + chips 筛选 + 卡片角标识别分类 */}

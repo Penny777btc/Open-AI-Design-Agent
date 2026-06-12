@@ -177,10 +177,18 @@ body {
   .reveal { opacity: 1; transform: none; transition: none; }
 }
 
-/* 品牌标题字体（Syne，layout.js 注入变量） */
+/* 品牌标题字体（Syne，layout.js 注入变量）——只用于品牌名与大标题，不用于数字 */
 .font-display {
   font-family: var(--font-syne), ui-sans-serif, sans-serif;
   letter-spacing: -0.04em;
+}
+
+/* 数据/数字字体（Roboto Mono 等宽 + 表格数字）：余额、积分、统计 */
+.font-data {
+  font-family: var(--font-roboto-mono), ui-monospace, monospace;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
 /* 微标签：等宽 + 大字距 + 全大写 */

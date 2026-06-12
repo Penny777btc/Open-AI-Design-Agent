@@ -56,7 +56,7 @@ export default function BillingPage() {
           </div>
           <div className="text-right">
             <div className="micro-label">当前余额</div>
-            <div className="font-display text-4xl font-extrabold">{userData?.balance ?? "—"}</div>
+            <div className="font-data text-4xl">{userData?.balance ?? "—"}</div>
           </div>
         </div>
 
@@ -65,7 +65,7 @@ export default function BillingPage() {
           {packages.map((p) => (
             <div key={p.id} className="bg-bg-card border border-white/[0.08] rounded-sm p-6 flex flex-col gap-3 hover:border-white/20 transition-all">
               <div className="micro-label">{p.label}</div>
-              <div className="font-display text-3xl font-extrabold">{p.credits.toLocaleString()}<span className="text-sm text-gray-500 ml-1">credits</span></div>
+              <div className="font-data text-3xl">{p.credits.toLocaleString()}<span className="text-sm text-gray-500 ml-1 font-normal">credits</span></div>
               <div className="text-secondary-text text-[13px]">${(p.amount_cents / 100).toFixed(2)}</div>
               <button
                 onClick={() => buy(p.id)}
