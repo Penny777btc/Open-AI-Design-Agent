@@ -165,6 +165,72 @@ async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
     return {"ok": True, "message": "邮箱验证成功"}
 
 
+class ProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=64)
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class AccountDelete(BaseModel):
+    password: str | None = None
+    confirm: str  # 必须等于 "DELETE"
+
+
+@router.patch("/auth/profile")
+async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    if body.name is not None:
+        user.name = body.name.strip() or user.name
+    await db.commit()
+    return _user_out(user)
+
+
+@router.post("/auth/change-password")
+async def change_password(body: PasswordChange, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    if not user.password_hash or not bcrypt.checkpw(body.current_password.encode(), user.password_hash.encode()):
+        raise HTTPException(status_code=401, detail="当前密码不正确")
+    user.password_hash = bcrypt.hashpw(body.new_password.encode(), bcrypt.gensalt()).decode()
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/auth/delete-account")
+async def delete_account(body: AccountDelete, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    """删除账号（隐私政策承诺）：清除创作数据并匿名化身份；账务流水按法务要求保留。"""
+    if body.confirm != "DELETE":
+        raise HTTPException(status_code=422, detail="请输入 DELETE 确认删除")
+    if user.password_hash:
+        if not body.password or not bcrypt.checkpw(body.password.encode(), user.password_hash.encode()):
+            raise HTTPException(status_code=401, detail="密码不正确，无法删除账号")
+
+    from sqlalchemy import delete as sa_delete
+
+    from app.models import Asset, DesignSession, Job, JobEvent, SessionMessages, UploadedFile
+
+    session_ids = (
+        await db.execute(select(DesignSession.id).where(DesignSession.user_id == user.id))
+    ).scalars().all()
+    job_ids = (await db.execute(select(Job.id).where(Job.user_id == user.id))).scalars().all()
+    if job_ids:
+        await db.execute(sa_delete(JobEvent).where(JobEvent.job_id.in_(job_ids)))
+    await db.execute(sa_delete(Job).where(Job.user_id == user.id))
+    await db.execute(sa_delete(Asset).where(Asset.user_id == user.id))
+    if session_ids:
+        await db.execute(sa_delete(SessionMessages).where(SessionMessages.session_id.in_(session_ids)))
+    await db.execute(sa_delete(DesignSession).where(DesignSession.user_id == user.id))
+    await db.execute(sa_delete(UploadedFile).where(UploadedFile.user_id == user.id))
+
+    # 匿名化（保留账务关联所需的 user 行）
+    user.email = f"deleted-{user.id}@deleted.invalid"
+    user.name = "Deleted User"
+    user.password_hash = None
+    user.google_id = None
+    await db.commit()
+    return {"ok": True}
+
+
 @router.post("/auth/google")
 async def google_oauth(request: Request, db: AsyncSession = Depends(get_db)):
     """Google OAuth code 换 token。需配置 GOOGLE_CLIENT_ID/SECRET 后启用。"""

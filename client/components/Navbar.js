@@ -46,6 +46,7 @@ const Navbar = () => {
                 <div className="absolute top-full right-0 mt-2 w-44 bg-bg-card border border-white/10 rounded-sm shadow-[0_20px_40px_rgba(0,0,0,0.7)] flex flex-col py-1 z-[110]">
                   <span className="px-4 py-2 text-[11px] text-gray-600 font-mono truncate">{userData.email}</span>
                   <Link href="/billing" onClick={() => setMenuOpen(false)} className="px-4 py-2 text-[12px] text-gray-400 hover:text-white hover:bg-white/5 transition-colors">积分与充值</Link>
+                  <Link href="/account" onClick={() => setMenuOpen(false)} className="px-4 py-2 text-[12px] text-gray-400 hover:text-white hover:bg-white/5 transition-colors">账户设置</Link>
                   <button onClick={logout} className="px-4 py-2 text-[12px] text-left text-gray-400 hover:text-white hover:bg-white/5 transition-colors">退出登录</button>
                 </div>
               )}
