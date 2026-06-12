@@ -110,10 +110,12 @@ def _verify_stripe_signature(payload: bytes, header: str) -> bool:
 
 @router.post("/billing/webhook")
 async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    # 审计 R1：webhook secret 是强制项——缺失时拒绝一切回调，杜绝伪造入账
+    if not settings.stripe_webhook_secret:
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
     payload = await request.body()
-    if settings.stripe_webhook_secret:
-        if not _verify_stripe_signature(payload, request.headers.get("stripe-signature", "")):
-            raise HTTPException(status_code=400, detail="Invalid signature")
+    if not _verify_stripe_signature(payload, request.headers.get("stripe-signature", "")):
+        raise HTTPException(status_code=400, detail="Invalid signature")
     import json
 
     event = json.loads(payload)

@@ -67,9 +67,12 @@ export default function LoginPage() {
         <Suspense fallback={null}>
           <LoginForm />
         </Suspense>
-        <div className="text-center text-[12px] text-gray-500">
-          还没有账号？{" "}
-          <Link href="/register" className="text-white hover:underline">注册即送 500 credits →</Link>
+        <div className="text-center text-[12px] text-gray-500 flex flex-col gap-1.5">
+          <span>
+            还没有账号？{" "}
+            <Link href="/register" className="text-white hover:underline">注册即送 200 credits →</Link>
+          </span>
+          <Link href="/reset" className="text-gray-600 hover:text-white transition-colors">忘记密码？</Link>
         </div>
       </div>
       <Link href="/" className="micro-label hover:text-white transition-colors">// RETURN_TO_HOME</Link>

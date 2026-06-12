@@ -61,11 +61,14 @@ async def _enqueue(db: AsyncSession, user, session_id: str, kind: str, payload: 
     return {"job_id": job.id}
 
 
-@router.post("/sessions/{session_id}/chat")
+from app.services.rate_limit import rate_limit
+
+# 审计 R3：规划阶段调用 LLM 有真实成本，限流防刷
+@router.post("/sessions/{session_id}/chat", dependencies=[Depends(rate_limit("chat", 20, 60))])
 async def chat(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     return await _enqueue(db, user, session_id, "chat", await request.json())
 
 
-@router.post("/sessions/{session_id}/run-skill")
+@router.post("/sessions/{session_id}/run-skill", dependencies=[Depends(rate_limit("chat", 20, 60))])
 async def run_skill(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     return await _enqueue(db, user, session_id, "skill", await request.json())

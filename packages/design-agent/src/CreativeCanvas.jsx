@@ -80,6 +80,8 @@ export default function CreativeCanvas({
   // userBalanceLabel: string like "$ 5.00" or "1200 credits" to show in the dropdown.
   // If not provided, falls back to "$ {user.balance}".
   userBalanceLabel = null,
+  // onBalanceChange: 余额可能变化时回调（审批扣费/任务结束/失败退还），宿主用来刷新余额显示
+  onBalanceChange = null,
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -482,6 +484,7 @@ export default function CreativeCanvas({
     }
     setBusy(false);
     loadAssets();
+    onBalanceChange?.();
     // Persist final state
     setMessages(prev => {
       const next = [...prev];
@@ -507,8 +510,25 @@ export default function CreativeCanvas({
             : e
         )
       })));
+      onBalanceChange?.();
     } catch (err) {
-      toast.error(err.response?.data?.detail || `Failed to ${action} job`);
+      // 审计 U2：积分不足时给充值直达入口，而不是只报错
+      if (err.response?.status === 402) {
+        toast((t) => (
+          <span className="flex items-center gap-3 text-[12px]">
+            {err.response?.data?.detail || "积分不足"}
+            <a
+              href="/billing"
+              className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider shrink-0"
+              onClick={() => toast.dismiss(t.id)}
+            >
+              去充值 →
+            </a>
+          </span>
+        ), { duration: 8000 });
+      } else {
+        toast.error(err.response?.data?.detail || `Failed to ${action} job`);
+      }
     }
   };
 
@@ -545,7 +565,7 @@ export default function CreativeCanvas({
     try {
       const { data } = await axios.get(`${API}/sessions/${sessionId}/jobs`, { headers: getHeaders() });
       // 非终态全部恢复（含等待审批），刷新/跨页后重建事件流与审批卡片
-      const ACTIVE = ["pending", "processing", "planning", "awaiting_approval", "running"];
+      const ACTIVE = ["pending", "processing", "planning", "awaiting_approval", "approving", "running"];
       const active = data.find(j => ACTIVE.includes(j.status) && j.id);
       if (active) {
         // If the last message is assistant but empty/no events, it might be the one for this job.

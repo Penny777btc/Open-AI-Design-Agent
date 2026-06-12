@@ -15,6 +15,10 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.config import validate_production_config
+
+    if errors := validate_production_config():
+        raise RuntimeError("生产配置不安全，拒绝启动：\n- " + "\n- ".join(errors))
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     settings.storage_dir.mkdir(parents=True, exist_ok=True)

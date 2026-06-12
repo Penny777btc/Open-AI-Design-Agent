@@ -24,12 +24,20 @@ class Settings(BaseSettings):
     planner_model: str = "codex"
     image_model: str = "gemini"
 
+    # development | production（production 下启动时强校验安全配置）
+    environment: str = "development"
+
     dev_user_email: str = "dev@local"
-    signup_grant_credits: int = 500
+    signup_grant_credits: int = 200  # 审计 R3：降低薅羊毛收益
     image_credits: int = 10
     edit_credits: int = 15
     max_plan_nodes: int = 12
     executor_concurrency: int = 2
+    approval_timeout_seconds: int = 1800  # 审计 L6：余额不足去充值后仍可回来批准
+
+    # Resend 邮件（邮箱验证/密码找回；未配置时相关接口返回 503）
+    resend_api_key: str = ""
+    mail_from: str = "Picsmith <noreply@picsmith.app>"
 
     # 认证：jwt = 强制登录；dev = 无 token 时回落到 dev 用户（本地调试）
     auth_mode: str = "jwt"
@@ -45,6 +53,20 @@ class Settings(BaseSettings):
 
 def tool_cost(tool: str) -> int:
     return settings.edit_credits if tool == "edit_image" else settings.image_credits
+
+
+def validate_production_config() -> list[str]:
+    """生产环境启动安全校验（审计 R1/R2/L8）：返回致命错误列表。"""
+    errors = []
+    if settings.environment != "production":
+        return errors
+    if settings.jwt_secret == "dev-secret-change-me-in-production":
+        errors.append("JWT_SECRET 仍是默认值——任何人都能伪造登录态")
+    if settings.auth_mode != "jwt":
+        errors.append("生产环境 AUTH_MODE 必须为 jwt（dev 模式存在共享账号后门）")
+    if settings.stripe_secret_key and not settings.stripe_webhook_secret:
+        errors.append("启用了 Stripe 但未配置 STRIPE_WEBHOOK_SECRET——webhook 可被伪造刷积分")
+    return errors
 
 
 settings = Settings()

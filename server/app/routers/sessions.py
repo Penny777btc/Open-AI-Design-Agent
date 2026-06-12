@@ -54,8 +54,22 @@ async def rename_session(session_id: str, request: Request, db: AsyncSession = D
 async def delete_session(session_id: str, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     from datetime import datetime, timezone
 
+    from app.models import Job
+    from app.services import job_service
+
     session = await _owned_session(db, user, session_id)
     session.deleted_at = datetime.now(timezone.utc)
+    # 审计 L5：取消该会话所有进行中的任务（未执行节点会自动退积分）
+    active = (
+        await db.execute(
+            select(Job.id).where(
+                Job.session_id == session_id,
+                Job.status.in_(["pending", "planning", "awaiting_approval", "approving", "running"]),
+            )
+        )
+    ).scalars().all()
+    for job_id in active:
+        job_service.cancel_job(job_id)
     await db.commit()
     return {"ok": True}
 

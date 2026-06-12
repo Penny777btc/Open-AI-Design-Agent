@@ -64,7 +64,7 @@ export default function RegisterPage() {
             type="submit" disabled={busy}
             className="w-full py-3 bg-white text-black rounded-sm text-[12px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all disabled:opacity-50"
           >
-            {busy ? "创建中…" : "注册 · 领 500 CREDITS"}
+            {busy ? "创建中…" : "注册 · 领 200 CREDITS"}
           </button>
         </form>
         <div className="text-center text-[12px] text-gray-500">

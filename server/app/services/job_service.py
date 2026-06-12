@@ -114,7 +114,7 @@ async def _run_job(job_id: str) -> None:
 
         state = _runtime[job_id]
         try:
-            await asyncio.wait_for(state["approve"].wait(), timeout=600)
+            await asyncio.wait_for(state["approve"].wait(), timeout=settings.approval_timeout_seconds)
         except asyncio.TimeoutError:
             await emit(job_id, "info", {"content": "Plan expired without approval."})
             await _set_status(job_id, "cancelled", approved=False)
@@ -133,10 +133,16 @@ async def _run_job(job_id: str) -> None:
         canvas_nodes = (job_input.get("canvas_state") or {}).get("nodes")
         ok, failed = await _execute_plan(job_id, session_id, user_id, plan, canvas_nodes)
 
-        # 语言中性的总结（i18n 落地前避免中英混杂）
-        summary = f"✅ {ok}/{ok + failed} generated · added to canvas" if failed == 0 else (
-            f"⚠️ {ok}/{ok + failed} generated ({failed} failed) · added to canvas"
-        )
+        # 总结语言跟随用户输入（审计 U3）
+        zh = any("一" <= ch <= "鿿" for ch in brief)
+        if zh:
+            summary = f"✅ 全部完成：{ok}/{ok + failed} 张已添加到画布" if failed == 0 else (
+                f"⚠️ 完成 {ok}/{ok + failed} 张（{failed} 张失败，积分已退还），已添加到画布"
+            )
+        else:
+            summary = f"✅ {ok}/{ok + failed} generated · added to canvas" if failed == 0 else (
+                f"⚠️ {ok}/{ok + failed} generated ({failed} failed, credits refunded) · added to canvas"
+            )
         await emit(job_id, "text", {"content": summary})
         await _set_status(job_id, "done" if failed == 0 else ("done" if ok else "failed"))
     except Exception:
@@ -298,13 +304,37 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
 
 
 async def mark_stale_jobs_failed() -> None:
-    """服务重启后，把上一进程遗留的非终态 job 标记失败（事件流告知前端）。"""
+    """服务重启后：遗留非终态 job 标记失败，并补退未消耗的预扣积分（审计 L1）。
+
+    应退金额 = 预扣 - 已成功节点成本（按该 job 产出的资产计） - 已退金额。
+    """
+    from sqlalchemy import func as sa_func
+
     async with SessionLocal() as db:
         rows = (
-            await db.execute(select(Job).where(Job.status.in_(["pending", "planning", "awaiting_approval", "running"])))
+            await db.execute(select(Job).where(Job.status.in_(["pending", "planning", "awaiting_approval", "approving", "running"])))
         ).scalars().all()
         for job in rows:
             job.status = "failed"
             job.error = "server restarted"
-            db.add(JobEvent(job_id=job.id, type="error", payload={"message": "Server restarted; please retry."}))
+            db.add(JobEvent(job_id=job.id, type="error", payload={"message": "Server restarted; unused credits refunded."}))
+
+            if job.credits_reserved:
+                succeeded = (
+                    await db.execute(select(Asset).where(Asset.job_id == job.id))
+                ).scalars().all()
+                succeeded_cost = sum(tool_cost(a.source_tool or "") for a in succeeded)
+                already_refunded = (
+                    await db.execute(
+                        select(sa_func.coalesce(sa_func.sum(CreditLedger.delta), 0)).where(
+                            CreditLedger.job_id == job.id, CreditLedger.kind == "refund"
+                        )
+                    )
+                ).scalar_one()
+                due = job.credits_reserved - succeeded_cost - already_refunded
+                if due > 0:
+                    await credit_service.apply(
+                        db, job.user_id, due, "refund",
+                        job_id=job.id, memo="server restart: unused reserve", enforce=False,
+                    )
         await db.commit()

@@ -25,15 +25,15 @@ const CATEGORIES = [
     en: "E-COMMERCE",
     desc: "主图、场景图、促销海报、详情 banner——从上架到大促的全套视觉。",
     items: [
-      { f: "ec-thermos-hero.png", label: "白底主图", brief: "为不锈钢保温杯生成一张白底电商主图，影棚级打光，可直接上架" },
-      { f: "ec-sneaker-hero.png", label: "运动鞋主图", brief: "为白橙配色跑鞋生成一张悬浮角度的白底电商主图，动感构图" },
-      { f: "ec-thermos-scene.png", label: "户外场景图", badge: "改图", brief: "把这张白底保温杯主图改成黄金时刻的露营溪流场景，产品保持完全一致" },
-      { f: "ec-skincare-scene.png", label: "场景化主图", brief: "为琥珀色精华液瓶生成一张晨光石板上的场景化主图，氛围种草感" },
-      { f: "ec-lipstick-luxury.png", label: "美妆大片", brief: "为玫瑰金口红生成一张黑丝绸背景的奢华美妆广告图，戏剧性打光" },
-      { f: "ec-promo-poster.png", label: "大促海报", brief: "做一张竖版电商大促海报，标题「年中大促」副标题「全场5折起」，红金配色喜庆氛围" },
-      { f: "ec-food-poster.png", label: "外卖海报", brief: "做一张竖版美食外卖海报，标题「新店开业」副标题「第二份半价」，汉堡奶茶诱人摄影" },
-      { f: "ec-watch-detail.png", label: "细节大片", brief: "为机械腕表生成一张微距细节横幅，侧光突出表盘质感，暗调背景" },
-      { f: "ec-banner-coffee.png", label: "详情 Banner", brief: "为精品咖啡豆做一张 16:9 详情页头图，牛皮纸袋和咖啡豆，暖棕色调" },
+      { f: "ec-thermos-hero.webp", label: "白底主图", brief: "为不锈钢保温杯生成一张白底电商主图，影棚级打光，可直接上架" },
+      { f: "ec-sneaker-hero.webp", label: "运动鞋主图", brief: "为白橙配色跑鞋生成一张悬浮角度的白底电商主图，动感构图" },
+      { f: "ec-thermos-scene.webp", label: "户外场景图", badge: "改图", brief: "把这张白底保温杯主图改成黄金时刻的露营溪流场景，产品保持完全一致" },
+      { f: "ec-skincare-scene.webp", label: "场景化主图", brief: "为琥珀色精华液瓶生成一张晨光石板上的场景化主图，氛围种草感" },
+      { f: "ec-lipstick-luxury.webp", label: "美妆大片", brief: "为玫瑰金口红生成一张黑丝绸背景的奢华美妆广告图，戏剧性打光" },
+      { f: "ec-promo-poster.webp", label: "大促海报", brief: "做一张竖版电商大促海报，标题「年中大促」副标题「全场5折起」，红金配色喜庆氛围" },
+      { f: "ec-food-poster.webp", label: "外卖海报", brief: "做一张竖版美食外卖海报，标题「新店开业」副标题「第二份半价」，汉堡奶茶诱人摄影" },
+      { f: "ec-watch-detail.webp", label: "细节大片", brief: "为机械腕表生成一张微距细节横幅，侧光突出表盘质感，暗调背景" },
+      { f: "ec-banner-coffee.webp", label: "详情 Banner", brief: "为精品咖啡豆做一张 16:9 详情页头图，牛皮纸袋和咖啡豆，暖棕色调" },
     ],
   },
   {
@@ -41,13 +41,13 @@ const CATEGORIES = [
     en: "SOCIAL MEDIA",
     desc: "小红书封面、视频缩略图、公众号头图——大字标题渲染稳定，点击率说话。",
     items: [
-      { f: "social-rednote.png", label: "小红书封面", brief: "做一张小红书封面，标题「7天收纳改造计划」，明亮治愈的家居整理风格" },
-      { f: "social-bilibili.png", label: "B站封面", brief: "做一张 16:9 视频封面，超大标题「3分钟看懂AI」，蓝白科技感高对比构图" },
-      { f: "social-douyin.png", label: "竖版知识封面", brief: "做一张竖版短视频知识封面，标题「早起的5个习惯」，日出渐变背景元气风" },
-      { f: "social-youtube.png", label: "YouTube 缩略图", brief: "做一张 YouTube 缩略图，文字 AI TOOLS 2026，人物指向发光手机，高点击率构图" },
-      { f: "social-wechat-banner.png", label: "公众号头图", brief: "做一张公众号头图，书本展开变成城市天际线的扁平插画，莫兰迪色高级感" },
-      { f: "social-quote-card.png", label: "金句卡片", brief: "做一张方形金句卡片，文字「慢慢来比较快」，米色纸纹背景配红色印章点缀" },
-      { f: "social-podcast.png", label: "播客封面", brief: "做一张播客封面，节目名 NIGHT TALKS，复古麦克风插画，Art Deco 风格" },
+      { f: "social-rednote.webp", label: "小红书封面", brief: "做一张小红书封面，标题「7天收纳改造计划」，明亮治愈的家居整理风格" },
+      { f: "social-bilibili.webp", label: "B站封面", brief: "做一张 16:9 视频封面，超大标题「3分钟看懂AI」，蓝白科技感高对比构图" },
+      { f: "social-douyin.webp", label: "竖版知识封面", brief: "做一张竖版短视频知识封面，标题「早起的5个习惯」，日出渐变背景元气风" },
+      { f: "social-youtube.webp", label: "YouTube 缩略图", brief: "做一张 YouTube 缩略图，文字 AI TOOLS 2026，人物指向发光手机，高点击率构图" },
+      { f: "social-wechat-banner.webp", label: "公众号头图", brief: "做一张公众号头图，书本展开变成城市天际线的扁平插画，莫兰迪色高级感" },
+      { f: "social-quote-card.webp", label: "金句卡片", brief: "做一张方形金句卡片，文字「慢慢来比较快」，米色纸纹背景配红色印章点缀" },
+      { f: "social-podcast.webp", label: "播客封面", brief: "做一张播客封面，节目名 NIGHT TALKS，复古麦克风插画，Art Deco 风格" },
     ],
   },
   {
@@ -55,10 +55,10 @@ const CATEGORIES = [
     en: "PRESENTATION",
     desc: "封面、数据页、章节页、团队页——让整个 deck 有咨询公司级的质感。",
     items: [
-      { f: "ppt-cover.png", label: "战略规划封面", brief: "做一张商务 PPT 封面，标题「2026 年度战略规划」，深蓝底发光数据线条，专业大气" },
-      { f: "ppt-data.png", label: "数据可视化页", brief: "做一张 PPT 数据页背景，深色底上发光的 3D 图表和数据标注，现代分析风" },
-      { f: "ppt-section.png", label: "章节过渡页", brief: "做一张 PPT 章节页，超大数字 03 配标题「市场分析」，右半建筑摄影分屏布局" },
-      { f: "ppt-team.png", label: "团队介绍页", brief: "做一张 PPT 团队介绍页，四个圆形头像位带姓名职位标签，干净网格布局" },
+      { f: "ppt-cover.webp", label: "战略规划封面", brief: "做一张商务 PPT 封面，标题「2026 年度战略规划」，深蓝底发光数据线条，专业大气" },
+      { f: "ppt-data.webp", label: "数据可视化页", brief: "做一张 PPT 数据页背景，深色底上发光的 3D 图表和数据标注，现代分析风" },
+      { f: "ppt-section.webp", label: "章节过渡页", brief: "做一张 PPT 章节页，超大数字 03 配标题「市场分析」，右半建筑摄影分屏布局" },
+      { f: "ppt-team.webp", label: "团队介绍页", brief: "做一张 PPT 团队介绍页，四个圆形头像位带姓名职位标签，干净网格布局" },
     ],
   },
   {
@@ -66,26 +66,26 @@ const CATEGORIES = [
     en: "LOGO & BRAND",
     desc: "一个 brief 多个方向：极简、徽章、字标、图形标——对比着挑，不用反复沟通。",
     items: [
-      { f: "logo-minimal.png", label: "极简线条", brief: "为精品咖啡品牌 Mori Coffee 设计极简线条 logo，黑色细线条咖啡杯图形，奶油色底" },
-      { f: "logo-badge.png", label: "复古徽章", brief: "为咖啡品牌 Mori Coffee 设计复古圆形徽章 logo，咖啡植物手绘线稿，墨绿底奶油线条" },
-      { f: "logo-wordmark.png", label: "几何字标", brief: "为咖啡品牌设计 MORI 字标 logo，几何粗体字形，字母 O 里藏咖啡豆负空间" },
-      { f: "logo-tech.png", label: "科技图形标", brief: "为科技初创公司设计抽象六边形交织线条 logo，青色到紫色渐变，深色底" },
-      { f: "logo-restaurant.png", label: "中式餐饮", brief: "为中餐厅设计圆形徽章 logo，蒸汽碗筷图形中央一个「膳」字，朱红配金色" },
-      { f: "logo-fitness.png", label: "运动品牌", brief: "为健身品牌设计动感 logo，速度笔触构成的奔跑人形，荧光绿配炭黑" },
+      { f: "logo-minimal.webp", label: "极简线条", brief: "为精品咖啡品牌 Mori Coffee 设计极简线条 logo，黑色细线条咖啡杯图形，奶油色底" },
+      { f: "logo-badge.webp", label: "复古徽章", brief: "为咖啡品牌 Mori Coffee 设计复古圆形徽章 logo，咖啡植物手绘线稿，墨绿底奶油线条" },
+      { f: "logo-wordmark.webp", label: "几何字标", brief: "为咖啡品牌设计 MORI 字标 logo，几何粗体字形，字母 O 里藏咖啡豆负空间" },
+      { f: "logo-tech.webp", label: "科技图形标", brief: "为科技初创公司设计抽象六边形交织线条 logo，青色到紫色渐变，深色底" },
+      { f: "logo-restaurant.webp", label: "中式餐饮", brief: "为中餐厅设计圆形徽章 logo，蒸汽碗筷图形中央一个「膳」字，朱红配金色" },
+      { f: "logo-fitness.webp", label: "运动品牌", brief: "为健身品牌设计动感 logo，速度笔触构成的奔跑人形，荧光绿配炭黑" },
     ],
   },
 ];
 
 const MARQUEE_A = [
-  "poster-vintage.png", "ec-promo-poster.png", "social-rednote.png", "logo-badge.png",
-  "ec-sneaker-hero.png", "social-youtube.png", "ppt-cover.png", "ec-skincare-scene.png",
-  "social-podcast.png", "logo-tech.png", "ec-banner-coffee.png", "poster-night.png",
+  "poster-vintage.webp", "ec-promo-poster.webp", "social-rednote.webp", "logo-badge.webp",
+  "ec-sneaker-hero.webp", "social-youtube.webp", "ppt-cover.webp", "ec-skincare-scene.webp",
+  "social-podcast.webp", "logo-tech.webp", "ec-banner-coffee.webp", "poster-night.webp",
 ];
 
 const MARQUEE_B = [
-  "ec-thermos-scene.png", "social-bilibili.png", "logo-restaurant.png", "ec-food-poster.png",
-  "ppt-section.png", "social-quote-card.png", "ec-lipstick-luxury.png", "logo-fitness.png",
-  "social-douyin.png", "ec-watch-detail.png", "ppt-data.png", "poster-badge.png",
+  "ec-thermos-scene.webp", "social-bilibili.webp", "logo-restaurant.webp", "ec-food-poster.webp",
+  "ppt-section.webp", "social-quote-card.webp", "ec-lipstick-luxury.webp", "logo-fitness.webp",
+  "social-douyin.webp", "ec-watch-detail.webp", "ppt-data.webp", "poster-badge.webp",
 ];
 
 const PLAN_STEPS = [
@@ -104,7 +104,7 @@ const FEATURES = [
 
 const FAQS = [
   ["生成一张图要多久？", "海报类图片通常 35-75 秒，复杂编辑约 2-3 分钟。任务卡片会显示预估耗时，全程可以离开页面，回来自动恢复进度。"],
-  ["积分怎么计算？", "按生成消耗：每张图 10 credits 起，编辑类按复杂度略高。注册即送 500 credits，执行前的计划阶段不收费。"],
+  ["积分怎么计算？", "按生成消耗：每张图 10 credits 起，编辑类按复杂度略高。注册即送 200 credits，执行前的计划阶段不收费。"],
   ["生成的图片版权归谁？", "归你。生成结果可自由用于商业用途，我们不会将你的素材用于任何其他目的。"],
   ["和 Midjourney / 即梦有什么区别？", "它们是「生成器」，Picsmith 是「设计 Agent」——理解完整需求、规划多资产交付、支持反复修改迭代，产出的是能直接上架/发布的成套设计，不是单张图。"],
 ];
@@ -388,7 +388,7 @@ export default function Landing() {
               看看怎么工作
             </a>
           </div>
-          <div className="micro-label hero-in hero-in-5">注册即送 500 CREDITS · 无需信用卡</div>
+          <div className="micro-label hero-in hero-in-5">注册即送 200 CREDITS · 无需信用卡</div>
         </div>
 
         {/* 双行反向无限画廊 */}
@@ -473,7 +473,7 @@ export default function Landing() {
             </p>
           </div>
           <div className="reveal reveal-d1 order-1 lg:order-2 max-w-sm mx-auto w-full">
-            <BeforeAfter before="/showcase/poster-vintage.png" after="/showcase/poster-night.png" />
+            <BeforeAfter before="/showcase/poster-vintage.webp" after="/showcase/poster-night.webp" />
           </div>
         </div>
       </section>
@@ -510,7 +510,7 @@ export default function Landing() {
               <div className="micro-label">STARTER</div>
               <div className="font-display text-4xl font-extrabold">免费</div>
               <ul className="text-[13px] text-secondary-text flex flex-col gap-2 flex-1">
-                <li>✓ 注册即送 500 credits</li>
+                <li>✓ 注册即送 200 credits</li>
                 <li>✓ 全部生成与改图能力</li>
                 <li>✓ 无限画布与项目管理</li>
               </ul>
@@ -574,10 +574,13 @@ export default function Landing() {
             <span className="font-display text-base font-extrabold tracking-tighter brand-gradient-text">Picsmith</span>
             <span className="micro-label">图匠 · E-COM · SOCIAL · PPT · LOGO</span>
           </span>
-          <div className="flex items-center gap-6 micro-label">
+          <div className="flex items-center gap-5 micro-label flex-wrap justify-center">
             <a href="#cases" className="hover:text-white transition-colors">案例</a>
             <a href="#pricing" className="hover:text-white transition-colors">定价</a>
             <a href="#faq" className="hover:text-white transition-colors">FAQ</a>
+            <Link href="/legal/terms" className="hover:text-white transition-colors">服务条款</Link>
+            <Link href="/legal/privacy" className="hover:text-white transition-colors">隐私政策</Link>
+            <Link href="/legal/refund" className="hover:text-white transition-colors">退款政策</Link>
             <span>© 2026 PICSMITH</span>
           </div>
         </div>

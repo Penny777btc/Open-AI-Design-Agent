@@ -49,7 +49,25 @@ async def approve_job(job_id: str, db: AsyncSession = Depends(get_db), user=Depe
     if job.status != "awaiting_approval":
         raise HTTPException(status_code=409, detail=f"Job is {job.status}, not awaiting approval")
 
-    # 整单预扣：余额不足直接拒绝（402），不进入执行
+    # 审计 L4：原子抢占状态，双击/并发只有一个请求能进入预扣
+    from sqlalchemy import update
+
+    claimed = await db.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status == "awaiting_approval")
+        .values(status="approving")
+    )
+    await db.commit()
+    if claimed.rowcount == 0:
+        raise HTTPException(status_code=409, detail="该计划已在处理中")
+
+    async def revert_claim():
+        await db.execute(
+            update(Job).where(Job.id == job_id, Job.status == "approving").values(status="awaiting_approval")
+        )
+        await db.commit()
+
+    # 整单预扣：余额不足直接拒绝（402），状态还原以便充值后重试
     total = sum(tool_cost(n.get("tool", "")) for n in (job.plan or {}).get("nodes", []))
     if total > 0:
         try:
@@ -57,6 +75,7 @@ async def approve_job(job_id: str, db: AsyncSession = Depends(get_db), user=Depe
                 db, user.id, -total, "reserve", job_id=job_id, memo=f"reserve {total} for plan"
             )
         except credit_service.InsufficientCredits as exc:
+            await revert_claim()
             raise HTTPException(
                 status_code=402,
                 detail=f"积分不足：需要 {exc.required}，当前余额 {exc.balance}。请先充值。",
@@ -65,10 +84,11 @@ async def approve_job(job_id: str, db: AsyncSession = Depends(get_db), user=Depe
         await db.commit()
 
     if not job_service.resolve_approval(job_id, approved=True):
-        # 运行时丢失：把刚预扣的退回去
+        # 运行时丢失：退预扣并还原状态
         if total > 0:
             await credit_service.apply(db, user.id, total, "refund", job_id=job_id, memo="runtime lost", enforce=False)
             await db.commit()
+        await revert_claim()
         raise HTTPException(status_code=410, detail="Job runtime lost (server restarted); please retry the request")
     return {"ok": True}
 
