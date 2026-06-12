@@ -156,6 +156,8 @@ export default function CreativeCanvas({
   const justCreatedSessionRef = useRef(false);
   // 发送进行中标记：阻止异步 loadHistory 用空历史覆盖刚写入的消息（H1 根因之一）
   const sendingRef = useRef(false);
+  // 会话首次加载后把镜头对准内容（zoom-to-fit），后续生成不抢镜头
+  const initialFitDoneRef = useRef(false);
   const initialHandoffProcessed = useRef(false);
 
   const getHeaders = useCallback(() => {
@@ -255,6 +257,7 @@ export default function CreativeCanvas({
     // Clear the sync-tracking set whenever the session changes so assets from
     // the new session are always painted to canvas (prevents stale URL leakage).
     syncedUrlsRef.current.clear();
+    initialFitDoneRef.current = false;
     if (sessionId) {
       loadHistory();
       loadAssets();
@@ -929,6 +932,16 @@ export default function CreativeCanvas({
           else if (kind === "video") canvasRef.current.addVideo(a.url, px, py, undefined, undefined, undefined, label);
           else if (kind === "audio") canvasRef.current.addAudio(a.url, px, py, undefined, label);
         });
+
+        // 首次加载：镜头对准内容（图片异步落布，轮询重试直到 fit 成功）
+        if (!initialFitDoneRef.current) {
+          initialFitDoneRef.current = true;
+          let attempts = 0;
+          const tryFit = setInterval(() => {
+            attempts++;
+            if (canvasRef.current?.fitToContent?.() || attempts > 16) clearInterval(tryFit);
+          }, 250);
+        }
         return true;
       }
       return false;

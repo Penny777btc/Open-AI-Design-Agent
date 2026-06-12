@@ -885,6 +885,29 @@ const CanvasArea = forwardRef(
     const stageRef = useRef();
     const containerRef = useRef();
 
+    // 视图适配内容（zoom-to-fit）：会话加载后把镜头对准内容中心
+    const fitToContent = ({ paddingRatio = 0.8, maxZoom = 1 } = {}) => {
+      const stage = stageRef.current;
+      if (!stage) return false;
+      const nodes = [...images, ...videos, ...audios, ...texts];
+      if (nodes.length === 0) return false;
+      const minX = Math.min(...nodes.map((n) => n.x));
+      const minY = Math.min(...nodes.map((n) => n.y));
+      const maxX = Math.max(...nodes.map((n) => n.x + (n.width || 200)));
+      const maxY = Math.max(...nodes.map((n) => n.y + (n.height || 200)));
+      const bw = Math.max(maxX - minX, 1);
+      const bh = Math.max(maxY - minY, 1);
+      const vw = stage.width();
+      const vh = stage.height();
+      if (!vw || !vh) return false;
+      let z = Math.min(maxZoom, (vw * paddingRatio) / bw, (vh * paddingRatio) / bh);
+      z = Math.max(0.1, z);
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      updateZoom(z, { x: vw / 2 - cx * z, y: vh / 2 - cy * z });
+      return true;
+    };
+
     const updateZoom = (newZoom, pos = null) => {
       if (!newZoom || isNaN(newZoom)) return;
       setZoom(newZoom);
@@ -1392,6 +1415,7 @@ const CanvasArea = forwardRef(
         // switched to non-destructive side-by-side placement.
         replaceAt: placeNextToSource,
         arrangeNodes,
+        fitToContent,
         zoomIn: () => updateZoom(Math.min(5, zoom + 0.1)),
         zoomOut: () => updateZoom(Math.max(0.1, zoom - 0.1)),
         resetZoom: () => updateZoom(1),
