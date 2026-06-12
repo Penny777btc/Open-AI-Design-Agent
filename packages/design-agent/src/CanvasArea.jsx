@@ -1331,13 +1331,16 @@ const CanvasArea = forwardRef(
           let changed = false;
           next.forEach((t, i) => {
             if (t.x === undefined && t.y === undefined) {
+              // 视口中心生成占位框：用 stage 实时尺寸（canvasSize 状态在首次测量前是 0）
               const stage = stageRef.current;
-              t.x = stage
-                ? (-stage.x() + canvasSize.width / 2) / zoom - 120 + i * 20
-                : 100 + i * 20;
-              t.y = stage
-                ? (-stage.y() + canvasSize.height / 2) / zoom - 60 + i * 20
-                : 100 + i * 20;
+              const vw = (stage && stage.width()) || canvasSize.width || 1200;
+              const vh = (stage && stage.height()) || canvasSize.height || 800;
+              const sx = stage ? stage.x() : 0;
+              const sy = stage ? stage.y() : 0;
+              const cx = (-sx + vw / 2) / zoom - 120 + i * 24;
+              const cy = (-sy + vh / 2) / zoom - 120 + i * 24;
+              t.x = Number.isFinite(cx) ? cx : 100 + i * 24;
+              t.y = Number.isFinite(cy) ? cy : 100 + i * 24;
               changed = true;
             }
           });

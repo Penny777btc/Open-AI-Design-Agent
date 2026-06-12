@@ -130,8 +130,11 @@ async def _run_job(job_id: str) -> None:
             return
 
         await _set_status(job_id, "running", approved=True)
-        canvas_nodes = (job_input.get("canvas_state") or {}).get("nodes")
-        ok, failed = await _execute_plan(job_id, session_id, user_id, plan, canvas_nodes)
+        canvas_state = job_input.get("canvas_state") or {}
+        ok, failed = await _execute_plan(
+            job_id, session_id, user_id, plan,
+            canvas_state.get("nodes"), canvas_state.get("viewport"),
+        )
 
         # 总结语言跟随用户输入（审计 U3）
         zh = any("一" <= ch <= "鿿" for ch in brief)
@@ -159,12 +162,13 @@ def _skill_brief(job_input: dict) -> str:
 
 
 async def _execute_plan(
-    job_id: str, session_id: str, user_id: str, plan: Plan, canvas_nodes: list | None = None
+    job_id: str, session_id: str, user_id: str, plan: Plan,
+    canvas_nodes: list | None = None, viewport: dict | None = None,
 ) -> tuple[int, int]:
     semaphore = asyncio.Semaphore(settings.executor_concurrency)
     done_nodes: set[str] = set()
     results: dict[str, bool] = {}
-    planner = PlacementPlanner(canvas_nodes)
+    planner = PlacementPlanner(canvas_nodes, viewport)
 
     async def refund_node(node, reason: str) -> None:
         async with SessionLocal() as db:
