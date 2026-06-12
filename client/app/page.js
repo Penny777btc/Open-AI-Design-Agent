@@ -281,20 +281,20 @@ export default function Landing() {
           ))}
         </div>
 
-        {/* 满幅 masonry：突破容器，边到边 */}
-        <div key={scene} className="px-2 sm:px-3 columns-2 md:columns-3 xl:columns-4 gap-3">
+        {/* masonry 墙：收进容器、提高列数，单图保持精致尺寸（Lovart 式克制） */}
+        <div key={scene} className="max-w-[1320px] mx-auto px-4 sm:px-6 columns-2 sm:columns-3 lg:columns-4 xl:columns-5 gap-4">
           {CASES.filter((c) => scene === "全部" || c.scene === scene).map((c, i) => (
             <figure
               key={c.f}
-              className="group relative mb-3 break-inside-avoid rounded-sm overflow-hidden border border-white/[0.07] hover:border-white/30 transition-all duration-500 word-swap"
+              className="group relative mb-4 break-inside-avoid rounded-md overflow-hidden border border-white/[0.07] hover:border-white/25 hover:-translate-y-0.5 transition-all duration-500 word-swap"
               style={{ animationDelay: `${Math.min(i * 0.05, 0.4)}s` }}
             >
               <img src={`/showcase/${c.f}`} alt={c.label} loading="lazy"
                 className="w-full block group-hover:scale-[1.03] transition-transform duration-700" />
-              <figcaption className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
+              <figcaption className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/15 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3">
                 <span className="micro-label">// {c.scene}</span>
-                <span className="text-white text-[15px] font-bold mt-1">{c.label}</span>
-                <span className="text-gray-400 text-[11px] mt-0.5">{c.brief}</span>
+                <span className="text-white text-[13px] font-bold mt-0.5">{c.label}</span>
+                <span className="text-gray-400 text-[10px] mt-0.5 leading-snug">{c.brief}</span>
               </figcaption>
             </figure>
           ))}
