@@ -75,7 +75,7 @@ export default function CreativeCanvas({
   isEmbed = false,
   // Platform customization props:
   // navLinks: array of { icon, label, path } to show in the user dropdown menu.
-  // If not provided, defaults to the muapiapp links (Explore, Top Up, etc.).
+  // If not provided, defaults to the built-in links.
   navLinks = null,
   // userBalanceLabel: string like "$ 5.00" or "1200 credits" to show in the dropdown.
   // If not provided, falls back to "$ {user.balance}".
@@ -86,7 +86,7 @@ export default function CreativeCanvas({
   const router = useRouter();
   const searchParams = useSearchParams();
   const inEmbedMode = isEmbed && !!embedCode;
-  const embedStorageKey = inEmbedMode ? `muapi_agent_session_${embedCode}` : null;
+  const embedStorageKey = inEmbedMode ? `picsmith_agent_session_${embedCode}` : null;
   const [embedSessionId, setEmbedSessionId] = useState(() => {
     if (typeof window === "undefined" || !embedStorageKey) return null;
     return window.localStorage.getItem(embedStorageKey) || null;
@@ -644,7 +644,7 @@ export default function CreativeCanvas({
       });
 
       // 3. Final URL
-      const uploadedUrl = signData.public_url || `https://cdn.muapi.ai/${fields.key}`;
+      const uploadedUrl = signData.public_url;
 
       // 4. Register as a real session asset so the agent can address it as asset_N.
       const kind = file.type?.startsWith("video/") ? "video"
@@ -1321,14 +1321,6 @@ export default function CreativeCanvas({
               <span className="text-[10px] text-secondary-text mt-1.5">Auto Model • Multi-tool Access</span>
             </div>
             <div className="flex items-center gap-1">
-              <Link 
-                href="https://muapi.ai/docs/design-agent-api" 
-                target="_blank"
-                className="p-1.5 hover:bg-bg-page hover:text-primary-text transition-colors rounded text-secondary-text"
-                title="API Docs"
-              >
-                <CgTerminal size={16} />
-              </Link>
               {sessionId && (
                 <button
                   onClick={() => {
@@ -1705,14 +1697,6 @@ export default function CreativeCanvas({
                           <div>
                             <h3 className="text-[12px] font-bold text-primary-text uppercase tracking-tight">Expert Skills</h3>
                           </div>
-                          <Link 
-                            href="https://muapi.ai/docs/design-agent-api"
-                            target="_blank" 
-                            className="text-[10px] font-bold text-primary hover:underline flex items-center gap-1"
-                          >
-                            <CgTerminal size={10} />
-                            API Docs
-                          </Link>
                         </div>
                         <div className="max-h-80 overflow-y-auto p-1.5 scrollbar-subtle">
                           {skills.map(skill => (

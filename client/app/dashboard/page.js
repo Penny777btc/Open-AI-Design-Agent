@@ -204,7 +204,7 @@ export default function AssistantDashboard() {
       });
 
       // 3. Final URL
-      const uploadedUrl = signData.public_url || `https://cdn.muapi.ai/${fields.key}`;
+      const uploadedUrl = signData.public_url;
       const kind = file.type?.startsWith("video/") ? "video"
                  : file.type?.startsWith("audio/") ? "audio"
                  : "image";
