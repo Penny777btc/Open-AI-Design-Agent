@@ -1010,14 +1010,14 @@ export default function CreativeCanvas({
           <div className="p-3 border-b border-divider flex items-center justify-between bg-bg-card/50">
             <div className="flex items-center gap-2 overflow-hidden">
               <Link 
-                href="/"
+                href="/dashboard"
                 className={`p-2 hover:bg-bg-page rounded text-secondary-text hover:text-primary transition-colors`}
                 title="Go Back"
               >
                 <FiArrowLeft size={16} />
               </Link>
               <Link
-                href="/"
+                href="/dashboard"
                 className="flex items-center flex-shrink-0 transition-transform duration-300 hover:scale-[1.02] active:scale-95"
                 aria-label="Home"
               >
@@ -1122,7 +1122,7 @@ export default function CreativeCanvas({
 
               {!inEmbedMode && (
                 <Link
-                  href="/"
+                  href="/dashboard"
                   className={`p-1.5 hover:bg-bg-card rounded text-secondary-text hover:text-primary transition-colors ${!showLeftSidebar && "hidden"}`}
                   title="Go Back"
                 >

@@ -1,596 +1,298 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import axios from "axios";
-import {
-  FiPlus, FiUpload, FiSend, FiSearch, FiZap,
-  FiImage, FiLayout, FiTerminal, FiChevronDown,
-  FiSun, FiMoon, FiMoreHorizontal, FiArrowRight, FiTrash2,
-  FiCode, FiCopy, FiX
-} from "react-icons/fi";
-import { CgTerminal } from "react-icons/cg";
-import { RiSparklingLine, RiRobot2Line } from "react-icons/ri";
-import { GoBook, GoLightBulb } from "react-icons/go";
-import { HiOutlineCube } from "react-icons/hi";
-import { useApi } from "@/context/ApiContext";
-import { useTheme } from "next-themes";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import toast from "react-hot-toast";
-import Navbar from "@/components/Navbar";
 
-const API = "/api/v1/creative-agent";
+/* 落地页：结构参考 Lovart 首页（Hero → Agent 流程 → 功能块 → 定价 → FAQ → CTA），
+   视觉延续 Tectonic Industrial 体系，素材全部来自本产品真实生成结果 */
 
-export default function AssistantDashboard() {
-  const router = useRouter();
-  const { userData } = useApi();
-  const [mounted, setMounted] = useState(false);
-  const [input, setInput] = useState("");
-  const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [skills, setSkills] = useState([]);
-  const [showSkillsMenu, setShowSkillsMenu] = useState(false);
-  const [activeSkill, setActiveSkill] = useState(null);
-  const [showMentionPopup, setShowMentionPopup] = useState(false);
-  const [mentionQuery, setMentionQuery] = useState("");
-  const [mentionCursorPos, setMentionCursorPos] = useState(0);
-  const [hoveredAsset, setHoveredAsset] = useState(null);
-  const textareaRef = React.useRef(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [attachments, setAttachments] = useState([]);
-  const fileInputRef = React.useRef(null);
-  const [placeholderText, setPlaceholderText] = useState("");
+const ROTATING = [
+  ["咖啡品牌", "小红书封面"],
+  ["保温杯新品", "电商主图"],
+  ["手冲咖啡店", "Logo 方案"],
+  ["露营装备", "活动海报"],
+];
 
-  const placeholders = React.useMemo(() => [
-    "Ask the agent to generate an image...",
-    "Ask the agent to create a video...",
-    "Ask the agent to edit an image...",
-    "Ask the agent to plan a social campaign..."
-  ], []);
+const PLAN_STEPS = [
+  { label: "理解需求", detail: "拆解 brief → 资产清单", state: "done" },
+  { label: "生成计划", detail: "2 个节点 · 预估 20 credits", state: "done" },
+  { label: "等待批准", detail: "确认后才消耗积分", state: "active" },
+  { label: "并行出图", detail: "自动排布到画布", state: "pending" },
+];
 
-  useEffect(() => {
-    let currentPlaceholderIdx = 0;
-    let currentCharIdx = 0;
-    let isDeleting = false;
-    let typingTimer;
+const FEATURES = [
+  {
+    tag: "PLAN FIRST",
+    title: "计划先行，消耗可控",
+    desc: "出图前先给你完整执行计划和积分预估，批准才执行。不烧无意义的额度，每一分消耗都在你掌控里。",
+  },
+  {
+    tag: "ITERATE",
+    title: "对话改图，构图不丢",
+    desc: "「把这张改成夜间冷色调」——文字、构图、细节原样保留，只改你说的部分。设计是迭代出来的，不是抽卡抽出来的。",
+  },
+  {
+    tag: "INFINITE CANVAS",
+    title: "无限画布工作区",
+    desc: "生成结果自动按行排布，编辑版本自动放在原图旁边。刷新页面布局原样恢复，项目资产一目了然。",
+  },
+  {
+    tag: "VERTICAL",
+    title: "为三个场景深度打磨",
+    desc: "电商主图与详情页、品牌 Logo、自媒体封面海报。垂直场景的提示词工程与模板，比通用工具更懂你的活。",
+  },
+];
 
-    const type = () => {
-      const currentString = placeholders[currentPlaceholderIdx];
-      
-      if (isDeleting) {
-        setPlaceholderText(currentString.substring(0, currentCharIdx - 1));
-        currentCharIdx--;
-      } else {
-        setPlaceholderText(currentString.substring(0, currentCharIdx + 1));
-        currentCharIdx++;
-      }
+const FAQS = [
+  ["生成一张图要多久？", "海报类图片通常 35-75 秒，复杂编辑约 2-3 分钟。任务卡片会显示预估耗时，全程可以离开页面，回来自动恢复进度。"],
+  ["积分怎么计算？", "按生成消耗：每张图 10 credits 起，编辑类按复杂度略高。注册即送 500 credits，执行前的计划阶段不收费。"],
+  ["生成的图片版权归谁？", "归你。生成结果可自由用于商业用途，我们不会将你的素材用于任何其他目的。"],
+  ["和 Midjourney / 即梦有什么区别？", "它们是「生成器」，我们是「设计 Agent」——理解完整需求、规划多资产交付、支持反复修改迭代，产出的是能直接上架/发布的成套设计，不是单张图。"],
+];
 
-      let typeSpeed = isDeleting ? 20 : 50;
-
-      if (!isDeleting && currentCharIdx === currentString.length) {
-        typeSpeed = 2000;
-        isDeleting = true;
-      } else if (isDeleting && currentCharIdx === 0) {
-        isDeleting = false;
-        currentPlaceholderIdx = (currentPlaceholderIdx + 1) % placeholders.length;
-        typeSpeed = 500;
-      }
-
-      typingTimer = setTimeout(type, typeSpeed);
-    };
-
-    typingTimer = setTimeout(type, 1000);
-
-    return () => clearTimeout(typingTimer);
-  }, [placeholders]);
+export default function Landing() {
+  const [idx, setIdx] = useState(0);
 
   useEffect(() => {
-    setMounted(true);
-    fetchSessions();
-    fetchSkills();
+    const t = setInterval(() => setIdx((i) => (i + 1) % ROTATING.length), 2600);
+    return () => clearInterval(t);
   }, []);
 
-  const fetchSessions = async () => {
-    try {
-      const { data } = await axios.get(`${API}/sessions`);
-      // Fetch assets for each session to show thumbnails
-      const sessionsWithAssets = await Promise.all(data.map(async (s) => {
-        try {
-          const { data: assets } = await axios.get(`${API}/sessions/${s.id}/assets`);
-          return { ...s, assets: assets.slice(0, 4) }; // Keep first 4 for thumbnail grid
-        } catch {
-          return { ...s, assets: [] };
-        }
-      }));
-      setSessions(sessionsWithAssets);
-    } catch (err) {
-      console.error("Failed to fetch sessions:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchSkills = async () => {
-    try {
-      const { data } = await axios.get(`${API}/agent-skills`);
-      setSkills(data);
-    } catch (err) {
-      console.error("Failed to fetch skills:", err);
-    }
-  };
-
-
-  // 软删除 + toast 撤销（替代原生 confirm 弹窗）
-  const deleteSession = async (sessionId, sessionName) => {
-    try {
-      await axios.delete(`${API}/sessions/${sessionId}`);
-      setSessions(prev => prev.filter(s => s.id !== sessionId));
-      toast((t) => (
-        <span className="flex items-center gap-3 text-[12px]">
-          Deleted “{(sessionName || "Untitled").slice(0, 20)}”
-          <button
-            className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider"
-            onClick={async () => {
-              toast.dismiss(t.id);
-              try {
-                await axios.post(`${API}/sessions/${sessionId}/restore`);
-                fetchSessions();
-              } catch {
-                toast.error("Restore failed");
-              }
-            }}
-          >
-            Undo
-          </button>
-        </span>
-      ), { duration: 5000 });
-    } catch (err) {
-      toast.error("Failed to delete chat");
-    }
-  };
-
-  const removeAttachment = (url) => {
-    setAttachments(prev => prev.filter(a => a.url !== url));
-  };
-
-  const selectMention = (item, type) => {
-    const before = input.substring(0, mentionCursorPos);
-    const after = input.substring(textareaRef.current.selectionStart);
-    
-    if (type === "skill") {
-      setActiveSkill(item);
-      setInput(before + after); 
-    } else {
-      const insertion = `@${item.asset_label || "asset"}`;
-      setInput(before + insertion + after);
-    }
-    
-    setShowMentionPopup(false);
-    setTimeout(() => textareaRef.current?.focus(), 10);
-  };
-
-  const processFile = async (file) => {
-    if (!file) return;
-    setUploading(true);
-    setUploadProgress(0);
-    try {
-      // 1. Get signed URL via proxy
-      const { data: signData } = await axios.get("/api/v1/get_upload_url", {
-        params: { filename: file.name }
-      });
-
-      const { url, fields } = signData;
-      const formData = new FormData();
-      Object.entries(fields).forEach(([key, value]) => {
-        formData.append(key, value);
-      });
-      formData.append("file", file);
-      formData.append("x-proxy-target-url", url);
-
-      // 2. Upload to proxy URL
-      await axios.post("/api/v1/upload-binary", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-        onUploadProgress: (pe) => {
-          setUploadProgress(Math.round((pe.loaded * 100) / pe.total));
-        }
-      });
-
-      // 3. Final URL
-      const uploadedUrl = signData.public_url || `https://cdn.muapi.ai/${fields.key}`;
-      const kind = file.type?.startsWith("video/") ? "video"
-                 : file.type?.startsWith("audio/") ? "audio"
-                 : "image";
-      
-      const att = { url: uploadedUrl, kind };
-      setAttachments(prev => [...prev, att]);
-      toast.success("File uploaded successfully");
-    } catch (err) {
-      console.error("Upload failed", err);
-      toast.error("Upload failed");
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  };
-
-  const handleFileUpload = (e) => processFile(e.target.files?.[0]);
-
-  // 只创建会话并带参跳转；消息发送统一由画布执行（避免双发与历史不一致）
-  const submittingRef = React.useRef(false);
-  const startNewSession = async (initialMsg = "", skill = null, initialAttachments = []) => {
-    if (submittingRef.current) return;
-    submittingRef.current = true;
-    try {
-      const { data } = await axios.post(`${API}/sessions`, {});
-      const sessionId = data.id;
-      let url = `/canvas?session=${sessionId}`;
-
-      if (initialAttachments.length > 0) {
-        const results = await Promise.all(initialAttachments.map(a =>
-          axios.post(`${API}/sessions/${sessionId}/assets`, {
-            url: a.url,
-            kind: a.kind,
-            source_tool: "upload"
-          })
-        ));
-        const labels = results.map(r => r.data.asset_label).join(",");
-        url += `&a=${encodeURIComponent(labels)}`;
-      }
-
-      if (skill) url += `&skill=${encodeURIComponent(skill.name)}`;
-      if (initialMsg) url += `&q=${encodeURIComponent(initialMsg)}`;
-
-      router.push(url);
-    } catch (err) {
-      toast.error("Failed to start session");
-      submittingRef.current = false;
-    }
-  };
-
-  const handleKey = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (input.trim() || attachments.length > 0) {
-        startNewSession(input.trim(), activeSkill, attachments);
-      }
-    }
-  };
-
-  const filteredSkills = skills.filter(s => s.name.toLowerCase().includes(mentionQuery.toLowerCase()));
-  const filteredAssets = attachments.map((a, i) => ({ ...a, asset_label: `asset_${i+1}` })).filter(a => a.asset_label.includes(mentionQuery.toLowerCase()));
-
-
-  if (!mounted) return null;
-
   return (
-    <div className="h-dvh w-full text-sm flex flex-col items-center bg-bg-page animate-fade-in text-primary-text">
-      <Navbar />
-      <main className="flex flex-col gap-6 items-center w-full h-full overflow-y-auto">
-        <div className="flex-1 flex flex-col gap-6 sm:gap-8 items-center w-full max-w-7xl pt-6 sm:pt-8 pb-12 px-4 sm:px-8 lg:px-0">
-          {/* 不用 flex 排标题：窄屏会逐词竖排（H4） */}
-          <h1 className="font-display text-3xl sm:text-5xl font-extrabold tracking-tight text-center">
-            From brief to <span className="brand-gradient-text">finished designs</span>
+    <div className="min-h-dvh bg-bg-page text-primary-text">
+      {/* Nav */}
+      <header className="fixed top-0 left-0 right-0 z-[100] flex items-center justify-between px-6 sm:px-10 py-4 bg-[#09090b]/90 backdrop-blur-xl border-b border-white/[0.06]">
+        <div className="flex items-baseline gap-2">
+          <span className="font-display text-xl font-extrabold tracking-tighter brand-gradient-text">DesignAgent</span>
+          <span className="micro-label hidden md:inline">// E-COM · LOGO · SOCIAL</span>
+        </div>
+        <nav className="flex items-center gap-5">
+          <a href="#pricing" className="text-[11px] font-mono uppercase tracking-[0.15em] text-gray-500 hover:text-white transition-colors hidden sm:inline">定价</a>
+          <a href="#faq" className="text-[11px] font-mono uppercase tracking-[0.15em] text-gray-500 hover:text-white transition-colors hidden sm:inline">FAQ</a>
+          <Link
+            href="/dashboard"
+            className="px-5 py-2 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all shadow-[0_0_20px_rgba(255,255,255,0.1)]"
+          >
+            进入工作台
+          </Link>
+        </nav>
+      </header>
+
+      {/* Hero */}
+      <section className="relative grid-bg pt-36 pb-20 px-6 overflow-hidden">
+        <div className="absolute top-[10%] left-1/2 -translate-x-1/2 w-[40rem] h-[40rem] bg-white/[0.03] rounded-full blur-[150px] pointer-events-none" />
+        <div className="relative max-w-4xl mx-auto text-center flex flex-col items-center gap-6">
+          <div className="micro-label">AI DESIGN AGENT</div>
+          <h1 className="font-display text-4xl sm:text-6xl font-extrabold tracking-tight leading-tight">
+            从一句话，到<span className="brand-gradient-text">成套设计</span>
           </h1>
-          <p className="text-secondary-text text-base sm:text-lg text-center px-4">
-            AI design agent for e-commerce visuals, logos &amp; social covers
+          <p className="text-base sm:text-xl text-secondary-text">
+            为「<span className="text-white font-semibold">{ROTATING[idx][0]}</span>」设计
+            <span className="text-white font-semibold">{ROTATING[idx][1]}</span>
+            —— 规划、生成、修改，一个 Agent 全包。
           </p>
-          <div className="flex items-center gap-2 micro-label">
-            <span>// E-COMMERCE</span>
-            <span>// LOGO</span>
-            <span>// SOCIAL</span>
+          <div className="flex items-center gap-4 mt-2">
+            <Link
+              href="/dashboard"
+              className="px-8 py-3 bg-white text-black rounded-sm text-[12px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all shadow-[0_0_30px_rgba(255,255,255,0.15)]"
+            >
+              立即开始设计
+            </Link>
+            <a
+              href="#how"
+              className="px-6 py-3 rounded-sm text-[12px] font-bold uppercase tracking-[0.15em] border border-white/10 bg-white/5 text-gray-400 hover:border-white/20 hover:text-white transition-all"
+            >
+              看看怎么工作
+            </a>
           </div>
-          <div className="w-full max-w-3xl relative">
-            <div className="bg-bg-card border border-divider rounded-md shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-1 focus-within:shadow-[0_8px_40px_rgb(0,0,0,0.08)] transition-all">
-              <textarea
-                ref={textareaRef}
-                value={input}
-                autoFocus
-                onChange={(e) => {
-                  const val = e.target.value;
-                  const pos = e.target.selectionStart;
-                  setInput(val);
-                  
-                  const lastAtPos = val.lastIndexOf("@", pos - 1);
-                  if (lastAtPos !== -1 && (lastAtPos === 0 || val[lastAtPos - 1] === " ")) {
-                    const query = val.substring(lastAtPos + 1, pos);
-                    if (!query.includes(" ")) {
-                      setMentionQuery(query);
-                      setMentionCursorPos(lastAtPos);
-                      setShowMentionPopup(true);
-                    } else {
-                      setShowMentionPopup(false);
-                    }
-                  } else {
-                    setShowMentionPopup(false);
-                  }
-                }}
-                onKeyDown={handleKey}
-                placeholder={placeholderText}
-                className="w-full bg-transparent border-none focus:ring-0 text-lg p-4 h-24 resize-none placeholder:text-secondary-text/50 outline-none scrollbar-subtle"
-              />
-              <div className="flex items-center justify-between px-2 pb-2">
-                <div className="flex items-center gap-1 relative">
-                  <input 
-                    type="file" 
-                    ref={fileInputRef} 
-                    className="hidden" 
-                    onChange={handleFileUpload}
-                  />
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="p-2 hover:bg-bg-page rounded-full text-secondary-text transition-colors relative"
-                    title="Upload File"
-                  >
-                    {uploading ? (
-                      <div className="w-12 h-12 rounded border border-divider border-dashed flex flex-col items-center justify-center bg-bg-page/50">
-                        <span className="border-2 border-t-transparent border-primary rounded-full w-7 h-7 animate-spin absolute"></span>
-                        <span className="text-[10px] font-bold text-secondary-text z-10">{uploadProgress}%</span>
-                      </div>
-                    ) : (
-                      <FiPlus size={20} />
-                    )}
-                  </button>
-                  <button 
-                    onClick={() => setShowSkillsMenu(!showSkillsMenu)}
-                    className={`p-2 hover:bg-bg-page rounded-full transition-colors ${activeSkill || showSkillsMenu ? "text-primary bg-primary/10" : "text-secondary-text"}`}
-                    title="Skills"
-                  >
-                    <GoBook size={20} />
-                  </button>
+          <div className="micro-label mt-2">注册即送 500 CREDITS · 无需信用卡</div>
 
-                  {/* Mention & Attachment Preview Bar */}
-                  {(uploading || attachments.length > 0 || input.includes("@")) && (
-                    <div className="absolute bottom-full left-0 mb-1 flex flex-wrap gap-2 bg-bg-card border border-divider rounded shadow-xl z-10 animate-in slide-in-from-bottom-2 duration-300">
-                      {attachments.map((att, i) => (
-                        <div 
-                          key={i} 
-                          className="relative group flex items-center gap-2 px-2 py-1 bg-bg-page border border-divider rounded cursor-help hover:border-primary/50 transition-all"
-                          onMouseEnter={() => setHoveredAsset(att)}
-                          onMouseLeave={() => setHoveredAsset(null)}
-                        >
-                          <div className="w-5 h-5 rounded overflow-hidden">
-                            {att.kind === "image" ? <img src={att.url} className="w-full h-full object-cover" /> : <FiTerminal size={10} />}
-                          </div>
-                          <span className="text-[10px] font-bold text-secondary-text">{`asset_${i+1}`}</span>
-                        </div>
-                      ))}
-                      
-                      {/* Detection for @asset_N in text */}
-                      {input.match(/@asset_\d+/g)?.map(match => {
-                        const index = parseInt(match.split('_')[1]) - 1;
-                        const asset = attachments[index];
-                        if (!asset) return null;
-                        return (
-                          <div 
-                            key={match}
-                            className="relative group flex items-center gap-2 px-2 py-1 bg-primary/5 border border-primary/20 rounded-lg cursor-help hover:border-primary/50 transition-all"
-                            onMouseEnter={() => setHoveredAsset(asset)}
-                            onMouseLeave={() => setHoveredAsset(null)}
-                          >
-                            <div className="w-5 h-5 rounded overflow-hidden bg-primary/10 flex items-center justify-center text-primary">
-                              {asset.kind === "image" ? <img src={asset.url} className="w-full h-full object-cover" /> : <RiSparklingLine size={10} />}
-                            </div>
-                            <span className="text-[10px] font-bold text-primary">{match}</span>
-                          </div>
-                        );
-                      })}
-
-                      {uploading && (
-                        <div className="flex items-center gap-2 px-2 py-1 bg-bg-page border border-divider border-dashed rounded-lg">
-                          <div className="w-3 h-3 border-2 border-t-transparent border-primary rounded-full animate-spin" />
-                          <span className="text-[10px] font-bold text-secondary-text">{uploadProgress}%</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {hoveredAsset && (
-                    <div className="absolute bottom-full left-0 mb-10 w-72 aspect-square bg-bg-card border border-divider rounded-md shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] overflow-hidden z-[110] animate-in fade-in zoom-in-95 duration-200 pointer-events-none">
-                      {hoveredAsset.kind === "image" ? (
-                        <img src={hoveredAsset.url} className="w-full h-full object-cover" />
-                      ) : hoveredAsset.kind === "video" ? (
-                        <video src={hoveredAsset.url} className="w-full h-full object-cover" autoPlay muted loop />
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center bg-bg-page gap-3 p-6 text-center">
-                          <FiTerminal size={48} className="text-primary opacity-20" />
-                          <div className="text-xs font-medium text-secondary-text truncate w-full">{hoveredAsset.url.split('/').pop()}</div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {showMentionPopup && (
-                    <div className="absolute bottom-full left-0 mb-2 flex items-end gap-3 z-50">
-                      <div className="w-64 bg-bg-card border border-divider rounded shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
-                        <div className="p-2 border-b border-divider/30 text-[10px] font-bold text-secondary-text uppercase tracking-widest bg-bg-page/50">
-                          Mentions
-                        </div>
-                        <div className="max-h-60 overflow-y-auto scrollbar-subtle py-1">
-                          {filteredSkills.length > 0 && (
-                            <div className="px-3 py-1.5 text-[9px] font-bold text-primary uppercase opacity-60">Skills</div>
-                          )}
-                          {filteredSkills.map(skill => (
-                            <button
-                              key={skill.name}
-                              onClick={() => selectMention(skill, "skill")}
-                              className="w-full text-left px-3 py-2 hover:bg-bg-page transition-colors flex items-center gap-2 group"
-                            >
-                              <RiSparklingLine size={12} className="text-primary opacity-50 group-hover:opacity-100" />
-                              <span className="text-xs font-medium text-primary-text">{skill.name}</span>
-                            </button>
-                          ))}
-                          {filteredSkills.length === 0 && (
-                            <div className="px-4 py-8 text-center text-secondary-text text-xs italic opacity-50">No matches found</div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <div className="relative">
-                    {showSkillsMenu && (
-                      <div className="fixed inset-0 z-50 bg-bg-page/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
-                        <div className="fixed inset-0" onClick={() => setShowSkillsMenu(false)} />
-                        <div className="relative w-full max-w-2xl bg-bg-card border border-divider rounded-md shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] overflow-hidden animate-in zoom-in-95 duration-200">
-                          <div className="px-4 py-3 border-b border-divider flex items-center justify-between bg-bg-page/30">
-                            <div className="flex items-center gap-4">
-                              <div className="w-12 h-12 rounded bg-primary/10 flex items-center justify-center text-primary shadow-inner border border-primary/20">
-                                <GoBook size={24} />
-                              </div>
-                              <div>
-                                <h3 className="text-xl font-bold text-primary-text tracking-tight">Agent Skills</h3>
-                                <p className="text-xs text-secondary-text font-medium opacity-70">Power up your creative workflow with specialized AI experts.</p>
-                              </div>
-                            </div>
-                            <button 
-                              onClick={() => setShowSkillsMenu(false)}
-                              className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-bg-page border border-divider rounded text-xs font-bold text-secondary-text hover:text-primary hover:border-primary/30 transition-all"
-                            >
-                              <CgTerminal size={14} />
-                              Dismiss
-                            </button>
-                          </div>
-                          <div className="p-2 max-h-[60vh] overflow-y-auto scrollbar-subtle grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {skills.map(s => (
-                              <button
-                                key={s.name}
-                                onClick={() => { setActiveSkill(s); setShowSkillsMenu(false); }}
-                                className={`group relative flex flex-col gap-2 p-4 rounded transition-all text-left border ${activeSkill?.name === s.name ? "bg-primary/5 border-primary/30 ring-1 ring-primary/20" : "bg-bg-page/50 border-divider/50 hover:border-primary/30 hover:bg-bg-page hover:shadow-md"}`}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-3">
-                                    <div className={`w-8 h-8 rounded flex items-center justify-center transition-all ${activeSkill?.name === s.name ? "bg-primary text-black scale-110 shadow-lg shadow-primary/20" : "bg-bg-card text-primary border border-divider group-hover:scale-110"}`}>
-                                      <RiSparklingLine size={16} />
-                                    </div>
-                                    <div className="font-bold text-sm tracking-tight capitalize group-hover:text-primary transition-colors">{s.name.replace(/-/g, ' ')}</div>
-                                  </div>
-                                  {activeSkill?.name === s.name && <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />}
-                                </div>
-                                <div className="text-[11px] text-secondary-text line-clamp-2 leading-relaxed opacity-80 h-8">{s.description || "Expert agent workflow for high-quality generation."}</div>
-                              </button>
-                            ))}
-                          </div>
-                          <div className="px-4 py-2 bg-bg-page/50 border-t border-divider flex items-center justify-between">
-                            <div className="flex items-center gap-2 text-[10px] font-bold text-secondary-text uppercase tracking-widest opacity-60">
-                              <RiRobot2Line size={14} />
-                              Design Protocol v1.2
-                            </div>
-                            <button 
-                              onClick={() => setShowSkillsMenu(false)}
-                              className="px-4 py-2 text-xs font-bold text-primary-text hover:bg-bg-page rounded transition-colors border border-transparent hover:border-divider"
-                            >
-                              Dismiss
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  {activeSkill && (
-                    <div className="flex items-center gap-1.5 px-2 py-1 bg-primary/10 border border-primary/20 rounded-full text-primary text-[10px] font-bold animate-in zoom-in-95">
-                      <RiSparklingLine size={12} />
-                      {activeSkill.name}
-                      <button onClick={() => setActiveSkill(null)} className="hover:text-primary-text ml-1">&#x2715;</button>
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {attachments.length > 0 && (
-                    <div className="flex items-center -space-x-2 mr-2">
-                      {attachments.map((a, i) => (
-                        <div key={i} className="w-6 h-6 rounded-full border-2 border-bg-card bg-bg-page overflow-hidden shadow-sm">
-                          {a.kind === "image" ? <img src={a.url} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center bg-black"><FiTerminal size={10} className="text-white" /></div>}
-                        </div>
-                      ))}
-                      <button onClick={() => setAttachments([])} className="w-6 h-6 rounded-full border-2 border-bg-card bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition-colors z-10">
-                        <FiPlus size={12} className="rotate-45" />
-                      </button>
-                    </div>
-                  )}
-                  <button
-                    onClick={() => (input.trim() || attachments.length > 0) && startNewSession(input.trim(), activeSkill, attachments)}
-                    disabled={!input.trim() && attachments.length === 0}
-                    aria-label="Send"
-                    title="Send"
-                    className={`p-2 rounded-full transition-all ${input.trim() || attachments.length > 0 ? "bg-primary text-black shadow-lg shadow-primary/20 hover:scale-105" : "bg-bg-page text-secondary-text/30"}`}
-                  >
-                    <FiSend size={18} />
-                  </button>
-                </div>
+          {/* 真实生成结果 */}
+          <div className="grid grid-cols-3 gap-4 mt-10 max-w-3xl">
+            {["/showcase/poster-vintage.png", "/showcase/poster-badge.png", "/showcase/poster-night.png"].map((src) => (
+              <div key={src} className="rounded-sm border border-white/10 overflow-hidden shadow-[0_20px_40px_-10px_rgba(0,0,0,0.7)] hover:border-white/25 hover:-translate-y-1 transition-all duration-500">
+                <img src={src} alt="AI generated poster" className="w-full h-full object-cover" />
               </div>
-            </div>
+            ))}
           </div>
-          <div className="w-full">
-            <h2 className="text-xl font-bold mb-6">Recent Projects</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-              {/* New Project Card */}
-              <button 
-                onClick={() => router.push("/canvas")}
-                className="group aspect-[16/10] bg-bg-card border-2 border-dashed border-divider rounded-md flex flex-col items-center justify-center gap-3 hover:border-primary hover:bg-primary/5 transition-all"
-              >
-                <div className="w-10 h-10 rounded-full bg-bg-page border border-divider flex items-center justify-center text-secondary-text group-hover:text-primary group-hover:border-primary group-hover:scale-110 transition-all">
-                  <FiPlus size={24} />
-                </div>
-                <span className="text-xs font-bold text-secondary-text group-hover:text-primary">New Project</span>
-              </button>
+          <div className="micro-label">↑ 全部由 DESIGNAGENT 生成 · 含改图迭代版本 · 未经人工修饰</div>
+        </div>
+      </section>
 
-              {/* Session Cards */}
-              {sessions.map((session) => (
-                <div 
-                  key={session.id}
-                  onClick={() => router.push(`/canvas?session=${session.id}`)}
-                  className="group relative aspect-[16/10] bg-bg-card border border-divider rounded overflow-hidden cursor-pointer hover:shadow-xl hover:border-primary/50 transition-all"
-                >
-                  <div className="h-full w-full grid grid-cols-2 grid-rows-2 gap-0.5 bg-divider/20">
-                    {session.assets && session.assets.length > 0 ? (
-                      session.assets.map((asset, i) => (
-                        <div key={i} className={`relative overflow-hidden ${session.assets.length === 1 ? 'col-span-2 row-span-2' : session.assets.length === 2 ? 'row-span-2' : ''}`}>
-                          {asset.kind === "image" ? (
-                            <img src={asset.url} alt="" className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full bg-black/5 flex items-center justify-center"><FiImage className="text-secondary-text/20" size={32} /></div>
-                          )}
-                        </div>
-                      ))
-                    ) : (
-                      <div className="col-span-2 row-span-2 flex items-center justify-center bg-bg-page">
-                        <RiRobot2Line size={48} className="text-secondary-text/10" />
-                      </div>
-                    )}
-                    {session.assets && session.assets.length > 0 && session.assets.length < 4 && Array.from({ length: 4 - session.assets.length }).map((_, i) => (
-                      <div key={`empty-${i}`} className="bg-bg-page/50" />
-                    ))}
-                  </div>
-
-                  <button
-                    onClick={(e) => { e.stopPropagation(); deleteSession(session.id, session.name); }}
-                    className="absolute top-2 right-2 z-10 p-1.5 rounded bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-all"
-                    title="Delete chat"
-                  >
-                    <FiTrash2 size={14} />
-                  </button>
-
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-4">
-                    <div className="text-white font-bold text-sm truncate">{session.name || "Untitled"}</div>
-                    <div className="text-white/60 text-[10px] mt-1">{session.assets?.length || 0} assets</div>
-                  </div>
-                  
-                  <div className="absolute bottom-0 left-0 right-0 p-3 bg-bg-card/90 backdrop-blur-sm border-t border-divider opacity-100 group-hover:opacity-0 transition-opacity">
-                    <div className="text-primary-text font-bold text-xs truncate">{session.name || "Untitled Session"}</div>
-                  </div>
+      {/* Agent 流程演示 */}
+      <section id="how" className="py-24 px-6 border-t border-white/[0.06]">
+        <div className="max-w-5xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
+          <div className="flex flex-col gap-5">
+            <div className="micro-label">// HOW IT WORKS</div>
+            <h2 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight">
+              不是抽卡，<br />是<span className="brand-gradient-text">有计划的交付</span>
+            </h2>
+            <p className="text-secondary-text leading-relaxed">
+              描述需求后，Agent 先产出完整执行计划——做哪几张、每张什么构图、总共花多少积分。
+              你批准了它才动手，过程逐步可见，中途随时取消。
+            </p>
+            <p className="text-secondary-text leading-relaxed">
+              这是设计 Agent 和「生成器」的本质区别：它对结果负责，而不是对单次生成负责。
+            </p>
+          </div>
+          {/* 模拟计划卡片（与产品内一致的视觉） */}
+          <div className="bg-bg-card border border-white/10 rounded-sm p-6 shadow-[0_0_50px_rgba(0,0,0,0.5)]">
+            <div className="flex items-center justify-between mb-5">
+              <span className="micro-label">PROPOSED EXECUTION PLAN</span>
+              <span className="text-[10px] font-mono text-gray-500">20 CREDITS · 2 STEPS</span>
+            </div>
+            <div className="flex flex-col gap-3">
+              {PLAN_STEPS.map((s) => (
+                <div key={s.label} className={`flex items-center gap-3 px-3 py-2.5 rounded-sm border ${
+                  s.state === "active" ? "border-white/30 bg-white/[0.04]" : "border-white/[0.06]"
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    s.state === "done" ? "bg-white" : s.state === "active" ? "bg-white animate-pulse" : "bg-gray-700"
+                  }`} />
+                  <span className={`text-[13px] font-semibold ${s.state === "pending" ? "text-gray-600" : "text-white"}`}>{s.label}</span>
+                  <span className="text-[11px] text-gray-500 ml-auto">{s.detail}</span>
                 </div>
               ))}
-
-              {loading && Array.from({ length: 3 }).map((_, i) => (
-                <div key={`skeleton-${i}`} className="aspect-[16/10] bg-bg-card border border-divider rounded-md animate-pulse" />
-              ))}
+            </div>
+            <div className="flex gap-2 mt-5">
+              <div className="flex-1 py-2 rounded-sm bg-white text-black text-[11px] font-bold text-center uppercase tracking-wider">✓ Approve &amp; Execute</div>
+              <div className="px-4 py-2 rounded-sm border border-white/10 text-gray-500 text-[11px] text-center uppercase tracking-wider">Cancel</div>
             </div>
           </div>
         </div>
-      </main>
+      </section>
+
+      {/* 改图对比（真实案例） */}
+      <section className="py-24 px-6 border-t border-white/[0.06]">
+        <div className="max-w-5xl mx-auto flex flex-col items-center gap-10">
+          <div className="text-center flex flex-col gap-4">
+            <div className="micro-label">// ITERATE WITHOUT LOSING</div>
+            <h2 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight">
+              一句话改图，<span className="brand-gradient-text">细节不走样</span>
+            </h2>
+            <p className="text-secondary-text max-w-xl mx-auto">
+              「把这张海报改成深蓝色冷色调的夜间版本，保留所有文字和构图」——
+              左右两张图，中间只隔一句话。
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-6 max-w-2xl w-full">
+            {[["/showcase/poster-vintage.png", "原始生成"], ["/showcase/poster-night.png", "一句话改图后"]].map(([src, label]) => (
+              <div key={src} className="flex flex-col gap-3">
+                <div className="rounded-sm border border-white/10 overflow-hidden shadow-[0_20px_40px_-10px_rgba(0,0,0,0.7)]">
+                  <img src={src} alt={label} className="w-full object-cover" />
+                </div>
+                <div className="micro-label text-center">{label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* 功能矩阵 */}
+      <section className="py-24 px-6 border-t border-white/[0.06]">
+        <div className="max-w-5xl mx-auto flex flex-col gap-12">
+          <div className="text-center flex flex-col gap-4">
+            <div className="micro-label">// CAPABILITIES</div>
+            <h2 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight">设计，不止于生成</h2>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-6">
+            {FEATURES.map((f) => (
+              <div key={f.tag} className="bg-bg-card border border-white/[0.08] rounded-sm p-7 hover:border-white/20 hover:-translate-y-1 transition-all duration-500 shadow-[0_0_50px_rgba(0,0,0,0.5)]">
+                <div className="micro-label mb-4">// {f.tag}</div>
+                <h3 className="text-lg font-bold text-white mb-2">{f.title}</h3>
+                <p className="text-[13px] text-secondary-text leading-relaxed">{f.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* 定价 */}
+      <section id="pricing" className="py-24 px-6 border-t border-white/[0.06]">
+        <div className="max-w-4xl mx-auto flex flex-col gap-12">
+          <div className="text-center flex flex-col gap-4">
+            <div className="micro-label">// PRICING</div>
+            <h2 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight">先免费用起来</h2>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-6 max-w-2xl mx-auto w-full">
+            <div className="bg-bg-card border border-white/[0.08] rounded-sm p-8 flex flex-col gap-4">
+              <div className="micro-label">STARTER</div>
+              <div className="font-display text-4xl font-extrabold">免费</div>
+              <ul className="text-[13px] text-secondary-text flex flex-col gap-2 flex-1">
+                <li>✓ 注册即送 500 credits</li>
+                <li>✓ 全部生成与改图能力</li>
+                <li>✓ 无限画布与项目管理</li>
+              </ul>
+              <Link href="/dashboard" className="py-2.5 bg-white text-black rounded-sm text-[11px] font-bold text-center uppercase tracking-[0.15em] hover:bg-gray-200 transition-all">
+                免费开始
+              </Link>
+            </div>
+            <div className="bg-bg-card border border-white/[0.08] rounded-sm p-8 flex flex-col gap-4 opacity-70">
+              <div className="micro-label">PRO</div>
+              <div className="font-display text-4xl font-extrabold">即将上线</div>
+              <ul className="text-[13px] text-secondary-text flex flex-col gap-2 flex-1">
+                <li>· 大额积分包与订阅</li>
+                <li>· 批量生成与品牌套件</li>
+                <li>· 视频生成（模型就绪后）</li>
+              </ul>
+              <div className="py-2.5 border border-white/10 text-gray-500 rounded-sm text-[11px] font-bold text-center uppercase tracking-[0.15em]">
+                Coming Soon
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section id="faq" className="py-24 px-6 border-t border-white/[0.06]">
+        <div className="max-w-3xl mx-auto flex flex-col gap-10">
+          <div className="text-center flex flex-col gap-4">
+            <div className="micro-label">// FAQ</div>
+            <h2 className="font-display text-3xl font-extrabold tracking-tight">常见问题</h2>
+          </div>
+          <div className="flex flex-col gap-4">
+            {FAQS.map(([q, a]) => (
+              <details key={q} className="bg-bg-card border border-white/[0.08] rounded-sm px-6 py-4 group">
+                <summary className="text-[14px] font-semibold text-white cursor-pointer list-none flex justify-between items-center">
+                  {q}
+                  <span className="text-gray-600 group-open:rotate-45 transition-transform">+</span>
+                </summary>
+                <p className="text-[13px] text-secondary-text leading-relaxed mt-3">{a}</p>
+              </details>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* 底部 CTA */}
+      <section className="py-28 px-6 border-t border-white/[0.06] grid-bg">
+        <div className="max-w-3xl mx-auto text-center flex flex-col items-center gap-6">
+          <h2 className="font-display text-3xl sm:text-5xl font-extrabold tracking-tight">
+            全速创作，<span className="brand-gradient-text">让愿景成真</span>
+          </h2>
+          <Link
+            href="/dashboard"
+            className="px-10 py-4 bg-white text-black rounded-sm text-[13px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all shadow-[0_0_30px_rgba(255,255,255,0.15)]"
+          >
+            免费开始
+          </Link>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t border-white/[0.06] px-6 sm:px-10 py-10">
+        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-6">
+          <div className="flex items-baseline gap-2">
+            <span className="font-display text-base font-extrabold tracking-tighter brand-gradient-text">DesignAgent</span>
+            <span className="micro-label">E-COM · LOGO · SOCIAL</span>
+          </div>
+          <div className="flex items-center gap-6 micro-label">
+            <a href="#pricing" className="hover:text-white transition-colors">定价</a>
+            <a href="#faq" className="hover:text-white transition-colors">FAQ</a>
+            <span>© 2026 DESIGNAGENT</span>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
