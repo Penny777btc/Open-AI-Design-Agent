@@ -973,6 +973,8 @@ export default function CreativeCanvas({
     if (!sessionId || assets.length === 0) return;
 
     const newAssets = assets.filter(a => {
+      // 文档提取的产品图只进资产面板（生成时作底图引用），不自动铺上画布
+      if (a.source_tool === "doc_extract") return false;
       const syncKey = `${a.asset_label || "no-label"}-${a.url}`;
       return !syncedUrlsRef.current.has(syncKey);
     });

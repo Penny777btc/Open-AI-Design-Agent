@@ -24,20 +24,21 @@ PROMPT = """这是一份用户上传的产品/品牌资料文档的逐页截图�
 {
   "summary": "结构化摘要：品牌名、产品线、每个产品的名称/品种/年份/规格/价格/卖点、品牌故事要点、奖项荣誉。设计师将依据它做海报，务必保留可直接引用的事实与文案，500-1500字",
   "product_pages": [包含清晰产品照片（产品主体大图，适合做设计参考）的页码列表，从1开始],
-  "doc_type": "一句话描述文档类型"
+  "doc_type": "一句话描述文档类型",
+  "products": ["文档中每个具体产品的名称（含品种/型号），最多8个"]
 }"""
 
 
-CLASSIFY_PROMPT = """以下是从产品资料中提取的候选图片（按序号标注）。逐张判断哪些是「产品照片」——产品本体的清晰展示图（如商品白底图/包装图/产品特写），不包括：风景、人物合影、logo、奖牌、装饰图。
+CLASSIFY_PROMPT = """以下是从产品资料中提取的候选图片（按序号标注）。逐张判断是否为「产品照片」——产品本体的清晰展示图（如商品白底图/包装图/产品特写）；风景、人物合影、logo、奖牌、装饰图不算。
 
 仔细阅读每张图中产品标签/包装上的文字（产品名、型号、品种、规格），写进描述——后续要靠它区分同系列的不同产品。
 
-只输出 JSON（按作为设计参考的价值降序）：
-{"products": [{"index": <序号>, "caption": "<这是什么产品的什么图，必须含标签上可辨认的产品名/型号/品种，30字内>"}]}"""
+只输出 JSON，每张候选图一条（产品图按设计参考价值降序排在前面）：
+{"images": [{"index": <序号>, "is_product": true|false, "caption": "<这是什么图；产品图必须含标签上可辨认的产品名/型号/品种，30字内>"}]}"""
 
 
 async def classify_images(images: list[bytes]) -> list[dict] | None:
-    """对候选图分类，返回产品图 [{"index": 序号(0起), "caption": 描述}] 按价值降序；失败返回 None。"""
+    """逐图打标，返回 [{"index": 序号(0起), "is_product": bool, "caption": 描述}]，产品图按价值降序在前；失败返回 None。"""
     if not settings.gemini_api_key or not images:
         return None
     from io import BytesIO
@@ -66,11 +67,15 @@ async def classify_images(images: list[bytes]) -> list[dict] | None:
             resp.raise_for_status()
             text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
         if m := re.search(r"\{.*\}", text, re.DOTALL):
-            items = json.loads(m.group(0)).get("products", [])
+            items = json.loads(m.group(0)).get("images", [])
             out = []
             for it in items:
                 if isinstance(it, dict) and str(it.get("index", "")).lstrip("-").isdigit():
-                    out.append({"index": int(it["index"]), "caption": str(it.get("caption", ""))[:120]})
+                    out.append({
+                        "index": int(it["index"]),
+                        "is_product": bool(it.get("is_product")),
+                        "caption": str(it.get("caption", ""))[:120],
+                    })
             return out
     except Exception as exc:
         logger.warning("doc vision classify failed: %s", str(exc)[:200])
@@ -101,6 +106,7 @@ async def analyze(page_renders: list[tuple[int, bytes]]) -> dict | None:
                 "summary": str(data.get("summary", ""))[:8000],
                 "product_pages": [int(p) for p in data.get("product_pages", []) if str(p).isdigit() or isinstance(p, int)],
                 "doc_type": str(data.get("doc_type", ""))[:200],
+                "products": [str(p)[:60] for p in data.get("products", []) if str(p).strip()][:8],
             }
     except Exception as exc:
         logger.warning("doc vision analyze failed: %s", str(exc)[:200])
