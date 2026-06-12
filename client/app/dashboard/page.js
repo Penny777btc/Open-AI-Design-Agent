@@ -179,10 +179,30 @@ export default function AssistantDashboard() {
 
   const processFile = async (file) => {
     if (!file) return;
-    // 文档（PDF/Word）需要会话上下文：引导进入项目后上传解析
+    // 文档（PDF/Word）：自动创建项目 → 解析 → 直接带用户进入
     const docExt = (file.name.split(".").pop() || "").toLowerCase();
     if (["pdf", "docx", "doc"].includes(docExt)) {
-      toast("📄 文档解析请在项目内进行：先创建/打开一个项目，再上传文档", { duration: 5000 });
+      setUploading(true);
+      setUploadProgress(0);
+      try {
+        const { data: session } = await axios.post(`${API}/sessions`, {});
+        const formData = new FormData();
+        formData.append("file", file);
+        const { data } = await axios.post(`/api/v1/sessions/${session.id}/reference-docs`, formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+          onUploadProgress: (pe) => setUploadProgress(Math.round((pe.loaded * 100) / pe.total)),
+        });
+        toast.success(`📄 已解析：${data.text_chars} 字${data.images_extracted ? ` + ${data.images_extracted} 张图片` : ""}，正在打开项目…`);
+        // 输入框里已有的需求一并带入（画布会自动发送）
+        const q = input.trim();
+        router.push(`/canvas?session=${session.id}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
+      } catch (err) {
+        toast.error(err.response?.data?.detail || "文档解析失败");
+      } finally {
+        setUploading(false);
+        setUploadProgress(0);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
       return;
     }
     // 媒体类型校验
