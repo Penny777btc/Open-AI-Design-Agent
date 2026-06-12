@@ -45,6 +45,92 @@ body {
   background-size: 60px 60px;
 }
 
+/* 缓慢漂移的网格（hero/CTA 用） */
+.grid-bg-animated {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+  animation: gridDrift 24s linear infinite;
+}
+
+@keyframes gridDrift {
+  from { background-position: 0 0; }
+  to { background-position: 60px 60px; }
+}
+
+/* 滚动入场（IntersectionObserver 加 .reveal-visible） */
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+
+.reveal-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.reveal-d1 { transition-delay: 0.1s; }
+.reveal-d2 { transition-delay: 0.2s; }
+.reveal-d3 { transition-delay: 0.3s; }
+
+/* hero 入场（页面加载即播放，逐级延迟） */
+@keyframes heroIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.hero-in { opacity: 0; animation: heroIn 0.8s ease forwards; }
+.hero-in-1 { animation-delay: 0.05s; }
+.hero-in-2 { animation-delay: 0.18s; }
+.hero-in-3 { animation-delay: 0.32s; }
+.hero-in-4 { animation-delay: 0.46s; }
+.hero-in-5 { animation-delay: 0.6s; }
+
+/* 填空词翻转 */
+@keyframes wordIn {
+  from { opacity: 0; transform: translateY(10px); filter: blur(4px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+
+.word-swap { display: inline-block; animation: wordIn 0.45s ease; }
+
+/* 无限横向画廊 */
+.marquee {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+
+.marquee-track {
+  display: flex;
+  gap: 1rem;
+  width: max-content;
+  animation: marqueeScroll 40s linear infinite;
+}
+
+.marquee:hover .marquee-track { animation-play-state: paused; }
+
+@keyframes marqueeScroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* logo 火花 */
+@keyframes sparkBlink {
+  0%, 88%, 100% { opacity: 1; }
+  92%, 96% { opacity: 0.2; }
+}
+
+.logo-spark { animation: sparkBlink 4s ease infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .grid-bg-animated, .marquee-track, .hero-in, .word-swap, .logo-spark { animation: none; }
+  .hero-in { opacity: 1; }
+  .reveal { opacity: 1; transform: none; transition: none; }
+}
+
 /* 品牌标题字体（Syne，layout.js 注入变量） */
 .font-display {
   font-family: var(--font-syne), ui-sans-serif, sans-serif;

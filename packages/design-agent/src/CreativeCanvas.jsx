@@ -1021,7 +1021,7 @@ export default function CreativeCanvas({
                 className="flex items-center flex-shrink-0 transition-transform duration-300 hover:scale-[1.02] active:scale-95"
                 aria-label="Home"
               >
-                <span className="font-bold text-lg">Design Agent Studio</span>
+                <span className="font-bold text-lg">Picsmith Studio</span>
               </Link>
             </div>
             <button 
@@ -1296,7 +1296,7 @@ export default function CreativeCanvas({
           <div className="p-4 flex items-center justify-between border-b border-divider bg-bg-card">
             <div className="flex flex-col">
               <h2 className="font-bold text-[13px] text-primary-text uppercase tracking-widest leading-none flex items-center gap-2">
-                <RiSparklingLine className="text-primary" /> Design Agent
+                <RiSparklingLine className="text-primary" /> Picsmith
               </h2>
               <span className="text-[10px] text-secondary-text mt-1.5">Auto Model • Multi-tool Access</span>
             </div>

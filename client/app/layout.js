@@ -11,8 +11,8 @@ const syne = Syne({ subsets: ["latin"], weight: ["700", "800"], variable: "--fon
 const robotoMono = Roboto_Mono({ subsets: ["latin"], weight: ["400", "700"], variable: "--font-roboto-mono" });
 
 export const metadata = {
-  title: "DesignAgent — AI Design Workspace",
-  description: "AI design agent for e-commerce visuals, logos and social media covers",
+  title: "Picsmith（图匠）— AI Design Agent",
+  description: "从一句话到成套设计：电商主图、Logo、自媒体封面的 AI 设计 Agent",
 };
 
 export default function RootLayout({ children }) {

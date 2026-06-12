@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useApi } from "@/context/ApiContext";
+import { PicsmithMark } from "@/components/Logo";
 
 const Navbar = () => {
   const { userData, loading } = useApi();
@@ -15,11 +16,12 @@ const Navbar = () => {
     <div className="relative w-full">
       <header className="fixed top-0 left-0 right-0 z-[100] flex items-center justify-between px-8 py-4 bg-[#09090b]/90 backdrop-blur-xl border-b border-white/[0.06]">
         <div className="flex items-center gap-8">
-          <Link href="/" className="flex items-baseline gap-2 hover:opacity-80 transition-opacity">
+          <Link href="/" className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
+            <PicsmithMark size={22} className="text-white" />
             <span className="font-display text-xl font-extrabold text-white tracking-tighter brand-gradient-text">
-              DesignAgent
+              Picsmith
             </span>
-            <span className="micro-label hidden sm:inline">// E-COM · LOGO · SOCIAL</span>
+            <span className="micro-label hidden sm:inline">图匠 // E-COM · LOGO · SOCIAL</span>
           </Link>
         </div>
 
