@@ -805,6 +805,13 @@ const CanvasArea = forwardRef(
 
     const maskPaintEnd = () => { paintingRef.current = false; };
 
+    const enterMaskMode = (imageId) => {
+      setMaskMode(imageId);
+      setMaskStrokes([]);
+      setMaskPrompt("");
+      setSelectedId(null); // 隐藏变换手柄，避免与笔刷视觉冲突
+    };
+
     const exitMaskMode = () => {
       setMaskMode(null);
       setMaskStrokes([]);
@@ -812,9 +819,31 @@ const CanvasArea = forwardRef(
       paintingRef.current = false;
     };
 
+    // ESC 退出蒙版模式
+    useEffect(() => {
+      if (!maskMode) return;
+      const onKey = (e) => { if (e.key === "Escape") exitMaskMode(); };
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [maskMode]);
+
     const applyRegionEdit = () => {
       const img = images.find((i) => i.id === maskMode);
       if (!img || !img.assetLabel || !maskPrompt.trim() || maskStrokes.length === 0) return;
+      // 界外涂抹拦截：笔迹（含笔刷半径）必须与图片相交，否则蒙版为空白白扣费
+      const intersects = maskStrokes.some((s) => {
+        const half = s.size / 2;
+        for (let i = 0; i < s.points.length; i += 2) {
+          const px = s.points[i], py = s.points[i + 1];
+          if (px + half >= img.x && px - half <= img.x + img.width &&
+              py + half >= img.y && py - half <= img.y + img.height) return true;
+        }
+        return false;
+      });
+      if (!intersects) {
+        toast.error("请在选中的图片范围内涂抹");
+        return;
+      }
       const nw = img.image?.naturalWidth || 1024;
       const nh = img.image?.naturalHeight || 1024;
       const canvas = document.createElement("canvas");
@@ -1901,7 +1930,7 @@ const CanvasArea = forwardRef(
 
     return (
       <div
-        className="relative w-full h-full bg-bg-page overflow-hidden"
+        className={`relative w-full h-full bg-bg-page overflow-hidden ${maskMode ? "cursor-crosshair" : ""}`}
         ref={containerRef}
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
@@ -2059,19 +2088,25 @@ const CanvasArea = forwardRef(
               const img = images.find((i) => i.id === maskMode);
               if (!img) return null;
               return (
-                <Layer listening={false}>
-                  <Rect x={img.x} y={img.y} width={img.width} height={img.height} fill="rgba(0,0,0,0.55)" />
-                  {maskStrokes.map((s, i) => (
-                    <Line
-                      key={i}
-                      points={s.points}
-                      stroke="rgba(96,165,250,0.8)"
-                      strokeWidth={s.size}
-                      lineCap="round"
-                      lineJoin="round"
-                    />
-                  ))}
+                <Layer>
+                  {/* 事件盾牌：吸收命中防止底层图片被拖动；事件仍冒泡到 Stage 供笔刷使用 */}
+                  <Rect x={-100000} y={-100000} width={200000} height={200000} fill="transparent" listening={true} />
+                  <Rect listening={false} x={img.x} y={img.y} width={img.width} height={img.height} fill="rgba(0,0,0,0.55)" />
+                  {/* 笔迹裁剪到图片范围：界外涂抹不显示也不生效 */}
+                  <Group listening={false} clipX={img.x} clipY={img.y} clipWidth={img.width} clipHeight={img.height}>
+                    {maskStrokes.map((s, i) => (
+                      <Line
+                        key={i}
+                        points={s.points}
+                        stroke="rgba(96,165,250,0.8)"
+                        strokeWidth={s.size}
+                        lineCap="round"
+                        lineJoin="round"
+                      />
+                    ))}
+                  </Group>
                   <Rect
+                    listening={false}
                     x={img.x} y={img.y} width={img.width} height={img.height}
                     stroke="#60a5fa" strokeWidth={2 / zoom} dash={[8 / zoom, 6 / zoom]}
                   />
@@ -2086,7 +2121,7 @@ const CanvasArea = forwardRef(
           images.find((i) => i.id === selectedId)?.assetLabel && (
           <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
             <button
-              onClick={() => { setMaskMode(selectedId); setMaskStrokes([]); setMaskPrompt(""); }}
+              onClick={() => enterMaskMode(selectedId)}
               className="px-4 py-2 bg-white text-black rounded text-[11px] font-bold uppercase tracking-wider shadow-lg hover:bg-gray-200 transition-all"
             >
               🖌 局部编辑 · Edit Region
