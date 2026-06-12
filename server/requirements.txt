@@ -7,3 +7,6 @@ pydantic-settings
 httpx
 pillow
 python-multipart
+bcrypt
+pyjwt
+email-validator

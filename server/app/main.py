@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.db import Base, engine
-from app.routers import assets, chat, jobs, misc, sessions, uploads
+from app.routers import assets, auth, billing, chat, jobs, misc, sessions, uploads
 from app.services.job_service import mark_stale_jobs_failed
 
 logging.basicConfig(level=logging.INFO)
@@ -38,6 +38,8 @@ for router_module in (sessions, chat, jobs, assets):
 app.include_router(misc.router, prefix=PREFIX)
 app.include_router(misc.router, prefix="/api/v1")  # /api/v1/account/balance 兼容路径
 app.include_router(uploads.router, prefix="/api/v1")
+app.include_router(auth.router, prefix="/api/v1")
+app.include_router(billing.router, prefix="/api/v1")
 
 settings.storage_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/files", StaticFiles(directory=settings.storage_dir), name="files")

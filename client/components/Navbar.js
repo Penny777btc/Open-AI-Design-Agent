@@ -5,8 +5,9 @@ import { useApi } from "@/context/ApiContext";
 import { PicsmithMark } from "@/components/Logo";
 
 const Navbar = () => {
-  const { userData, loading } = useApi();
+  const { userData, loading, logout } = useApi();
   const [mounted, setMounted] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -21,20 +22,42 @@ const Navbar = () => {
             <span className="font-display text-xl font-extrabold text-white tracking-tighter brand-gradient-text">
               Picsmith
             </span>
-            <span className="micro-label hidden sm:inline">图匠 // E-COM · LOGO · SOCIAL</span>
+            <span className="micro-label hidden sm:inline">图匠 // E-COM · SOCIAL · PPT · LOGO</span>
           </Link>
         </div>
 
         <div className="flex items-center gap-4 justify-end">
           {mounted && !loading && userData && (
-            <div className="flex items-center gap-3">
-              <span className="px-3 py-1.5 text-[10px] font-mono font-bold tracking-[0.15em] uppercase border border-white/10 rounded-sm bg-white/5 text-gray-400">
+            <div className="flex items-center gap-3 relative">
+              <Link
+                href="/billing"
+                title="积分明细与充值"
+                className="px-3 py-1.5 text-[10px] font-mono font-bold tracking-[0.15em] uppercase border border-white/10 rounded-sm bg-white/5 text-gray-400 hover:border-white/25 hover:text-white transition-all"
+              >
                 CREDITS&nbsp;<span className="text-white">{userData.balance ?? 0}</span>
-              </span>
-              <span className="text-[11px] font-mono font-bold uppercase tracking-[0.15em] text-gray-500 hidden sm:block">
-                {userData.username || "User"}
-              </span>
+              </Link>
+              <button
+                onClick={() => setMenuOpen((v) => !v)}
+                className="text-[11px] font-mono font-bold uppercase tracking-[0.15em] text-gray-500 hover:text-white transition-colors"
+              >
+                {userData.username || "User"} ▾
+              </button>
+              {menuOpen && (
+                <div className="absolute top-full right-0 mt-2 w-44 bg-bg-card border border-white/10 rounded-sm shadow-[0_20px_40px_rgba(0,0,0,0.7)] flex flex-col py-1 z-[110]">
+                  <span className="px-4 py-2 text-[11px] text-gray-600 font-mono truncate">{userData.email}</span>
+                  <Link href="/billing" onClick={() => setMenuOpen(false)} className="px-4 py-2 text-[12px] text-gray-400 hover:text-white hover:bg-white/5 transition-colors">积分与充值</Link>
+                  <button onClick={logout} className="px-4 py-2 text-[12px] text-left text-gray-400 hover:text-white hover:bg-white/5 transition-colors">退出登录</button>
+                </div>
+              )}
             </div>
+          )}
+          {mounted && !loading && !userData && (
+            <Link
+              href="/login"
+              className="px-5 py-2 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all"
+            >
+              登录
+            </Link>
           )}
         </div>
       </header>

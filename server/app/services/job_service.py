@@ -11,8 +11,9 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 
 from app.agents.planner import Plan, make_plan
-from app.config import settings
+from app.config import settings, tool_cost
 from app.db import SessionLocal
+from app.services import credit_service
 from app.models import Asset, CreditLedger, Job, JobEvent
 from app.providers import get_image_provider
 from app.services import storage
@@ -99,13 +100,13 @@ async def _run_job(job_id: str) -> None:
             await _set_status(job_id, "done")
             return
 
-        total_credits = len(plan.nodes) * settings.image_credits
-        await _set_status(job_id, "awaiting_approval", plan=plan.model_dump(), credits_reserved=total_credits)
+        total_credits = sum(tool_cost(n.tool) for n in plan.nodes)
+        await _set_status(job_id, "awaiting_approval", plan=plan.model_dump())
         await emit(job_id, "plan_propose", {
             "title": plan.title,
             "total_credits": total_credits,
             "nodes": [
-                {"id": n.id, "tool": n.tool, "label": n.label, "est_credits": settings.image_credits, "depends": n.depends}
+                {"id": n.id, "tool": n.tool, "label": n.label, "est_credits": tool_cost(n.tool), "depends": n.depends}
                 for n in plan.nodes
             ],
             "notes": plan.notes,
@@ -159,6 +160,14 @@ async def _execute_plan(
     results: dict[str, bool] = {}
     planner = PlacementPlanner(canvas_nodes)
 
+    async def refund_node(node, reason: str) -> None:
+        async with SessionLocal() as db:
+            await credit_service.apply(
+                db, user_id, tool_cost(node.tool), "refund",
+                job_id=job_id, memo=f"{reason}: {node.label[:80]}", enforce=False,
+            )
+            await db.commit()
+
     async def run_node(node) -> None:
         for dep in node.depends:
             while dep not in done_nodes:
@@ -167,6 +176,7 @@ async def _execute_plan(
             if _runtime.get(job_id, {}).get("cancelled"):
                 results[node.id] = False
                 done_nodes.add(node.id)
+                await refund_node(node, "cancelled")
                 return
             est = 180 if node.tool == "edit_image" else 60
             if settings.provider_mode == "mock":
@@ -176,8 +186,9 @@ async def _execute_plan(
                 results[node.id] = await _generate_node(job_id, session_id, user_id, node, planner)
             except Exception as exc:
                 logger.exception("node %s failed", node.id)
-                await emit(job_id, "error", {"message": f"{node.label}: 生成失败（{str(exc)[:160]}）"})
+                await emit(job_id, "error", {"message": f"{node.label}: 生成失败（{str(exc)[:160]}），该节点积分已退还"})
                 results[node.id] = False
+                await refund_node(node, "failed")
             done_nodes.add(node.id)
 
     await asyncio.gather(*(run_node(node) for node in plan.nodes))
@@ -263,16 +274,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             model=image.model, prompt=prompt, source_tool=node.tool, job_id=job_id,
             canvas_x=canvas_x, canvas_y=canvas_y,
         ))
-        # 简化版扣费：按节点成功即时结算（M3 升级为预扣/结算/返还）
-        balance = (
-            await db.execute(
-                select(CreditLedger.balance_after).where(CreditLedger.user_id == user_id).order_by(CreditLedger.id.desc()).limit(1)
-            )
-        ).scalar_one_or_none() or 0
-        db.add(CreditLedger(
-            user_id=user_id, delta=-settings.image_credits, kind="settle", job_id=job_id,
-            balance_after=balance - settings.image_credits, memo=node.label[:120],
-        ))
+        # 计费：审批时已整单预扣（reserve），节点成功无需再记账；失败由 refund_node 退还
         await db.commit()
 
     result = {"ok": True, "model": image.model}

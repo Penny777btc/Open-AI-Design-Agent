@@ -1,4 +1,5 @@
-from fastapi import Depends
+import jwt
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,18 @@ async def get_or_create_dev_user(db: AsyncSession) -> User:
     return user
 
 
-# M1 单用户：所有请求归属 dev 用户。M2 换成 JWT 解析。
-async def get_current_user(db: AsyncSession = Depends(get_db)) -> User:
-    return await get_or_create_dev_user(db)
+async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)) -> User:
+    """JWT 鉴权；AUTH_MODE=dev 时无 token 回落到 dev 用户（本地调试）。"""
+    auth = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ").strip()
+    if token:
+        try:
+            payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+            user = await db.get(User, payload.get("sub", ""))
+            if user is not None:
+                return user
+        except jwt.PyJWTError:
+            pass
+    if settings.auth_mode == "dev":
+        return await get_or_create_dev_user(db)
+    raise HTTPException(status_code=401, detail="Not authenticated")

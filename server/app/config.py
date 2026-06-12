@@ -27,8 +27,24 @@ class Settings(BaseSettings):
     dev_user_email: str = "dev@local"
     signup_grant_credits: int = 500
     image_credits: int = 10
+    edit_credits: int = 15
     max_plan_nodes: int = 12
     executor_concurrency: int = 2
+
+    # 认证：jwt = 强制登录；dev = 无 token 时回落到 dev 用户（本地调试）
+    auth_mode: str = "jwt"
+    jwt_secret: str = "dev-secret-change-me-in-production"
+    jwt_expire_days: int = 30
+    google_client_id: str = ""
+    google_client_secret: str = ""
+
+    # Stripe（未配置时计费接口返回「支付通道未开通」）
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+
+
+def tool_cost(tool: str) -> int:
+    return settings.edit_credits if tool == "edit_image" else settings.image_credits
 
 
 settings = Settings()

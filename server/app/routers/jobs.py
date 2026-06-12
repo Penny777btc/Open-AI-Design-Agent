@@ -42,10 +42,33 @@ async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user=Depen
 
 @router.post("/jobs/{job_id}/approve")
 async def approve_job(job_id: str, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    from app.config import tool_cost
+    from app.services import credit_service
+
     job = await _owned_job(db, user, job_id)
     if job.status != "awaiting_approval":
         raise HTTPException(status_code=409, detail=f"Job is {job.status}, not awaiting approval")
+
+    # 整单预扣：余额不足直接拒绝（402），不进入执行
+    total = sum(tool_cost(n.get("tool", "")) for n in (job.plan or {}).get("nodes", []))
+    if total > 0:
+        try:
+            await credit_service.apply(
+                db, user.id, -total, "reserve", job_id=job_id, memo=f"reserve {total} for plan"
+            )
+        except credit_service.InsufficientCredits as exc:
+            raise HTTPException(
+                status_code=402,
+                detail=f"积分不足：需要 {exc.required}，当前余额 {exc.balance}。请先充值。",
+            )
+        job.credits_reserved = total
+        await db.commit()
+
     if not job_service.resolve_approval(job_id, approved=True):
+        # 运行时丢失：把刚预扣的退回去
+        if total > 0:
+            await credit_service.apply(db, user.id, total, "refund", job_id=job_id, memo="runtime lost", enforce=False)
+            await db.commit()
         raise HTTPException(status_code=410, detail="Job runtime lost (server restarted); please retry the request")
     return {"ok": True}
 
