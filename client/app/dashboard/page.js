@@ -89,6 +89,13 @@ export default function AssistantDashboard() {
     setMounted(true);
     fetchSessions();
     fetchSkills();
+    // 落地页「做同款」带过来的提示词：预填输入框，用户确认后发送
+    const q = new URLSearchParams(window.location.search).get("q");
+    if (q) {
+      setInput(q);
+      window.history.replaceState(null, "", "/dashboard");
+      setTimeout(() => textareaRef.current?.focus(), 300);
+    }
   }, []);
 
   const fetchSessions = async () => {

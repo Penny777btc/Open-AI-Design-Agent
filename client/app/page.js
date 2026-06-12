@@ -2,45 +2,91 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import toast from "react-hot-toast";
 import { PicsmithMark } from "@/components/Logo";
 
 /* Picsmith（图匠）落地页
-   结构参考 Lovart 首页，视觉为 Tectonic Industrial 体系。
-   所有案例素材均为产品真实生成（client/public/showcase/）。 */
+   结构参考 Lovart，视觉为 Tectonic Industrial 体系。
+   案例全部来自产品真实生成（client/public/showcase/），
+   每个案例可复制提示词或一键“做同款”（带 brief 跳转工作台）。 */
 
 const ROTATING = [
   ["咖啡品牌", "小红书封面"],
   ["保温杯新品", "电商主图"],
+  ["年度汇报", "PPT 封面"],
   ["手冲咖啡店", "Logo 方案"],
   ["露营装备", "促销海报"],
 ];
 
-/* 顶部无限画廊（混排三大场景） */
-const MARQUEE = [
+/* 按品类分区的案例库：brief 即「做同款」的工作台输入 */
+const CATEGORIES = [
+  {
+    key: "电商设计",
+    en: "E-COMMERCE",
+    desc: "主图、场景图、促销海报、详情 banner——从上架到大促的全套视觉。",
+    items: [
+      { f: "ec-thermos-hero.png", label: "白底主图", brief: "为不锈钢保温杯生成一张白底电商主图，影棚级打光，可直接上架" },
+      { f: "ec-sneaker-hero.png", label: "运动鞋主图", brief: "为白橙配色跑鞋生成一张悬浮角度的白底电商主图，动感构图" },
+      { f: "ec-thermos-scene.png", label: "户外场景图", badge: "改图", brief: "把这张白底保温杯主图改成黄金时刻的露营溪流场景，产品保持完全一致" },
+      { f: "ec-skincare-scene.png", label: "场景化主图", brief: "为琥珀色精华液瓶生成一张晨光石板上的场景化主图，氛围种草感" },
+      { f: "ec-lipstick-luxury.png", label: "美妆大片", brief: "为玫瑰金口红生成一张黑丝绸背景的奢华美妆广告图，戏剧性打光" },
+      { f: "ec-promo-poster.png", label: "大促海报", brief: "做一张竖版电商大促海报，标题「年中大促」副标题「全场5折起」，红金配色喜庆氛围" },
+      { f: "ec-food-poster.png", label: "外卖海报", brief: "做一张竖版美食外卖海报，标题「新店开业」副标题「第二份半价」，汉堡奶茶诱人摄影" },
+      { f: "ec-watch-detail.png", label: "细节大片", brief: "为机械腕表生成一张微距细节横幅，侧光突出表盘质感，暗调背景" },
+      { f: "ec-banner-coffee.png", label: "详情 Banner", brief: "为精品咖啡豆做一张 16:9 详情页头图，牛皮纸袋和咖啡豆，暖棕色调" },
+    ],
+  },
+  {
+    key: "自媒体配图",
+    en: "SOCIAL MEDIA",
+    desc: "小红书封面、视频缩略图、公众号头图——大字标题渲染稳定，点击率说话。",
+    items: [
+      { f: "social-rednote.png", label: "小红书封面", brief: "做一张小红书封面，标题「7天收纳改造计划」，明亮治愈的家居整理风格" },
+      { f: "social-bilibili.png", label: "B站封面", brief: "做一张 16:9 视频封面，超大标题「3分钟看懂AI」，蓝白科技感高对比构图" },
+      { f: "social-douyin.png", label: "竖版知识封面", brief: "做一张竖版短视频知识封面，标题「早起的5个习惯」，日出渐变背景元气风" },
+      { f: "social-youtube.png", label: "YouTube 缩略图", brief: "做一张 YouTube 缩略图，文字 AI TOOLS 2026，人物指向发光手机，高点击率构图" },
+      { f: "social-wechat-banner.png", label: "公众号头图", brief: "做一张公众号头图，书本展开变成城市天际线的扁平插画，莫兰迪色高级感" },
+      { f: "social-quote-card.png", label: "金句卡片", brief: "做一张方形金句卡片，文字「慢慢来比较快」，米色纸纹背景配红色印章点缀" },
+      { f: "social-podcast.png", label: "播客封面", brief: "做一张播客封面，节目名 NIGHT TALKS，复古麦克风插画，Art Deco 风格" },
+    ],
+  },
+  {
+    key: "PPT 设计",
+    en: "PRESENTATION",
+    desc: "封面、数据页、章节页、团队页——让整个 deck 有咨询公司级的质感。",
+    items: [
+      { f: "ppt-cover.png", label: "战略规划封面", brief: "做一张商务 PPT 封面，标题「2026 年度战略规划」，深蓝底发光数据线条，专业大气" },
+      { f: "ppt-data.png", label: "数据可视化页", brief: "做一张 PPT 数据页背景，深色底上发光的 3D 图表和数据标注，现代分析风" },
+      { f: "ppt-section.png", label: "章节过渡页", brief: "做一张 PPT 章节页，超大数字 03 配标题「市场分析」，右半建筑摄影分屏布局" },
+      { f: "ppt-team.png", label: "团队介绍页", brief: "做一张 PPT 团队介绍页，四个圆形头像位带姓名职位标签，干净网格布局" },
+    ],
+  },
+  {
+    key: "Logo 设计",
+    en: "LOGO & BRAND",
+    desc: "一个 brief 多个方向：极简、徽章、字标、图形标——对比着挑，不用反复沟通。",
+    items: [
+      { f: "logo-minimal.png", label: "极简线条", brief: "为精品咖啡品牌 Mori Coffee 设计极简线条 logo，黑色细线条咖啡杯图形，奶油色底" },
+      { f: "logo-badge.png", label: "复古徽章", brief: "为咖啡品牌 Mori Coffee 设计复古圆形徽章 logo，咖啡植物手绘线稿，墨绿底奶油线条" },
+      { f: "logo-wordmark.png", label: "几何字标", brief: "为咖啡品牌设计 MORI 字标 logo，几何粗体字形，字母 O 里藏咖啡豆负空间" },
+      { f: "logo-tech.png", label: "科技图形标", brief: "为科技初创公司设计抽象六边形交织线条 logo，青色到紫色渐变，深色底" },
+      { f: "logo-restaurant.png", label: "中式餐饮", brief: "为中餐厅设计圆形徽章 logo，蒸汽碗筷图形中央一个「膳」字，朱红配金色" },
+      { f: "logo-fitness.png", label: "运动品牌", brief: "为健身品牌设计动感 logo，速度笔触构成的奔跑人形，荧光绿配炭黑" },
+    ],
+  },
+];
+
+const MARQUEE_A = [
   "poster-vintage.png", "ec-promo-poster.png", "social-rednote.png", "logo-badge.png",
-  "ec-thermos-hero.png", "social-youtube.png", "poster-badge.png", "ec-skincare-scene.png",
-  "social-podcast.png", "logo-minimal.png", "ec-banner-coffee.png", "poster-night.png",
+  "ec-sneaker-hero.png", "social-youtube.png", "ppt-cover.png", "ec-skincare-scene.png",
+  "social-podcast.png", "logo-tech.png", "ec-banner-coffee.png", "poster-night.png",
 ];
 
-/* 案例清单（瀑布墙）：全部来自真实生成记录 */
-const CASES = [
-  { f: "ec-thermos-scene.png", label: "户外场景主图", scene: "电商", brief: "白底主图一句话改成露营场景，产品完全一致" },
-  { f: "ec-promo-poster.png", label: "大促海报", scene: "电商", brief: "年中大促 · 中文文字精准渲染" },
-  { f: "poster-vintage.png", label: "品牌海报", scene: "电商", brief: "复古手冲咖啡店宣传海报" },
-  { f: "social-rednote.png", label: "小红书封面", scene: "自媒体", brief: "7 天收纳改造 · 治愈系大字封面" },
-  { f: "ec-thermos-hero.png", label: "白底主图", scene: "电商", brief: "直接可上架的电商标准主图" },
-  { f: "logo-badge.png", label: "徽章 Logo", scene: "Logo", brief: "复古徽章方向 · 一次出 3 方案" },
-  { f: "social-youtube.png", label: "视频缩略图", scene: "自媒体", brief: "高点击率构图 · 文字渲染" },
-  { f: "ec-skincare-scene.png", label: "场景化主图", scene: "电商", brief: "氛围种草 · 晨光实拍质感" },
-  { f: "poster-night.png", label: "夜间版海报", scene: "改图", brief: "一句话改色调 · 文字构图不变" },
-  { f: "logo-minimal.png", label: "极简 Logo", scene: "Logo", brief: "极简线条方向" },
-  { f: "social-podcast.png", label: "播客封面", scene: "自媒体", brief: "Art Deco 复古风" },
-  { f: "ec-banner-coffee.png", label: "详情 Banner", scene: "电商", brief: "16:9 详情页头图" },
-  { f: "logo-wordmark.png", label: "字标 Logo", scene: "Logo", brief: "几何字标方向" },
-  { f: "poster-badge.png", label: "徽章海报", scene: "电商", brief: "同 brief 第二方案" },
+const MARQUEE_B = [
+  "ec-thermos-scene.png", "social-bilibili.png", "logo-restaurant.png", "ec-food-poster.png",
+  "ppt-section.png", "social-quote-card.png", "ec-lipstick-luxury.png", "logo-fitness.png",
+  "social-douyin.png", "ec-watch-detail.png", "ppt-data.png", "poster-badge.png",
 ];
-
-const FILTERS = ["全部", "电商", "Logo", "自媒体", "改图"];
 
 const PLAN_STEPS = [
   { label: "理解需求", detail: "拆解 brief → 资产清单" },
@@ -53,7 +99,7 @@ const FEATURES = [
   { tag: "PLAN FIRST", title: "计划先行，消耗可控", desc: "出图前先给你完整执行计划和积分预估，批准才执行。不烧无意义的额度，每一分消耗都在你掌控里。" },
   { tag: "ITERATE", title: "对话改图，构图不丢", desc: "「把这张改成夜间冷色调」——文字、构图、细节原样保留，只改你说的部分。设计是迭代出来的，不是抽卡抽出来的。" },
   { tag: "INFINITE CANVAS", title: "无限画布工作区", desc: "生成结果自动按行排布，编辑版本自动放在原图旁边。刷新页面布局原样恢复，项目资产一目了然。" },
-  { tag: "VERTICAL", title: "为三个场景深度打磨", desc: "电商主图与详情页、品牌 Logo、自媒体封面海报。垂直场景的提示词工程与模板，比通用工具更懂你的活。" },
+  { tag: "VERTICAL", title: "为四个场景深度打磨", desc: "电商视觉、自媒体配图、PPT 设计、品牌 Logo。垂直场景的提示词工程与模板，比通用工具更懂你的活。" },
 ];
 
 const FAQS = [
@@ -63,7 +109,7 @@ const FAQS = [
   ["和 Midjourney / 即梦有什么区别？", "它们是「生成器」，Picsmith 是「设计 Agent」——理解完整需求、规划多资产交付、支持反复修改迭代，产出的是能直接上架/发布的成套设计，不是单张图。"],
 ];
 
-/* ---------- 小组件 ---------- */
+/* ---------- 工具 ---------- */
 
 function useReveal() {
   useEffect(() => {
@@ -74,6 +120,49 @@ function useReveal() {
     document.querySelectorAll(".reveal").forEach((el) => obs.observe(el));
     return () => obs.disconnect();
   }, []);
+}
+
+function spotlightMove(e) {
+  const r = e.currentTarget.getBoundingClientRect();
+  e.currentTarget.style.setProperty("--mx", `${e.clientX - r.left}px`);
+  e.currentTarget.style.setProperty("--my", `${e.clientY - r.top}px`);
+}
+
+function ScrollProgress() {
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    const onScroll = () => {
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      setW(max > 0 ? (window.scrollY / max) * 100 : 0);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  return <div className="scroll-progress" style={{ width: `${w}%` }} />;
+}
+
+/* 数字滚动（进入视口时计数） */
+function CountUp({ to, duration = 1200 }) {
+  const ref = useRef(null);
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return;
+      obs.disconnect();
+      const t0 = performance.now();
+      const tick = (t) => {
+        const p = Math.min(1, (t - t0) / duration);
+        setVal(Math.round(to * (1 - Math.pow(1 - p, 3))));
+        if (p < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }, { threshold: 0.5 });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [to, duration]);
+  return <span ref={ref}>{val}</span>;
 }
 
 function RotatingPhrase() {
@@ -90,7 +179,6 @@ function RotatingPhrase() {
   );
 }
 
-/* 自动循环推进的计划卡片演示 */
 function PlanDemo() {
   const [step, setStep] = useState(2);
   useEffect(() => {
@@ -98,7 +186,7 @@ function PlanDemo() {
     return () => clearInterval(t);
   }, []);
   return (
-    <div className="bg-bg-card border border-white/10 rounded-sm p-6 shadow-[0_0_50px_rgba(0,0,0,0.5)]">
+    <div className="bg-bg-card border border-white/10 rounded-sm p-6 shadow-[0_0_50px_rgba(0,0,0,0.5)] spotlight" onMouseMove={spotlightMove}>
       <div className="flex items-center justify-between mb-5">
         <span className="micro-label">PROPOSED EXECUTION PLAN</span>
         <span className="text-[10px] font-mono text-gray-500">20 CREDITS · 2 STEPS</span>
@@ -133,17 +221,14 @@ function PlanDemo() {
   );
 }
 
-/* 改图前后对比滑块 */
 function BeforeAfter({ before, after, beforeLabel = "原始生成", afterLabel = "一句话改图后" }) {
   const [pct, setPct] = useState(50);
   const ref = useRef(null);
-
   const onMove = (clientX) => {
     const rect = ref.current?.getBoundingClientRect();
     if (!rect) return;
     setPct(Math.min(100, Math.max(0, ((clientX - rect.left) / rect.width) * 100)));
   };
-
   return (
     <div
       ref={ref}
@@ -164,20 +249,114 @@ function BeforeAfter({ before, after, beforeLabel = "原始生成", afterLabel =
   );
 }
 
+/* 全部案例拍平 + 品类交错混排（统一大墙的视觉节奏） */
+const ALL_CASES = (() => {
+  const lists = CATEGORIES.map((c) => c.items.map((it) => ({ ...it, category: c.key })));
+  const merged = [];
+  for (let i = 0; lists.some((l) => i < l.length); i++) {
+    for (const l of lists) if (l[i]) merged.push(l[i]);
+  }
+  return merged;
+})();
+
+const FILTERS = ["全部", ...CATEGORIES.map((c) => c.key)];
+
+/* 案例卡：常驻品类角标 + 悬停浮出「复制提示词 / 做同款」 */
+function CaseCard({ item, category, index }) {
+  const copyBrief = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigator.clipboard?.writeText(item.brief).then(
+      () => toast.success("提示词已复制，去工作台粘贴即可"),
+      () => toast.error("复制失败")
+    );
+  };
+  return (
+    <figure
+      className="group relative mb-4 break-inside-avoid rounded-md overflow-hidden border border-white/[0.07] hover:border-white/25 transition-all duration-500 word-swap"
+      style={{ animationDelay: `${Math.min(index * 0.04, 0.4)}s` }}
+    >
+      <img src={`/showcase/${item.f}`} alt={item.label} loading="lazy"
+        className="w-full block group-hover:scale-[1.03] transition-transform duration-700" />
+      {/* 常驻品类角标：统一墙里也能一眼识别分类 */}
+      <span className="absolute top-2 left-2 px-2 py-0.5 bg-black/65 backdrop-blur-sm text-gray-300 rounded-sm text-[9px] font-mono font-bold uppercase tracking-wider pointer-events-none">
+        {item.category}
+      </span>
+      {item.badge && (
+        <span className="absolute top-2 right-2 px-2 py-0.5 bg-white text-black rounded-sm text-[9px] font-bold uppercase tracking-wider">
+          {item.badge}
+        </span>
+      )}
+      <figcaption className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 gap-2">
+        <div>
+          <span className="micro-label">// {category}</span>
+          <span className="block text-white text-[13px] font-bold mt-0.5">{item.label}</span>
+        </div>
+        <div className="flex gap-1.5">
+          <button
+            onClick={copyBrief}
+            className="flex-1 py-1.5 rounded-sm bg-white/15 backdrop-blur-sm border border-white/25 text-white text-[10px] font-bold uppercase tracking-wider hover:bg-white/25 transition-all"
+          >
+            复制提示词
+          </button>
+          <Link
+            href={`/dashboard?q=${encodeURIComponent(item.brief)}`}
+            className="flex-1 py-1.5 rounded-sm bg-white text-black text-[10px] font-bold uppercase tracking-wider text-center hover:bg-gray-200 transition-all"
+          >
+            做同款 →
+          </Link>
+        </div>
+      </figcaption>
+    </figure>
+  );
+}
+
+/* 统一案例墙：chips 筛选，无分段标题 */
+function UnifiedWall() {
+  const [filter, setFilter] = useState("全部");
+  const items = filter === "全部" ? ALL_CASES : ALL_CASES.filter((c) => c.category === filter);
+  return (
+    <>
+      <div className="flex justify-center gap-2 pb-8 flex-wrap px-4">
+        {FILTERS.map((f) => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            className={`px-5 py-2 rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] border transition-all ${
+              filter === f
+                ? "bg-white text-black border-white"
+                : "bg-white/5 text-gray-500 border-white/10 hover:border-white/25 hover:text-white"
+            }`}
+          >
+            {f}
+          </button>
+        ))}
+      </div>
+      <div key={filter} className="max-w-[1320px] mx-auto px-4 sm:px-6 columns-2 sm:columns-3 lg:columns-4 xl:columns-5 gap-4">
+        {items.map((item, i) => (
+          <CaseCard key={item.f} item={item} category={item.category} index={i} />
+        ))}
+      </div>
+    </>
+  );
+}
+
 /* ---------- 页面 ---------- */
 
 export default function Landing() {
   useReveal();
-  const [scene, setScene] = useState("全部");
+  const totalCases = CATEGORIES.reduce((n, c) => n + c.items.length, 0);
 
   return (
     <div className="min-h-dvh bg-bg-page text-primary-text">
+      <ScrollProgress />
+
       {/* Nav */}
       <header className="fixed top-0 left-0 right-0 z-[100] flex items-center justify-between px-6 sm:px-10 py-4 bg-[#09090b]/90 backdrop-blur-xl border-b border-white/[0.06]">
         <span className="flex items-center gap-2.5">
           <PicsmithMark size={22} className="text-white" />
           <span className="font-display text-xl font-extrabold tracking-tighter brand-gradient-text">Picsmith</span>
-          <span className="micro-label hidden md:inline">图匠 // E-COM · LOGO · SOCIAL</span>
+          <span className="micro-label hidden md:inline">图匠 // E-COM · SOCIAL · PPT · LOGO</span>
         </span>
         <nav className="flex items-center gap-5">
           <a href="#cases" className="text-[11px] font-mono uppercase tracking-[0.15em] text-gray-500 hover:text-white transition-colors hidden sm:inline">案例</a>
@@ -190,12 +369,12 @@ export default function Landing() {
       </header>
 
       {/* Hero */}
-      <section className="relative grid-bg-animated pt-36 pb-16 px-6 overflow-hidden">
+      <section className="relative grid-bg-animated pt-36 pb-16 overflow-hidden">
         <div className="absolute top-[8%] left-1/2 -translate-x-1/2 w-[44rem] h-[44rem] bg-white/[0.035] rounded-full blur-[150px] pointer-events-none" />
-        <div className="relative max-w-4xl mx-auto text-center flex flex-col items-center gap-6">
+        <div className="relative max-w-4xl mx-auto text-center flex flex-col items-center gap-6 px-6">
           <div className="micro-label hero-in hero-in-1">PICSMITH · 图匠 · AI DESIGN AGENT</div>
           <h1 className="font-display text-4xl sm:text-6xl font-extrabold tracking-tight leading-tight hero-in hero-in-2">
-            从一句话，到<span className="brand-gradient-text">成套设计</span>
+            从一句话，到<span className="shimmer">成套设计</span>
           </h1>
           <p className="text-base sm:text-xl text-secondary-text hero-in hero-in-3">
             <RotatingPhrase />
@@ -212,12 +391,21 @@ export default function Landing() {
           <div className="micro-label hero-in hero-in-5">注册即送 500 CREDITS · 无需信用卡</div>
         </div>
 
-        {/* 无限滚动画廊 */}
+        {/* 双行反向无限画廊 */}
         <div className="marquee mt-14 hero-in hero-in-5">
           <div className="marquee-track">
-            {[...MARQUEE, ...MARQUEE].map((f, i) => (
-              <div key={i} className="h-52 rounded-sm border border-white/10 overflow-hidden shadow-[0_20px_40px_-10px_rgba(0,0,0,0.7)] hover:border-white/30 transition-all shrink-0">
-                <img src={`/showcase/${f}`} alt="Picsmith generated showcase" className="h-full w-auto object-cover" loading="lazy" />
+            {[...MARQUEE_A, ...MARQUEE_A].map((f, i) => (
+              <div key={i} className="h-44 rounded-sm border border-white/10 overflow-hidden shadow-[0_20px_40px_-10px_rgba(0,0,0,0.7)] hover:border-white/30 transition-all shrink-0">
+                <img src={`/showcase/${f}`} alt="Picsmith showcase" className="h-full w-auto object-cover" loading="lazy" />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="marquee mt-4 hero-in hero-in-5">
+          <div className="marquee-track marquee-track-reverse">
+            {[...MARQUEE_B, ...MARQUEE_B].map((f, i) => (
+              <div key={i} className="h-44 rounded-sm border border-white/10 overflow-hidden shadow-[0_20px_40px_-10px_rgba(0,0,0,0.7)] hover:border-white/30 transition-all shrink-0">
+                <img src={`/showcase/${f}`} alt="Picsmith showcase" className="h-full w-auto object-cover" loading="lazy" />
               </div>
             ))}
           </div>
@@ -247,58 +435,25 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* 案例：满幅瀑布墙（V1 方案整合） */}
+      {/* 案例库：按品类分区 */}
       <section id="cases" className="py-24 border-t border-white/[0.06]">
         <div className="text-center flex flex-col gap-4 reveal px-6">
-          <div className="micro-label">// REAL OUTPUT</div>
+          <div className="micro-label">// REAL OUTPUT · CLICK TO REMAKE</div>
           <h2 className="font-display text-3xl sm:text-5xl font-extrabold tracking-tight">
-            作品自己说话，<span className="brand-gradient-text">满幅铺开</span>
+            四大场景，<span className="brand-gradient-text">拿来即用</span>
           </h2>
-          <p className="text-secondary-text">每一张都来自 Picsmith 的真实生成记录，所见即所得。</p>
+          <p className="text-secondary-text">每一张都来自真实生成记录。看中哪张——复制提示词，或直接「做同款」。</p>
         </div>
 
-        {/* 统计条 */}
-        <div className="flex justify-center gap-10 py-8 micro-label reveal">
-          <span><span className="text-white text-base font-display font-extrabold">{CASES.length}</span>&nbsp;真实案例</span>
-          <span><span className="text-white text-base font-display font-extrabold">3</span>&nbsp;垂直场景</span>
-          <span><span className="text-white text-base font-display font-extrabold">0</span>&nbsp;人工修饰</span>
+        {/* 统计条（滚动计数） */}
+        <div className="flex justify-center gap-10 py-10 micro-label reveal">
+          <span><span className="text-white text-lg font-display font-extrabold"><CountUp to={totalCases} /></span>&nbsp;真实案例</span>
+          <span><span className="text-white text-lg font-display font-extrabold"><CountUp to={CATEGORIES.length} /></span>&nbsp;垂直场景</span>
+          <span><span className="text-white text-lg font-display font-extrabold">0</span>&nbsp;人工修饰</span>
         </div>
 
-        {/* 场景筛选 */}
-        <div className="flex justify-center gap-2 pb-8 flex-wrap px-4 reveal">
-          {FILTERS.map((f) => (
-            <button
-              key={f}
-              onClick={() => setScene(f)}
-              className={`px-5 py-2 rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] border transition-all ${
-                scene === f
-                  ? "bg-white text-black border-white"
-                  : "bg-white/5 text-gray-500 border-white/10 hover:border-white/25 hover:text-white"
-              }`}
-            >
-              {f}
-            </button>
-          ))}
-        </div>
-
-        {/* masonry 墙：收进容器、提高列数，单图保持精致尺寸（Lovart 式克制） */}
-        <div key={scene} className="max-w-[1320px] mx-auto px-4 sm:px-6 columns-2 sm:columns-3 lg:columns-4 xl:columns-5 gap-4">
-          {CASES.filter((c) => scene === "全部" || c.scene === scene).map((c, i) => (
-            <figure
-              key={c.f}
-              className="group relative mb-4 break-inside-avoid rounded-md overflow-hidden border border-white/[0.07] hover:border-white/25 hover:-translate-y-0.5 transition-all duration-500 word-swap"
-              style={{ animationDelay: `${Math.min(i * 0.05, 0.4)}s` }}
-            >
-              <img src={`/showcase/${c.f}`} alt={c.label} loading="lazy"
-                className="w-full block group-hover:scale-[1.03] transition-transform duration-700" />
-              <figcaption className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/15 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3">
-                <span className="micro-label">// {c.scene}</span>
-                <span className="text-white text-[13px] font-bold mt-0.5">{c.label}</span>
-                <span className="text-gray-400 text-[10px] mt-0.5 leading-snug">{c.brief}</span>
-              </figcaption>
-            </figure>
-          ))}
-        </div>
+        {/* 统一大墙：品类混排 + chips 筛选 + 卡片角标识别分类 */}
+        <UnifiedWall />
       </section>
 
       {/* 改图对比（可拖动滑块） */}
@@ -332,7 +487,8 @@ export default function Landing() {
           </div>
           <div className="grid sm:grid-cols-2 gap-6">
             {FEATURES.map((f, i) => (
-              <div key={f.tag} className={`reveal reveal-d${i % 2 ? 1 : 0} bg-bg-card border border-white/[0.08] rounded-sm p-7 hover:border-white/20 hover:-translate-y-1 transition-all duration-500 shadow-[0_0_50px_rgba(0,0,0,0.5)]`}>
+              <div key={f.tag} onMouseMove={spotlightMove}
+                className={`spotlight reveal reveal-d${i % 2 ? 1 : 0} bg-bg-card border border-white/[0.08] rounded-sm p-7 hover:border-white/20 hover:-translate-y-1 transition-all duration-500 shadow-[0_0_50px_rgba(0,0,0,0.5)]`}>
                 <div className="micro-label mb-4">// {f.tag}</div>
                 <h3 className="text-lg font-bold text-white mb-2">{f.title}</h3>
                 <p className="text-[13px] text-secondary-text leading-relaxed">{f.desc}</p>
@@ -350,7 +506,7 @@ export default function Landing() {
             <h2 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight">先免费用起来</h2>
           </div>
           <div className="grid sm:grid-cols-2 gap-6 max-w-2xl mx-auto w-full">
-            <div className="reveal bg-bg-card border border-white/[0.08] rounded-sm p-8 flex flex-col gap-4">
+            <div onMouseMove={spotlightMove} className="spotlight reveal bg-bg-card border border-white/[0.08] rounded-sm p-8 flex flex-col gap-4">
               <div className="micro-label">STARTER</div>
               <div className="font-display text-4xl font-extrabold">免费</div>
               <ul className="text-[13px] text-secondary-text flex flex-col gap-2 flex-1">
@@ -362,7 +518,7 @@ export default function Landing() {
                 免费开始
               </Link>
             </div>
-            <div className="reveal reveal-d1 bg-bg-card border border-white/[0.08] rounded-sm p-8 flex flex-col gap-4 opacity-70">
+            <div onMouseMove={spotlightMove} className="spotlight reveal reveal-d1 bg-bg-card border border-white/[0.08] rounded-sm p-8 flex flex-col gap-4 opacity-70">
               <div className="micro-label">PRO</div>
               <div className="font-display text-4xl font-extrabold">即将上线</div>
               <ul className="text-[13px] text-secondary-text flex flex-col gap-2 flex-1">
@@ -402,7 +558,7 @@ export default function Landing() {
         <div className="max-w-3xl mx-auto text-center flex flex-col items-center gap-6 reveal">
           <PicsmithMark size={44} className="text-white" />
           <h2 className="font-display text-3xl sm:text-5xl font-extrabold tracking-tight">
-            全速创作，<span className="brand-gradient-text">让愿景成真</span>
+            全速创作，<span className="shimmer">让愿景成真</span>
           </h2>
           <Link href="/dashboard" className="px-10 py-4 bg-white text-black rounded-sm text-[13px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 hover:scale-[1.03] transition-all shadow-[0_0_30px_rgba(255,255,255,0.15)]">
             免费开始
@@ -416,7 +572,7 @@ export default function Landing() {
           <span className="flex items-center gap-2.5">
             <PicsmithMark size={18} className="text-white" />
             <span className="font-display text-base font-extrabold tracking-tighter brand-gradient-text">Picsmith</span>
-            <span className="micro-label">图匠 · E-COM · LOGO · SOCIAL</span>
+            <span className="micro-label">图匠 · E-COM · SOCIAL · PPT · LOGO</span>
           </span>
           <div className="flex items-center gap-6 micro-label">
             <a href="#cases" className="hover:text-white transition-colors">案例</a>

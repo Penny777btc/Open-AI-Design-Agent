@@ -112,9 +112,55 @@ body {
 
 .marquee:hover .marquee-track { animation-play-state: paused; }
 
+.marquee-track-reverse { animation-direction: reverse; animation-duration: 52s; }
+
 @keyframes marqueeScroll {
   from { transform: translateX(0); }
   to { transform: translateX(-50%); }
+}
+
+/* 鼠标跟随聚光灯（feature/pricing 卡片） */
+.spotlight {
+  position: relative;
+  overflow: hidden;
+}
+
+.spotlight::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 50%), rgba(255, 255, 255, 0.07), transparent 60%);
+  pointer-events: none;
+}
+
+.spotlight:hover::before { opacity: 1; }
+
+/* 品牌渐变缓慢流光 */
+.shimmer {
+  background: linear-gradient(110deg, #ffffff 30%, #8a8a8a 45%, #ffffff 60%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmerMove 5s ease-in-out infinite;
+}
+
+@keyframes shimmerMove {
+  0%, 100% { background-position: 0% 0; }
+  50% { background-position: 100% 0; }
+}
+
+/* 阅读进度条 */
+.scroll-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #ffffff, #9a9a9a);
+  z-index: 200;
+  transition: width 0.1s linear;
 }
 
 /* logo 火花 */
