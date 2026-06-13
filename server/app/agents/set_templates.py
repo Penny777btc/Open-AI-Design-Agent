@@ -11,6 +11,7 @@ from app.agents.planner import Plan, PlanNode
 SET_TEMPLATES = {
     "ecom": {
         "label": "电商主图",
+        # AI 融合版：AI 直接把文字画进画面
         "layout": (
             "Create a PREMIUM e-commerce product main image. This image is part of a CONSISTENT SET — "
             "every image in the set MUST share the exact same layout, typography and color treatment. "
@@ -19,6 +20,14 @@ SET_TEMPLATES = {
             "render an elegant SERIF product TITLE across the TOP CENTER, a thin gold divider rule beneath it, a short SUBTITLE line below that, "
             "and THREE short spec lines as a neat list in the LOWER-LEFT. "
             "Typography is refined and consistent: an elegant serif, dark charcoal ink with a muted gold accent, generous letter-spacing, balanced hierarchy. "
+            "Square 1:1, soft professional studio lighting."
+        ),
+        # 可编辑版：AI 只出干净留白场景，文字区留空（前端叠可编辑文字）
+        "clean": (
+            "Create a PREMIUM e-commerce product image. Keep the product EXACTLY as the source, including its own label/branding. "
+            "Do NOT add any title, caption, marketing text or graphic overlay — produce a clean image. "
+            "Composition (consistent across the set): clean light-gray studio gradient background; place the product and any props in the CENTER-LOWER and RIGHT of the frame; "
+            "keep the TOP ~25% a clean EMPTY band and the LOWER-LEFT corner clean and EMPTY (those areas are reserved for text added later). "
             "Square 1:1, soft professional studio lighting."
         ),
         "aspect_ratio": "1:1",
@@ -32,6 +41,11 @@ SET_TEMPLATES = {
             "a thin divider, and a smaller SUBTITLE below it. Refined consistent typography (elegant serif, dark ink, soft accent). "
             "Vertical 3:4, soft natural lighting."
         ),
+        "clean": (
+            "Create a Xiaohongshu (RED) cover image. Keep the product exactly as the source, including its label. "
+            "Do NOT add any text — clean image. Composition (consistent across the set): bright clean lifestyle background; "
+            "place the product in the LOWER 2/3; keep the UPPER 1/3 a clean EMPTY area reserved for a title later. Vertical 3:4, soft natural lighting."
+        ),
         "aspect_ratio": "3:4",
     },
     "minimal": {
@@ -42,6 +56,11 @@ SET_TEMPLATES = {
             "Layout: pure off-white seamless background; product centered with generous negative space; a single understated serif TITLE "
             "in the lower-left with a short thin rule beneath it. Monochrome refined typography, identical across the set. "
             "Square 1:1, even soft lighting, editorial minimal aesthetic."
+        ),
+        "clean": (
+            "Create a minimal editorial product image. Keep the product exactly as the source, including its label. "
+            "Do NOT add any text — clean image. Composition: pure off-white seamless background; place the product slightly RIGHT-of-center "
+            "with generous negative space; keep the LOWER-LEFT clean and EMPTY for a title later. Square 1:1, even soft lighting."
         ),
         "aspect_ratio": "1:1",
     },
@@ -113,8 +132,12 @@ def _content_block(content: dict, lang: str = "zh") -> str:
     )
 
 
-def build_set_plan(template_key: str, asset_labels: list[str], content_map: dict | None = None, lang: str = "zh") -> Plan:
-    """每张选中图建一个 edit_image 节点：共享版式约束 + 该产品的真实文案，AI 直接出设计图。"""
+def build_set_plan(template_key: str, asset_labels: list[str], content_map: dict | None = None,
+                   lang: str = "zh", mode: str = "ai") -> Plan:
+    """每张选中图建一个 edit_image 节点。
+    mode="ai"：AI 直接把文案画进设计图（融合、不可编辑）。
+    mode="editable"：AI 出干净留白场景，文案随节点带给前端去叠可编辑文字层。
+    """
     tpl = SET_TEMPLATES.get(template_key)
     if tpl is None:
         raise ValueError(f"未知套图模板：{template_key}")
@@ -122,15 +145,26 @@ def build_set_plan(template_key: str, asset_labels: list[str], content_map: dict
     if not labels:
         raise ValueError("未选择任何图片")
     content_map = content_map or {}
+    editable = mode == "editable"
     nodes = []
     for i, label in enumerate(labels):
-        prompt = tpl["layout"] + _content_block(content_map.get(label), lang)
+        if editable:
+            args = {
+                "prompt": tpl["clean"], "source_asset": label, "aspect_ratio": tpl["aspect_ratio"],
+                "set_template": template_key, "slot_content": content_map.get(label),
+            }
+        else:
+            args = {
+                "prompt": tpl["layout"] + _content_block(content_map.get(label), lang),
+                "source_asset": label, "aspect_ratio": tpl["aspect_ratio"], "set_member": True,
+            }
         nodes.append(PlanNode(
-            id=f"set_{i + 1}",
-            tool="edit_image",
-            label=f"套图 {i + 1}/{len(labels)} · {tpl['label']}",
-            args={"prompt": prompt, "source_asset": label, "aspect_ratio": tpl["aspect_ratio"], "set_member": True},
-            depends=[],
+            id=f"set_{i + 1}", tool="edit_image",
+            label=f"套图 {i + 1}/{len(labels)} · {tpl['label']}", args=args, depends=[],
         ))
-    return Plan(mode="plan", title=f"{tpl['label']}（{len(labels)} 张统一风格）", nodes=nodes,
-                notes=[f"AI 直接生成 {len(labels)} 张统一版式/字体/风格的设计图，文案取自产品信息与文档"])
+    note = (
+        f"AI 出 {len(labels)} 张干净底图 + 可编辑文字层（排版/字体一致，可改内容可换字体）"
+        if editable else
+        f"AI 直接生成 {len(labels)} 张统一版式/字体/风格的设计图，文案取自产品信息与文档"
+    )
+    return Plan(mode="plan", title=f"{tpl['label']}（{len(labels)} 张统一风格）", nodes=nodes, notes=[note])

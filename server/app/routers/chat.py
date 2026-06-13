@@ -90,6 +90,7 @@ async def set_template(session_id: str, request: Request, db: AsyncSession = Dep
         "message": f"🎨 套图：{tpl_label}（{len(labels)} 张）",
         "template": template,
         "asset_labels": labels,
+        "set_mode": "editable" if body.get("mode") == "editable" else "ai",
         "client_request_id": body.get("client_request_id"),
     })
 

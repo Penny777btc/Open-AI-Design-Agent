@@ -890,6 +890,7 @@ const CanvasArea = forwardRef(
     const [showSetPanel, setShowSetPanel] = useState(false);  // 套图面板
     const [setSel, setSetSel] = useState(() => new Set());     // 套图：勾选的图片 id
     const [setTpl, setSetTpl] = useState("ecom");              // 套图：选中的模板
+    const [setGenMode, setSetGenMode] = useState("ai");        // 套图模式：ai 融合 / editable 可编辑
 
     // ===== 局部编辑（蒙版涂抹）=====
     const [maskMode, setMaskMode] = useState(null); // 进入编辑的 image id
@@ -1486,7 +1487,7 @@ const CanvasArea = forwardRef(
         toast.error("请选择带标签的生成图（上传的本地图暂不支持）");
         return;
       }
-      onSetTemplate?.({ assetLabels: labels, template: setTpl, templateLabel: tpl.label });
+      onSetTemplate?.({ assetLabels: labels, template: setTpl, templateLabel: tpl.label, mode: setGenMode });
       setShowSetPanel(false);
       setSetSel(new Set());
     };
@@ -2396,6 +2397,25 @@ const CanvasArea = forwardRef(
                   >
                     {tpl.label}
                     <span className={`ml-1.5 text-[10px] ${setTpl === key ? "opacity-70" : "opacity-50"}`}>{tpl.desc}</span>
+                  </button>
+                ))}
+              </div>
+              {/* 模式切换：AI 融合 vs 可编辑 */}
+              <div className="px-5 pt-3 flex items-center gap-2">
+                {[
+                  { k: "ai", label: "AI 融合版", hint: "设计最融合 · 文字不可编辑" },
+                  { k: "editable", label: "可编辑版", hint: "干净底图+可编辑文字层 · 可改可换字体" },
+                ].map((m) => (
+                  <button
+                    key={m.k}
+                    onClick={() => setSetGenMode(m.k)}
+                    className={`flex-1 px-3 py-2 rounded text-left border transition-all ${setGenMode === m.k ? "bg-primary/10 border-primary text-primary-text" : "bg-bg-page border-divider text-secondary-text hover:text-primary-text"}`}
+                  >
+                    <div className="text-[12px] font-bold flex items-center gap-1.5">
+                      <span className={`w-3 h-3 rounded-full border ${setGenMode === m.k ? "border-primary bg-primary" : "border-secondary-text"}`} />
+                      {m.label}
+                    </div>
+                    <div className="text-[10px] text-secondary-text mt-0.5 ml-[18px]">{m.hint}</div>
                   </button>
                 ))}
               </div>

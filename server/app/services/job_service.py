@@ -145,7 +145,7 @@ async def _run_job(job_id: str) -> None:
             items = [{"label": l, "caption": cap.get(l, "")} for l in labels]
             lang = job_input.get("lang", "zh")
             content = await generate_set_content(tpl_key, items, doc.extracted_text if doc else "", lang=lang)
-            plan = build_set_plan(tpl_key, labels, content_map=content, lang=lang)
+            plan = build_set_plan(tpl_key, labels, content_map=content, lang=lang, mode=job_input.get("set_mode", "ai"))
         else:
             brief = job_input.get("message") or _skill_brief(job_input)
             async with SessionLocal() as db:
@@ -410,10 +410,14 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         "asset_label": label, "url": url, "kind": "image",
         "model": image.model, "prompt": prompt, "source_tool": node.tool,
     }
-    # 套图：文字已由 AI 直接渲染进图里（不再前端叠层），这里只带网格落位坐标让一组图整齐排布
-    if node.args.get("set_member"):
+    # 套图落位坐标（一组图整齐排布）。可编辑版还带模板 key + 文案 → 前端叠可编辑文字层
+    if node.args.get("set_member") or node.args.get("set_template"):
         asset_payload["canvas_x"] = canvas_x
         asset_payload["canvas_y"] = canvas_y
+    if node.args.get("set_template"):
+        asset_payload["set_template"] = node.args["set_template"]
+        if node.args.get("slot_content"):
+            asset_payload["set_content"] = node.args["slot_content"]
     await emit(job_id, "tool_result", {
         "name": node.tool,
         "result": result,

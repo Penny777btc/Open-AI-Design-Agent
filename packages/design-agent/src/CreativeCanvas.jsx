@@ -532,7 +532,7 @@ export default function CreativeCanvas({
 
   // 画布局部编辑：涂抹蒙版 + 指令 → 跳过审批直接执行（面板已展示消耗）
   // 套图：选中的产品图 + 模板 → 后端按统一约束批量 AI 生成一组风格一致的新图
-  const handleSetTemplate = async ({ assetLabels, template, templateLabel }) => {
+  const handleSetTemplate = async ({ assetLabels, template, templateLabel, mode }) => {
     if (busy || sendingRef.current) {
       toast.error(t("another_task_running"));
       return;
@@ -556,6 +556,7 @@ export default function CreativeCanvas({
         {
           template,
           asset_labels: assetLabels,
+          mode,
           client_request_id:
             (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
         },
