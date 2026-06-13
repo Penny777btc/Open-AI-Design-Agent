@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import axios from "axios";
 import toast from "react-hot-toast";
@@ -35,6 +35,15 @@ export default function AccountPage() {
   const [delConfirm, setDelConfirm] = useState("");
   const [delPw, setDelPw] = useState("");
   const [busy, setBusy] = useState(null);
+  const [role, setRole] = useState(null); // admin | support | user
+
+  // 取角色用于决定是否渲染管理后台入口（仅 admin / support 可见）。
+  useEffect(() => {
+    axios
+      .get(`${API}/api/v1/auth/me`)
+      .then(({ data }) => setRole(data.role || "user"))
+      .catch(() => {});
+  }, []);
 
   const saveName = async () => {
     setBusy("name");
@@ -91,6 +100,21 @@ export default function AccountPage() {
           </div>
           <a href={`mailto:${SUPPORT_EMAIL}`} className="micro-label hover:text-white transition-colors">✉ {t.support}</a>
         </div>
+
+        {role === "admin" || role === "support" ? (
+          <Link
+            href="/admin"
+            className="bg-bg-card border border-white/[0.08] rounded-sm p-5 flex items-center justify-between hover:border-white/25 transition-all group"
+          >
+            <div className="flex flex-col gap-1">
+              <div className="micro-label">// ADMIN · 运营控制台</div>
+              <span className="text-[14px] text-white">管理后台</span>
+            </div>
+            <span className="text-gray-500 group-hover:text-white transition-colors text-[11px] font-bold uppercase tracking-[0.15em]">
+              进入 →
+            </span>
+          </Link>
+        ) : null}
 
         <Section label={`${t.profile} · ${userData?.email || ""}`}>
           <div className="flex gap-3">

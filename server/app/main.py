@@ -49,18 +49,26 @@ async def lifespan(app: FastAPI):
 
 
 async def _bootstrap_admins():
-    """ADMIN_EMAILS 中的账号提为 admin；从名单移除的降回 user（权限随环境变量收放）。"""
+    """ADMIN_EMAILS/SUPPORT_EMAILS 引导角色；从名单移除的降回 user（权限随环境变量收放）。
+
+    同一邮箱同时出现在两个名单时取 admin（先写 support 再写 admin 覆盖）。
+    """
     from sqlalchemy import update
 
     from app.db import SessionLocal
     from app.models import User
 
-    emails = [e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()]
+    admins = [e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()]
+    support = [e.strip().lower() for e in settings.support_emails.split(",") if e.strip()]
     async with SessionLocal() as db:
-        if emails:
-            await db.execute(update(User).where(User.email.in_(emails)).values(role="admin"))
+        if support:
+            await db.execute(update(User).where(User.email.in_(support)).values(role="support"))
+        if admins:
+            await db.execute(update(User).where(User.email.in_(admins)).values(role="admin"))
         await db.execute(
-            update(User).where(User.role == "admin", User.email.not_in(emails)).values(role="user")
+            update(User).where(
+                User.role.in_(("admin", "support")), User.email.not_in(admins + support)
+            ).values(role="user")
         )
         await db.commit()
 

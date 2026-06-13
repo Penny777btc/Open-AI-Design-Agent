@@ -25,9 +25,12 @@ class User(Base):
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     locale: Mapped[str] = mapped_column(String(8), default="en")
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # 运营侧：admin 由 ADMIN_EMAILS 启动引导，不开放接口自助升级；封禁即设 disabled_at
+    # 运营侧：admin/support 由 ADMIN_EMAILS/SUPPORT_EMAILS 启动引导，不开放接口自助升级。
+    # support 只读（可查不可改）；封禁即设 disabled_at
     role: Mapped[str] = mapped_column(String(16), default="user")
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 每日文档解析配额覆盖（空=用全局默认 20）：给大客户放宽用
+    doc_daily_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

@@ -55,7 +55,7 @@ ALLOWED_EXT = {"png", "jpg", "jpeg", "webp", "gif", "avif", "mp4", "webm", "mov"
     # 每小时 5 份挡住短时连刷，每天 20 份挡住整天慢速囤刷。按账号而非 IP。
     dependencies=[
         Depends(rate_limit("doc", 5, 3600, by="user")),
-        Depends(rate_limit("doc-day", 20, 86400, by="user")),
+        Depends(rate_limit("doc-day", 20, 86400, by="user", override_attr="doc_daily_limit")),
     ],
 )
 async def upload_reference_doc(session_id: str, request: Request, user=Depends(get_current_user)):

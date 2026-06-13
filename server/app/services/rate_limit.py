@@ -21,7 +21,7 @@ def _retry_hint(seconds: int) -> str:
     return f"{seconds} 秒"
 
 
-def rate_limit(scope: str, times: int, seconds: int, by: str = "ip"):
+def rate_limit(scope: str, times: int, seconds: int, by: str = "ip", override_attr: str | None = None):
     """FastAPI 依赖工厂：同一 key（scope+IP 或 scope+user）窗口内最多 times 次。
 
     by="user" 时按用户 id 计数——文档/媒体上传这类「按账号配额」的限流不能按 IP，
@@ -32,8 +32,12 @@ def rate_limit(scope: str, times: int, seconds: int, by: str = "ip"):
     if by == "user":
         async def dependency(user=Depends(get_current_user)):
             key = f"{scope}:user:{user.id}"
+            # 管理员可给单个用户放宽配额（大客户场景）：User 上的覆盖列优先于全局默认
+            limit = times
+            if override_attr and getattr(user, override_attr, None):
+                limit = getattr(user, override_attr)
             # 带「何时可重试」的中文文案：上传是按账号配额，用户需要知道等多久
-            _check(key, times, seconds, detail=f"上传太频繁，请 {_retry_hint(seconds)}后再试")
+            _check(key, limit, seconds, detail=f"上传太频繁，请 {_retry_hint(seconds)}后再试")
 
         return dependency
 

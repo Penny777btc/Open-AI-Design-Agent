@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { PicsmithMark } from "@/components/Logo";
-import { adminGet, Metric, fmtMoney, fmtBytes } from "./ui";
+import { API, adminGet, Metric, MiniBars, SudoProvider, fmtMoney, fmtBytes } from "./ui";
+import axios from "axios";
 import UsersTab from "./UsersTab";
 import OrdersTab from "./OrdersTab";
 import AssetsTab from "./AssetsTab";
@@ -39,6 +40,8 @@ function NotFoundDisguise() {
 export default function AdminPage() {
   const [state, setState] = useState("loading"); // loading | denied | ready
   const [metrics, setMetrics] = useState(null);
+  const [series, setSeries] = useState(null);
+  const [role, setRole] = useState(null); // admin | support
   const [tab, setTab] = useState("users");
 
   useEffect(() => {
@@ -51,6 +54,15 @@ export default function AdminPage() {
         // 非管理员后端一律返回 404 → 渲染伪装页。其余错误同样不暴露入口。
         setState("denied");
       });
+    // 角色：support 仅可读 → 隐藏一切变更钮。
+    axios
+      .get(`${API}/api/v1/auth/me`)
+      .then(({ data }) => setRole(data.role || "user"))
+      .catch(() => {});
+    // 30 天趋势：失败静默（不阻塞主指标）。
+    adminGet("/metrics/timeseries?days=30")
+      .then(({ data }) => setSeries(data))
+      .catch(() => {});
   }, []);
 
   if (state === "loading") {
@@ -65,15 +77,24 @@ export default function AdminPage() {
   const jobs = metrics?.jobs_24h || {};
   const jobsTotal = Object.values(jobs).reduce((a, b) => a + (b || 0), 0);
   const successRate = jobsTotal > 0 ? Math.round(((jobs.done || 0) / jobsTotal) * 100) : 0;
+  const readOnly = role === "support";
 
   return (
+    <SudoProvider>
     <div className="min-h-dvh bg-bg-page text-primary-text">
       <main className="max-w-6xl mx-auto px-6 py-10 flex flex-col gap-8">
         {/* 头部 */}
         <div className="flex items-end justify-between">
           <div className="flex flex-col gap-2">
             <div className="micro-label">// ADMIN · 运营控制台</div>
-            <h1 className="font-display text-3xl font-extrabold tracking-tight">管理后台</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="font-display text-3xl font-extrabold tracking-tight">管理后台</h1>
+              {readOnly ? (
+                <span className="inline-block px-2.5 py-1 rounded-sm border border-amber-500/40 text-amber-400 bg-amber-500/10 text-[9px] font-bold uppercase tracking-[0.15em] font-mono">
+                  只读 · SUPPORT
+                </span>
+              ) : null}
+            </div>
           </div>
           <Link href="/dashboard" className="micro-label hover:text-white transition-colors">// ← STUDIO</Link>
         </div>
@@ -96,6 +117,20 @@ export default function AdminPage() {
           <Metric label="存储用量" value={fmtBytes(metrics.storage_bytes_total)} />
         </div>
 
+        {/* 30 天趋势迷你图 */}
+        {series?.length ? (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <MiniBars label="近 30 天 · 注册" data={series.map((d) => d.signups)} color="white" />
+            <MiniBars label="近 30 天 · 积分消耗" data={series.map((d) => d.credits_consumed)} color="gray" />
+            <MiniBars
+              label="近 30 天 · 收入"
+              data={series.map((d) => d.revenue_cents)}
+              color="emerald"
+              format={(c) => fmtMoney(c)}
+            />
+          </div>
+        ) : null}
+
         {/* Tab 导航 */}
         <div className="flex gap-1 border-b border-white/[0.08]">
           {TABS.map((t) => (
@@ -115,12 +150,13 @@ export default function AdminPage() {
 
         {/* Tab 内容 */}
         <div>
-          {tab === "users" && <UsersTab />}
-          {tab === "orders" && <OrdersTab />}
-          {tab === "assets" && <AssetsTab />}
+          {tab === "users" && <UsersTab readOnly={readOnly} />}
+          {tab === "orders" && <OrdersTab readOnly={readOnly} />}
+          {tab === "assets" && <AssetsTab readOnly={readOnly} />}
           {tab === "audit" && <AuditTab />}
         </div>
       </main>
     </div>
+    </SudoProvider>
   );
 }

@@ -14,9 +14,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.deps import get_current_admin, get_db
+from app.deps import get_current_admin, get_db, get_sudo_admin
 from app.models import AdminAuditLog, Asset, CreditLedger, Job, Order, UploadedFile, User
-from app.services import credit_service
+from app.config import settings
+from app.services import credit_service, storage
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(get_current_admin)])
 
@@ -27,6 +28,7 @@ def _user_row(u: User, balance: int | None = None) -> dict:
         "email_verified": u.email_verified_at is not None,
         "disabled_at": u.disabled_at.isoformat() if u.disabled_at else None,
         "created_at": u.created_at.isoformat() if u.created_at else None,
+        "doc_daily_limit": u.doc_daily_limit,  # 前端配额行据此显示真实值（null=默认）
         **({"balance": balance} if balance is not None else {}),
     }
 
@@ -64,14 +66,54 @@ async def metrics(db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.get("/metrics/timeseries")
+async def metrics_timeseries(db: AsyncSession = Depends(get_db), days: int = Query(30, ge=7, le=90)):
+    """近 N 天逐日：注册数 / 积分消耗 / 收入。SQLite 的 date() 直接按天分组。"""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    async def by_day(stmt) -> dict:
+        return dict((await db.execute(stmt)).all())
+
+    signups = await by_day(
+        select(func.date(User.created_at), func.count()).where(User.created_at >= since)
+        .group_by(func.date(User.created_at))
+    )
+    consumed = await by_day(
+        select(func.date(CreditLedger.created_at), -func.sum(CreditLedger.delta)).where(
+            CreditLedger.created_at >= since, CreditLedger.delta < 0
+        ).group_by(func.date(CreditLedger.created_at))
+    )
+    revenue = await by_day(
+        select(func.date(Order.paid_at), func.sum(Order.amount_cents)).where(
+            Order.status == "paid", Order.paid_at >= since
+        ).group_by(func.date(Order.paid_at))
+    )
+    # 补零成连续序列：前端画图不用自己对齐日期
+    out = []
+    for i in range(days - 1, -1, -1):
+        d = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
+        out.append({
+            "date": d,
+            "signups": signups.get(d, 0) or 0,
+            "credits_consumed": consumed.get(d, 0) or 0,
+            "revenue_cents": revenue.get(d, 0) or 0,
+        })
+    return out
+
+
 @router.get("/users")
 async def list_users(
     db: AsyncSession = Depends(get_db),
     query: str = "",
+    status: str = Query("all", pattern="^(all|banned|staff)$"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
     stmt = select(User).order_by(User.created_at.desc()).limit(limit).offset(offset)
+    if status == "banned":
+        stmt = stmt.where(User.disabled_at.is_not(None))
+    elif status == "staff":
+        stmt = stmt.where(User.role.in_(("admin", "support")))
     if query.strip():
         like = f"%{query.strip()}%"
         stmt = stmt.where(User.email.like(like) | User.name.like(like) | (User.id == query.strip()))
@@ -129,7 +171,7 @@ class CreditAdjust(BaseModel):
 @router.post("/users/{user_id}/credits")
 async def adjust_credits(
     user_id: str, body: CreditAdjust,
-    db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin),
 ):
     if body.delta == 0:
         raise HTTPException(status_code=400, detail="delta 不能为 0")
@@ -151,7 +193,7 @@ async def adjust_credits(
 
 @router.post("/users/{user_id}/ban")
 async def ban_user(
-    user_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_admin)
+    user_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin)
 ):
     u = await db.get(User, user_id)
     if u is None:
@@ -168,7 +210,7 @@ async def ban_user(
 
 @router.post("/users/{user_id}/unban")
 async def unban_user(
-    user_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(get_current_admin)
+    user_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin)
 ):
     u = await db.get(User, user_id)
     if u is None:
@@ -177,6 +219,91 @@ async def unban_user(
     db.add(AdminAuditLog(admin_id=admin.id, action="unban", target_user_id=user_id))
     await db.commit()
     return {"ok": True}
+
+
+class QuotaPatch(BaseModel):
+    doc_daily_limit: int | None = Field(None, ge=1, le=1000)
+
+
+@router.patch("/users/{user_id}/quota")
+async def patch_quota(
+    user_id: str, body: QuotaPatch,
+    db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin),
+):
+    """放宽/恢复单用户每日文档配额（null=恢复全局默认）。"""
+    u = await db.get(User, user_id)
+    if u is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    u.doc_daily_limit = body.doc_daily_limit
+    db.add(AdminAuditLog(
+        admin_id=admin.id, action="set_quota", target_user_id=user_id,
+        detail=f"doc_daily_limit={body.doc_daily_limit}",
+    ))
+    await db.commit()
+    return {"ok": True, "doc_daily_limit": u.doc_daily_limit}
+
+
+@router.delete("/assets/{asset_id}")
+async def takedown_asset(
+    asset_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin)
+):
+    """内容下架：删存储文件 + 删记录。侵权/违规投诉的处置动作，审计留痕。"""
+    a = await db.get(Asset, asset_id)
+    if a is None:
+        raise HTTPException(status_code=404, detail="资产不存在")
+    if a.storage_key:
+        storage.delete_bytes(a.storage_key)
+    db.add(AdminAuditLog(
+        admin_id=admin.id, action="takedown_asset", target_user_id=a.user_id,
+        detail=f"asset={a.asset_label} session={a.session_id} prompt={(a.prompt or '')[:120]}",
+    ))
+    await db.delete(a)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/orders/{order_id}/refund")
+async def refund_order(
+    order_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin)
+):
+    """整单退款：Stripe 原路退回 + 扣回赠送积分（允许扣成负数，对账才能闭环）。"""
+    import httpx
+
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="未配置 Stripe，无法退款")
+    order = await db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    if order.status != "paid":
+        raise HTTPException(status_code=400, detail=f"仅已支付订单可退款（当前 {order.status}）")
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        # Checkout Session → payment_intent → refund，全程原始 REST（与 billing 同模式）
+        sess = await client.get(
+            f"https://api.stripe.com/v1/checkout/sessions/{order.provider_session_id}",
+            auth=(settings.stripe_secret_key, ""),
+        )
+        if sess.status_code != 200 or not sess.json().get("payment_intent"):
+            raise HTTPException(status_code=502, detail="无法定位支付记录，请到 Stripe 后台处理")
+        resp = await client.post(
+            "https://api.stripe.com/v1/refunds",
+            auth=(settings.stripe_secret_key, ""),
+            data={"payment_intent": sess.json()["payment_intent"]},
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"Stripe 退款失败：{resp.json().get('error', {}).get('message', '未知错误')}")
+
+    order.status = "refunded"
+    await credit_service.apply(
+        db, order.user_id, -order.credits, "adjust",
+        order_id=order.id, memo=f"[admin {admin.email}] 订单退款，扣回积分", enforce=False,
+    )
+    db.add(AdminAuditLog(
+        admin_id=admin.id, action="refund_order", target_user_id=order.user_id,
+        detail=f"order={order.id} amount_cents={order.amount_cents} credits=-{order.credits}",
+    ))
+    await db.commit()
+    return {"ok": True, "status": "refunded"}
 
 
 @router.get("/orders")
@@ -221,13 +348,17 @@ async def recent_assets(
 @router.get("/audit-logs")
 async def audit_logs(
     db: AsyncSession = Depends(get_db),
+    action: str = "",
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
-    rows = (await db.execute(
+    stmt = (
         select(AdminAuditLog, User.email).join(User, User.id == AdminAuditLog.admin_id)
         .order_by(AdminAuditLog.id.desc()).limit(limit).offset(offset)
-    )).all()
+    )
+    if action.strip():
+        stmt = stmt.where(AdminAuditLog.action == action.strip())
+    rows = (await db.execute(stmt)).all()
     return [
         {"id": log.id, "admin_email": email, "action": log.action,
          "target_user_id": log.target_user_id, "detail": log.detail,

@@ -63,7 +63,31 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
 
 
 async def get_current_admin(user: User = Depends(get_current_user)) -> User:
-    """管理员门卫：非 admin 一律 404，不向探测者暴露管理接口的存在。"""
+    """管理台只读门卫：admin 可全权、support 只读。其余角色一律 404，不暴露接口存在。"""
+    if user.role not in ("admin", "support"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    return user
+
+
+async def get_sudo_admin(request: Request, user: User = Depends(get_current_user)) -> User:
+    """敏感变更门卫（调积分/封禁/下架/退款）：admin 角色 + 当场重验密码。
+
+    防御目标是「token 被盗」：盗 token 者拿不到密码就改不了任何东西。
+    密码经 X-Sudo-Password 头传递（HTTPS 下与登录表单等价），并限速防爆破。
+    AUTH_MODE=dev 且账号无密码时放行（本地调试唯一豁免）。
+    """
+    import bcrypt
+
+    from app.services.rate_limit import _check
+
     if user.role != "admin":
         raise HTTPException(status_code=404, detail="Not Found")
+    if settings.auth_mode == "dev" and not user.password_hash:
+        return user
+    _check(f"sudo:{user.id}", 10, 300, detail="密码验证尝试过于频繁，请 5 分钟后再试")
+    password = request.headers.get("X-Sudo-Password", "")
+    if not password or not user.password_hash or not bcrypt.checkpw(
+        password.encode(), user.password_hash.encode()
+    ):
+        raise HTTPException(status_code=403, detail="敏感操作需要重新验证密码")
     return user

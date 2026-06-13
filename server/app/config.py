@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     # 管理员邮箱白名单（逗号分隔）：启动时把这些账号提为 admin。
     # 不提供任何接口自助升级——管理权只能由部署者通过环境变量授予。
     admin_emails: str = ""
+    # 客服只读角色：可查看管理台全部数据，不能做任何变更操作
+    support_emails: str = ""
 
     dev_user_email: str = "dev@local"
     signup_grant_credits: int = 200  # 审计 R3：降低薅羊毛收益

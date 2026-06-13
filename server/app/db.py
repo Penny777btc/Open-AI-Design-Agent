@@ -26,6 +26,8 @@ _LIGHTWEIGHT_MIGRATIONS = (
     # 管理后台：角色与封禁。旧行 role 取默认 'user'。
     ("users", "ALTER TABLE users ADD COLUMN role VARCHAR(16) DEFAULT 'user'"),
     ("users", "ALTER TABLE users ADD COLUMN disabled_at DATETIME"),
+    # 每日文档配额覆盖（管理台可调）
+    ("users", "ALTER TABLE users ADD COLUMN doc_daily_limit INTEGER"),
 )
 
 

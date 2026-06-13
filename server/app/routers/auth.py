@@ -34,7 +34,8 @@ def make_token(user_id: str) -> str:
 
 
 def _user_out(user: User, balance: int | None = None) -> dict:
-    out = {"id": user.id, "email": user.email, "name": user.name, "locale": user.locale}
+    # role 让前端判断是否显示管理入口（admin/support 之外都是 user）
+    out = {"id": user.id, "email": user.email, "name": user.name, "locale": user.locale, "role": user.role}
     if balance is not None:
         out["balance"] = balance
     return out
