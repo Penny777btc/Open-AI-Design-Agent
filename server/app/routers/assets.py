@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,11 +24,27 @@ def _serialize(asset: Asset) -> dict:
 
 
 @router.get("/sessions/{session_id}/assets")
-async def list_assets(session_id: str, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+async def list_assets(
+    session_id: str,
+    # 分页参数：单会话资产理论上可达几百张，默认 500 保持现有前端零改动，
+    # 上限同样 500 防止恶意请求一次拉取过多文件元数据。
+    limit: int = Query(default=500, ge=1, le=500, description="每页最多返回条数"),
+    offset: int = Query(default=0, ge=0, description="跳过前 N 条（用于翻页）"),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
     await _owned_session(db, user, session_id)
     rows = (
-        await db.execute(select(Asset).where(Asset.session_id == session_id).order_by(Asset.created_at))
+        await db.execute(
+            select(Asset)
+            .where(Asset.session_id == session_id)
+            # 保持原有按创建时间升序排列，新图追加在末尾，画布重建时顺序一致
+            .order_by(Asset.created_at)
+            .offset(offset)
+            .limit(limit)
+        )
     ).scalars().all()
+    # 响应仍是纯数组，不包 envelope，前端直接 .map 不受影响
     return [_serialize(a) for a in rows]
 
 

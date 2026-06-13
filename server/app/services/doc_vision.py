@@ -6,6 +6,7 @@
 失败时静默降级（返回 None），不阻塞基础解析。
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -41,21 +42,27 @@ async def classify_images(images: list[bytes]) -> list[dict] | None:
     """逐图打标，返回 [{"index": 序号(0起), "is_product": bool, "caption": 描述}]，产品图按价值降序在前；失败返回 None。"""
     if not settings.gemini_api_key or not images:
         return None
-    from io import BytesIO
 
-    from PIL import Image
+    def _build_parts() -> list[dict]:
+        # PIL 解码/缩放 16 张图是 CPU 同步操作，放线程里避免冻结事件循环
+        from io import BytesIO
 
-    parts = [{"text": CLASSIFY_PROMPT}]
-    for i, raw in enumerate(images):
-        try:
-            img = Image.open(BytesIO(raw)).convert("RGB")
-            img.thumbnail((512, 512))  # 256px 读不清标签上的品种/型号小字
-            buf = BytesIO()
-            img.save(buf, "JPEG", quality=80)
-            parts.append({"text": f"#{i}"})
-            parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}})
-        except Exception:
-            continue
+        from PIL import Image
+
+        parts = [{"text": CLASSIFY_PROMPT}]
+        for i, raw in enumerate(images):
+            try:
+                img = Image.open(BytesIO(raw)).convert("RGB")
+                img.thumbnail((512, 512))  # 256px 读不清标签上的品种/型号小字
+                buf = BytesIO()
+                img.save(buf, "JPEG", quality=80)
+                parts.append({"text": f"#{i}"})
+                parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}})
+            except Exception:
+                continue
+        return parts
+
+    parts = await asyncio.to_thread(_build_parts)
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -82,11 +89,13 @@ async def classify_images(images: list[bytes]) -> list[dict] | None:
     return None
 
 
-async def analyze(page_renders: list[tuple[int, bytes]]) -> dict | None:
-    """page_renders: [(页码从1开始, png bytes)]。返回 {summary, product_pages, doc_type} 或 None。"""
+async def analyze(page_renders: list[tuple[int, bytes]], lang: str = "zh") -> dict | None:
+    """page_renders: [(页码从1开始, png bytes)]。返回 {summary, product_pages, doc_type, products} 或 None。"""
     if not settings.gemini_api_key or not page_renders:
         return None
-    parts = [{"text": PROMPT}]
+    # summary 是喂给 planner 的内部上下文，保持中文无妨；doc_type 会原样展示给用户
+    prompt = PROMPT + ("\n\ndoc_type 字段请用英文书写。" if lang == "en" else "")
+    parts = [{"text": prompt}]
     for page_no, png in page_renders[:16]:
         parts.append({"text": f"—— 第 {page_no} 页 ——"})
         parts.append({"inline_data": {"mime_type": "image/png", "data": base64.b64encode(png).decode()}})

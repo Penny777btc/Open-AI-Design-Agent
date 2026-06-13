@@ -19,6 +19,7 @@ import toast, { Toaster } from "react-hot-toast";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import PlanVisualizer from "./components/PlanVisualizer";
+import { t } from "./i18n";
 import Link from "next/link";
 import { GoBook } from "react-icons/go";
 import { VscLayoutSidebarLeftOff } from "react-icons/vsc";
@@ -45,10 +46,10 @@ const formatDateHeader = (dateStr) => {
   if (!dateStr) return "";
   const d = new Date(dateStr);
   const now = new Date();
-  if (d.toDateString() === now.toDateString()) return "Today";
+  if (d.toDateString() === now.toDateString()) return t("today");
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
-  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  if (d.toDateString() === yesterday.toDateString()) return t("yesterday");
   return d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
 };
 
@@ -106,7 +107,7 @@ export default function CreativeCanvas({
   const [isDragging, setIsDragging] = useState(false);
 
   const [sessions, setSessions] = useState([]);
-  const [currentSessionName, setCurrentSessionName] = useState("Creative Canvas");
+  const [currentSessionName, setCurrentSessionName] = useState(t("creative_canvas"));
   const [isEditingName, setIsEditingName] = useState(false);
   const [newName, setNewName] = useState("");
   const [showSessions, setShowSessions] = useState(false);
@@ -269,9 +270,9 @@ export default function CreativeCanvas({
         fetchSessions(); // Re-fetch to find the name if not in list
       }
     } else {
-      setMessages([{ role: "assistant", content: `Hello ${user?.username || "User"} — what shall we create today?`, timestamp: new Date().toISOString() }]);
+      setMessages([{ role: "assistant", content: t("welcome", user?.username || t("user")), timestamp: new Date().toISOString() }]);
       setAssets([]);
-      setCurrentSessionName("New Session");
+      setCurrentSessionName(t("new_session"));
     }
   }, [sessionId]); // Removed sessions from deps to avoid infinite loop if fetchSessions updates sessions
 
@@ -315,7 +316,7 @@ export default function CreativeCanvas({
 
     const flat = (() => {
       switch (ev.type) {
-        case "text":         return { type: "text", content: p.content };
+        case "text":         return { type: "text", content: p.content, assets: p.assets };
         case "info":         return { type: "info", content: p.content };
         case "error":        return { type: "error", message: p.message };
         case "tool_call":    return { type: "tool_call", name: p.name, args: p.args, est_seconds: p.est_seconds };
@@ -343,7 +344,11 @@ export default function CreativeCanvas({
       
       // Update event and mark previous ones as handled if this is a result
       m.events.push({ ...flat, id: ev.id });
-      if (flat.type === "text") m.content = (m.content || "") + (flat.content || "");
+      if (flat.type === "text") {
+        m.content = (m.content || "") + (flat.content || "");
+        // 文档回执自带提取的图片清单 → 在消息内渲染可点击缩略图条（随消息持久化）
+        if (Array.isArray(flat.assets) && flat.assets.length) m.docAssets = flat.assets;
+      }
       
       // If this is an info-approval pill, hide it if we already have a plan for this job
       if (flat.type === "info" && (flat.content?.includes("approval") || flat.content?.includes("confirmation"))) {
@@ -475,7 +480,7 @@ export default function CreativeCanvas({
             if (assistantIdx >= 0 && assistantIdx < arr.length) {
               const m = { ...arr[assistantIdx], events: [...(arr[assistantIdx].events || [])] };
               m.events.push({ id: `stall-${jobId}`, type: "info", job_id: jobId,
-                content: "Still running in background — refresh this page to reconnect." });
+                content: t("still_running_bg") });
               arr[assistantIdx] = m;
             }
             return arr;
@@ -499,14 +504,14 @@ export default function CreativeCanvas({
   // 画布局部编辑：涂抹蒙版 + 指令 → 跳过审批直接执行（面板已展示消耗）
   const handleRegionEdit = async ({ assetLabel, prompt, maskDataUrl }) => {
     if (busy || sendingRef.current) {
-      toast.error("Another task is running");
+      toast.error(t("another_task_running"));
       return;
     }
     sendingRef.current = true;
     setBusy(true);
     const userMsg = {
       role: "user",
-      content: `🖌 局部编辑 ${assetLabel}: ${prompt}`,
+      content: t("region_edit_label", assetLabel, prompt),
       timestamp: new Date().toISOString(),
     };
     let aIdx = -1;
@@ -533,20 +538,20 @@ export default function CreativeCanvas({
       sendingRef.current = false;
       setBusy(false);
       if (err.response?.status === 402) {
-        toast((t) => (
+        toast((tt) => (
           <span className="flex items-center gap-3 text-[12px]">
-            {err.response?.data?.detail || "积分不足"}
-            <a href="/billing" className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider shrink-0" onClick={() => toast.dismiss(t.id)}>
-              去充值 →
+            {err.response?.data?.detail || t("insufficient_credits")}
+            <a href="/billing" className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider shrink-0" onClick={() => toast.dismiss(tt.id)}>
+              {t("top_up")}
             </a>
           </span>
         ), { duration: 8000 });
       } else {
-        toast.error(err.response?.data?.detail || "Region edit failed");
+        toast.error(err.response?.data?.detail || t("region_edit_failed"));
       }
       setMessages(prev => {
         const arr = [...prev];
-        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: "❌ Region edit failed" };
+        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: t("region_edit_failed_msg") };
         return arr;
       });
     }
@@ -555,7 +560,7 @@ export default function CreativeCanvas({
   const handleJobAction = async (jobId, action) => {
     try {
       await axios.post(`${API}/jobs/${jobId}/${action}`, {}, { headers: getHeaders() });
-      toast.success(`Job ${action}ed`);
+      toast.success(t("job_actioned", action));
       
       // Hide the approval card in the UI
       setMessages(prev => prev.map(m => ({
@@ -573,20 +578,20 @@ export default function CreativeCanvas({
     } catch (err) {
       // 审计 U2：积分不足时给充值直达入口，而不是只报错
       if (err.response?.status === 402) {
-        toast((t) => (
+        toast((tt) => (
           <span className="flex items-center gap-3 text-[12px]">
-            {err.response?.data?.detail || "积分不足"}
+            {err.response?.data?.detail || t("insufficient_credits")}
             <a
               href="/billing"
               className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider shrink-0"
-              onClick={() => toast.dismiss(t.id)}
+              onClick={() => toast.dismiss(tt.id)}
             >
-              去充值 →
+              {t("top_up")}
             </a>
           </span>
         ), { duration: 8000 });
       } else {
-        toast.error(err.response?.data?.detail || `Failed to ${action} job`);
+        toast.error(err.response?.data?.detail || t("job_action_failed", action));
       }
     }
   };
@@ -612,10 +617,10 @@ export default function CreativeCanvas({
         setMessages(cleaned);
         checkActiveJobs(cleaned);
       } else {
-        setMessages([{ role: "assistant", content: `Session ready — what shall we create?`, timestamp: new Date().toISOString() }]);
+        setMessages([{ role: "assistant", content: t("session_ready"), timestamp: new Date().toISOString() }]);
       }
     } catch {
-      setMessages([{ role: "assistant", content: `Session ready — what shall we create?`, timestamp: new Date().toISOString() }]);
+      setMessages([{ role: "assistant", content: t("session_ready"), timestamp: new Date().toISOString() }]);
     }
   };
 
@@ -671,7 +676,7 @@ export default function CreativeCanvas({
   // 参考文档（PDF/DOCX）：上传秒回 job，解析进度走聊天事件流（与生图一致）
   const processReferenceDoc = async (file) => {
     if (busy || sendingRef.current) {
-      toast.error("Another task is running");
+      toast.error(t("another_task_running"));
       return;
     }
     setUploading(true);
@@ -679,7 +684,7 @@ export default function CreativeCanvas({
     sendingRef.current = true;
     const userMsg = {
       role: "user",
-      content: `📄 上传参考文档「${file.name}」`,
+      content: t("doc_upload_label", file.name),
       timestamp: new Date().toISOString(),
     };
     let aIdx = -1;
@@ -691,6 +696,8 @@ export default function CreativeCanvas({
       const activeSessionId = await ensureSession();
       const formData = new FormData();
       formData.append("file", file);
+      // 回执语言跟随站点语言设置（LanguageContext 持久化在 localStorage）
+      formData.append("lang", (typeof localStorage !== "undefined" && localStorage.getItem("lang")) || "zh");
       const { data } = await axios.post(
         `/api/v1/sessions/${activeSessionId}/reference-docs`,
         formData,
@@ -701,15 +708,24 @@ export default function CreativeCanvas({
       );
       setUploading(false);
       sendingRef.current = false;
+      if (data.duplicate) {
+        // 同一文档已解析过：不再烧一遍视觉理解，直接告知
+        setMessages(prev => {
+          const arr = [...prev];
+          if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: t("doc_duplicate", file.name) };
+          return arr;
+        });
+        return;
+      }
       setBusy(true);
       await resumePolling(data.job_id, aIdx);
     } catch (err) {
       sendingRef.current = false;
       setBusy(false);
-      toast.error(err.response?.data?.detail || "文档上传失败");
+      toast.error(err.response?.data?.detail || t("doc_upload_failed"));
       setMessages(prev => {
         const arr = [...prev];
-        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: "❌ 文档上传失败" };
+        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: t("doc_upload_failed_msg") };
         return arr;
       });
     } finally {
@@ -729,7 +745,7 @@ export default function CreativeCanvas({
     // 媒体类型校验：其他格式会以 broken image 摧毁画布
     const okType = /^(image|video|audio)\//.test(file.type || "");
     if (!okType) {
-      toast.error(`暂不支持「${docExt}」格式，请上传图片、视频、音频或 PDF/Word 文档`);
+      toast.error(t("unsupported_format", docExt));
       return;
     }
 
@@ -785,10 +801,10 @@ export default function CreativeCanvas({
         asset_label: registered.asset_label, url: uploadedUrl, kind,
         source_tool: "upload", model: null, prompt: null,
       }]);
-      toast.success(`Uploaded as ${registered.asset_label}`);
+      toast.success(t("uploaded_as", registered.asset_label));
     } catch (err) {
       console.error("Upload failed", err);
-      toast.error("Upload failed");
+      toast.error(t("upload_failed"));
     } finally {
       setUploading(false);
       setUploadProgress(0);
@@ -836,7 +852,7 @@ export default function CreativeCanvas({
     try {
       activeSessionId = await ensureSession();
     } catch (err) {
-      toast.error("Failed to establish session");
+      toast.error(t("establish_session_failed"));
       return;
     }
 
@@ -1037,9 +1053,9 @@ export default function CreativeCanvas({
       setIsEditingName(false);
       setEditingSessionId(null);
       fetchSessions();
-      toast.success("Session renamed");
+      toast.success(t("session_renamed"));
     } catch {
-      toast.error("Failed to rename session");
+      toast.error(t("session_rename_failed"));
       setIsEditingName(false);
       setEditingSessionId(null);
     }
@@ -1049,22 +1065,22 @@ export default function CreativeCanvas({
     // 软删除 + toast 撤销（替代原生 confirm 弹窗）
     try {
       await axios.delete(`${API}/sessions/${id}`, { headers: getHeaders() });
-      toast((t) => (
+      toast((tt) => (
         <span className="flex items-center gap-3 text-[12px]">
-          Session deleted
+          {t("session_deleted")}
           <button
             className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider"
             onClick={async () => {
-              toast.dismiss(t.id);
+              toast.dismiss(tt.id);
               try {
                 await axios.post(`${API}/sessions/${id}/restore`, {}, { headers: getHeaders() });
                 fetchSessions();
               } catch {
-                toast.error("Restore failed");
+                toast.error(t("restore_failed"));
               }
             }}
           >
-            Undo
+            {t("undo")}
           </button>
         </span>
       ), { duration: 5000 });
@@ -1077,7 +1093,7 @@ export default function CreativeCanvas({
         }
       }
     } catch (err) {
-      toast.error("Failed to delete session");
+      toast.error(t("session_delete_failed"));
     }
   };
 
@@ -1127,7 +1143,7 @@ export default function CreativeCanvas({
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
-        toast.success("Copied to clipboard");
+        toast.success(t("copied"));
       } else {
         const textArea = document.createElement("textarea");
         textArea.value = text;
@@ -1135,14 +1151,14 @@ export default function CreativeCanvas({
         textArea.select();
         try {
           document.execCommand('copy');
-          toast.success("Copied to clipboard");
+          toast.success(t("copied"));
         } catch (err) {
-          toast.error("Failed to copy");
+          toast.error(t("copy_failed"));
         }
         document.body.removeChild(textArea);
       }
     } catch (err) {
-      toast.error("Failed to copy");
+      toast.error(t("copy_failed"));
     }
   };
 
@@ -1166,29 +1182,29 @@ export default function CreativeCanvas({
               <Link 
                 href="/dashboard"
                 className={`p-2 hover:bg-bg-page rounded text-secondary-text hover:text-primary transition-colors`}
-                title="Go Back"
+                title={t("go_back")}
               >
                 <FiArrowLeft size={16} />
               </Link>
               <Link
                 href="/dashboard"
                 className="flex items-center flex-shrink-0 transition-transform duration-300 hover:scale-[1.02] active:scale-95"
-                aria-label="Home"
+                aria-label={t("home")}
               >
-                <span className="font-bold text-lg">Picsmith Studio</span>
+                <span className="font-bold text-lg">{t("studio_brand")}</span>
               </Link>
             </div>
             <button 
               onClick={() => setShowLeftSidebar(!showLeftSidebar)}
               className={`p-1.5 rounded transition-colors ${showLeftSidebar ? "bg-primary/10 text-primary" : "hover:bg-bg-card text-secondary-text hover:text-primary"}`}
-              title="Toggle Sessions"
+              title={t("toggle_sessions")}
             >
               <VscLayoutSidebarLeftOff size={16} />
             </button>
           </div>
           <div className="flex-1 overflow-y-auto scrollbar-subtle">
             {sessions.length === 0 ? (
-              <div className="px-4 py-8 text-center text-secondary-text italic text-[11px]">No previous sessions</div>
+              <div className="px-4 py-8 text-center text-secondary-text italic text-[11px]">{t("no_previous_sessions")}</div>
             ) : (
               sessions.map((s) => (
                 <div
@@ -1233,7 +1249,7 @@ export default function CreativeCanvas({
                           setEditingSessionName(s.name);
                         }}
                         className="p-1.5 hover:bg-bg-page rounded text-secondary-text hover:text-primary transition-colors"
-                        title="Rename"
+                        title={t("rename")}
                       >
                         <FiEdit2 size={13} />
                       </button>
@@ -1243,7 +1259,7 @@ export default function CreativeCanvas({
                           deleteSession(s.id);
                         }}
                         className="p-1.5 hover:bg-red-500/10 rounded text-secondary-text hover:text-red-500 transition-colors"
-                        title="Delete"
+                        title={t("delete")}
                       >
                         <HiOutlineTrash size={14} />
                       </button>
@@ -1255,7 +1271,7 @@ export default function CreativeCanvas({
           </div>
           <div className="p-3 border-t border-divider bg-bg-page/30">
             <div className="flex items-center justify-between text-[10px] text-secondary-text font-medium px-1">
-              <span>Total Sessions</span>
+              <span>{t("total_sessions")}</span>
               <span>{sessions.length}</span>
             </div>
           </div>
@@ -1268,7 +1284,7 @@ export default function CreativeCanvas({
                 <button
                   onClick={() => setShowLeftSidebar(!showLeftSidebar)}
                   className={`p-2 hover:bg-bg-card rounded transition-colors ${showLeftSidebar ? "text-primary" : "hidden"}`}
-                  title="Toggle Sessions"
+                  title={t("toggle_sessions")}
                 >
                   <VscLayoutSidebarLeftOff size={18} />
                 </button>
@@ -1278,7 +1294,7 @@ export default function CreativeCanvas({
                 <Link
                   href="/dashboard"
                   className={`p-1.5 hover:bg-bg-card rounded text-secondary-text hover:text-primary transition-colors ${!showLeftSidebar && "hidden"}`}
-                  title="Go Back"
+                  title={t("go_back")}
                 >
                   <FiArrowLeft size={16} />
                 </Link>
@@ -1288,7 +1304,7 @@ export default function CreativeCanvas({
                 <button
                   onClick={() => setActiveEmbedSession(null)}
                   className="p-1.5 hover:bg-bg-card rounded text-secondary-text hover:text-primary transition-colors"
-                  title="New chat"
+                  title={t("new_chat")}
                 >
                   <FiPlus size={16} />
                 </button>
@@ -1327,7 +1343,7 @@ export default function CreativeCanvas({
                   className="w-8 h-8 rounded-full bg-primary/10 border border-primary flex items-center justify-center text-primary shadow-sm hover:bg-primary/20 transition-all overflow-hidden"
                 >
                   {user?.profile_photo ? (
-                    <img src={user.profile_photo} alt="Profile" className="w-full h-full object-cover" />
+                    <img src={user.profile_photo} alt={t("profile")} className="w-full h-full object-cover" />
                   ) : (
                     <span className="text-[10px] font-bold">
                       {(user?.username || "U").substring(0, 2).toUpperCase()}
@@ -1338,7 +1354,7 @@ export default function CreativeCanvas({
                   <button
                     onClick={handleToggleSidebar}
                     className="w-8 h-8 rounded-full rotate-270 hover:bg-bg-page hover:text-primary-text transition-all flex items-center justify-center text-secondary-text z-[60]"
-                    title="Open Chat"
+                    title={t("open_chat")}
                   >
                     <HiOutlineArrowUpTray size={18} />
                   </button>
@@ -1352,15 +1368,15 @@ export default function CreativeCanvas({
                   <div className="px-4 py-3 border-b border-divider flex flex-col">
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-sm font-bold text-primary-text truncate">
-                        {user?.username || "User"}
+                        {user?.username || t("user")}
                       </span>
                       {user?.plan === "pro" ? (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-primary text-black uppercase tracking-wider">
-                          Pro
+                          {t("pro")}
                         </span>
                       ) : (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-orange-500/10 text-orange-500 border border-orange-500 uppercase tracking-wider">
-                          Bronze
+                          {t("bronze")}
                         </span>
                       )}
                     </div>
@@ -1368,7 +1384,7 @@ export default function CreativeCanvas({
                       {user?.email}
                     </span>
                     <div className="mt-2 text-[13px] font-bold text-primary">
-                      {userBalanceLabel ?? `$ ${user?.balance || "0.00"}`} <span className="font-normal text-secondary-text">available</span>
+                      {userBalanceLabel ?? `$ ${user?.balance || "0.00"}`} <span className="font-normal text-secondary-text">{t("available")}</span>
                     </div>
                   </div>
                   
@@ -1377,7 +1393,7 @@ export default function CreativeCanvas({
                       href="mailto:support@vadoo.tv"
                       className="w-full flex items-center gap-3 px-4 py-2 hover:bg-bg-page transition-colors text-[13px] font-semibold text-primary-text"
                     >
-                      Support
+                      {t("support")}
                     </a>
                   </div>
                   <div className="h-px bg-divider w-full my-1" />
@@ -1393,7 +1409,7 @@ export default function CreativeCanvas({
                         <span className="text-secondary-text">
                           {resolvedTheme === "dark" ? <FiSun size={15} /> : <FiMoon size={15} />}
                         </span>
-                        Dark Mode
+                        {t("dark_mode")}
                       </div>
                       <div className={`w-8 h-4 rounded-full relative transition-colors ${resolvedTheme === "dark" ? "bg-primary" : "bg-bg-card-hover"}`}>
                         <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-black dark:bg-white transition-all ${resolvedTheme === "dark" ? "left-4.5" : "left-0.5"}`} />
@@ -1453,7 +1469,7 @@ export default function CreativeCanvas({
               <h2 className="font-bold text-[13px] text-primary-text uppercase tracking-widest leading-none flex items-center gap-2">
                 <RiSparklingLine className="text-primary" /> Picsmith
               </h2>
-              <span className="text-[10px] text-secondary-text mt-1.5">Auto Model • Multi-tool Access</span>
+              <span className="text-[10px] text-secondary-text mt-1.5">{t("auto_model_access")}</span>
             </div>
             <div className="flex items-center gap-1">
               {sessionId && (
@@ -1463,7 +1479,7 @@ export default function CreativeCanvas({
                     else router.push("/canvas");
                   }}
                   className="p-1.5 hover:bg-bg-page hover:text-primary-text transition-colors rounded text-secondary-text"
-                  title="New Session"
+                  title={t("new_session")}
                 >
                   <FiPlus size={16} />
                 </button>
@@ -1471,7 +1487,7 @@ export default function CreativeCanvas({
               <button
                 onClick={handleToggleSidebar}
                 className={`w-8 h-8 rounded-full transition-all flex items-center justify-center shrink-0 ${showChat ? "bg-primary/10 text-primary" : "hover:bg-bg-page text-secondary-text hover:text-primary"}`}
-                title={showChat ? "Hide Chat" : "Open Chat"}
+                title={showChat ? t("hide_chat") : t("open_chat")}
               >
                 <FiLayout size={16} />
               </button>
@@ -1501,7 +1517,7 @@ export default function CreativeCanvas({
                     <div className="flex items-center gap-2">
                       {msg.role === "assistant" && (
                         <div className="flex items-center gap-1.5 text-[10px] font-medium text-secondary-text ml-1">
-                          <RiRobot2Line /> Agent
+                          <RiRobot2Line /> {t("agent")}
                         </div>
                       )}
                       <div className={`flex items-center justify-end gap-2 text-[9px] text-secondary-text`}>
@@ -1527,6 +1543,31 @@ export default function CreativeCanvas({
                                 >
                                   {msg.content}
                                 </ReactMarkdown>
+                                {/* 文档提取的图片：缩略图条让用户立刻看到 AI 拿到了什么，点击即插入引用 */}
+                                {msg.docAssets?.length > 0 && (
+                                  <div className="not-prose mt-2 flex gap-1.5 overflow-x-auto pb-1 scrollbar-subtle">
+                                    {msg.docAssets.map(da => (
+                                      <button
+                                        key={da.label}
+                                        type="button"
+                                        onClick={() => {
+                                          setInput(prev => prev + (prev ? " " : "") + da.label);
+                                          textareaRef.current?.focus();
+                                        }}
+                                        title={da.caption || da.label}
+                                        className="group relative flex-shrink-0 w-16 h-16 rounded border border-divider overflow-hidden bg-black/20 hover:border-primary transition-all"
+                                      >
+                                        <img src={da.url} alt={da.label} className="w-full h-full object-cover" />
+                                        {da.is_product && (
+                                          <span className="absolute top-0.5 left-0.5 px-1 rounded-sm bg-primary/90 text-black text-[8px] font-bold leading-tight">P</span>
+                                        )}
+                                        <span className="absolute bottom-0 inset-x-0 bg-black/70 text-white text-[8px] px-0.5 truncate opacity-0 group-hover:opacity-100 transition-opacity">
+                                          {da.caption || da.label}
+                                        </span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
                             ) : (
                               <div className="flex flex-col gap-2">
@@ -1578,7 +1619,7 @@ export default function CreativeCanvas({
                           onClick={() => copyToClipboard(msg.content)}
                           className={`absolute top-0 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded bg-bg-card border border-divider shadow-md hover:text-primary z-10
                             ${msg.role === "user" ? "right-full mr-2" : "left-full ml-2"}`}
-                          title="Copy Message"
+                          title={t("copy_message")}
                         >
                           <FiCopy size={12} />
                         </button>
@@ -1592,11 +1633,11 @@ export default function CreativeCanvas({
             {/* 空会话快捷示例：三个垂直场景一键开始 */}
             {!busy && messages.length === 1 && messages[0]?.role === "assistant" && (
               <div className="flex flex-col gap-2 px-1 animate-fade-in-up">
-                <div className="micro-label">QUICK START</div>
+                <div className="micro-label">{t("quick_start")}</div>
                 {[
-                  { label: "🛍️ E-commerce hero image", prompt: "为一款保温杯生成 2 张电商主图，白底，突出产品质感" },
-                  { label: "⭐ Logo design", prompt: "为一家手冲咖啡店设计 3 个 logo 方案，极简风格" },
-                  { label: "📱 Social media cover", prompt: "做 2 张小红书封面图，主题是居家收纳技巧，明亮治愈风" },
+                  { label: t("qs_ecommerce"), prompt: t("qs_ecommerce_prompt") },
+                  { label: t("qs_logo"), prompt: t("qs_logo_prompt") },
+                  { label: t("qs_social"), prompt: t("qs_social_prompt") },
                 ].map((s) => (
                   <button
                     key={s.label}
@@ -1645,11 +1686,11 @@ export default function CreativeCanvas({
                 <div className="absolute bottom-full left-0 mb-2 flex items-end gap-3 z-50">
                   <div className="w-72 bg-bg-card border border-divider rounded shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
                     <div className="p-2 border-b border-divider text-[10px] font-bold text-secondary-text uppercase tracking-widest bg-bg-page/50">
-                      Mentions
+                      {t("mentions")}
                     </div>
                     <div className="max-h-60 overflow-y-auto scrollbar-subtle py-1">
                       {filteredAssets.length > 0 && (
-                        <div className="px-3 py-1.5 mt-1 text-[9px] font-bold text-green-500 uppercase opacity-60">Assets</div>
+                        <div className="px-3 py-1.5 mt-1 text-[9px] font-bold text-green-500 uppercase opacity-60">{t("assets")}</div>
                       )}
                       <div className="grid grid-cols-2 gap-2">
                         {filteredAssets.map(asset => (
@@ -1660,7 +1701,7 @@ export default function CreativeCanvas({
                           >
                             {asset.kind === "image" && <img src={asset.url} className="w-7 h-7 rounded border border-divider object-cover shadow-sm" />}
                             {asset.kind === "video" && <video src={asset.url} className="w-7 h-7 rounded border border-divider object-cover shadow-sm" />}
-                            {asset.kind === "audio" && <div className="w-7 h-7 rounded flex items-center justify-center bg-primary/5 text-primary text-[8px] font-bold uppercase tracking-tight">Audio</div>}
+                            {asset.kind === "audio" && <div className="w-7 h-7 rounded flex items-center justify-center bg-primary/5 text-primary text-[8px] font-bold uppercase tracking-tight">{t("audio")}</div>}
                             <div className="flex flex-col">
                               <span className="text-xs font-medium text-primary-text">{asset.asset_label}</span>
                               <span className="text-[9px] text-secondary-text truncate max-w-[200px]">{asset.kind}</span>
@@ -1669,7 +1710,7 @@ export default function CreativeCanvas({
                         ))}
                       </div>
                       {filteredSkills.length > 0 && (
-                        <div className="px-3 py-1.5 text-[9px] font-bold text-primary uppercase opacity-60">Skills</div>
+                        <div className="px-3 py-1.5 text-[9px] font-bold text-primary uppercase opacity-60">{t("skills")}</div>
                       )}
                       {filteredSkills.map(skill => (
                         <button
@@ -1682,7 +1723,7 @@ export default function CreativeCanvas({
                         </button>
                       ))}                      
                       {filteredSkills.length === 0 && filteredAssets.length === 0 && (
-                        <div className="px-4 py-8 text-center text-secondary-text text-xs italic opacity-50">No matches found</div>
+                        <div className="px-4 py-8 text-center text-secondary-text text-xs italic opacity-50">{t("no_matches")}</div>
                       )}
                     </div>
                   </div>
@@ -1714,7 +1755,7 @@ export default function CreativeCanvas({
                 }}
                 onKeyDown={handleKey}
                 onInput={e => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px"; }}
-                placeholder={activeSkill ? `Oh, Let us create ${activeSkill.name.toLowerCase()}s, start with your ${activeSkill.inputs?.[0]?.replace(/_/g, ' ') || 'idea'}?` : "Start with an idea or mention assets using @..."}
+                placeholder={activeSkill ? t("skill_placeholder", activeSkill.name.toLowerCase(), activeSkill.inputs?.[0]?.replace(/_/g, ' ') || t("idea")) : t("input_placeholder")}
                 className="w-full bg-transparent px-3 py-3 text-[13px] resize-none focus:outline-none min-h-[50px] max-h-[120px] scrollbar-subtle"
                 rows={1}
                 disabled={busy}
@@ -1778,12 +1819,12 @@ export default function CreativeCanvas({
                       <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
                         <FiTerminal size={32} />
                       </div>
-                      <span className="text-xs font-bold text-secondary-text uppercase tracking-widest">{hoveredAsset.kind} Preview</span>
+                      <span className="text-xs font-bold text-secondary-text uppercase tracking-widest">{t("asset_preview", hoveredAsset.kind)}</span>
                     </div>
                   )}
                   <div className="absolute inset-x-0 bottom-0 p-5 bg-gradient-to-t from-black/90 via-black/40 to-transparent">
                     <div className="text-sm font-bold text-white tracking-tight">{hoveredAsset.asset_label}</div>
-                    <div className="text-[10px] text-white/70 mt-1 uppercase tracking-widest font-bold">{hoveredAsset.kind} • Creative Asset</div>
+                    <div className="text-[10px] text-white/70 mt-1 uppercase tracking-widest font-bold">{hoveredAsset.kind} • {t("creative_asset")}</div>
                   </div>
                 </div>
               )}
@@ -1802,7 +1843,7 @@ export default function CreativeCanvas({
                     onClick={() => fileInputRef.current?.click()}
                     disabled={uploading}
                     className="p-1.5 rounded hover:bg-bg-page text-secondary-text transition-all"
-                    title="Upload Image"
+                    title={t("upload_image")}
                   >
                     <FiUpload size={16} />
                   </button>
@@ -1821,7 +1862,7 @@ export default function CreativeCanvas({
                       onClick={() => setShowSkillsMenu(!showSkillsMenu)}
                       className={`p-1.5 rounded hover:bg-bg-page transition-all flex items-center gap-1.5
                         ${showSkillsMenu ? "bg-bg-page text-primary shadow-inner" : "text-secondary-text"}`}
-                      title="Agent Skills"
+                      title={t("agent_skills")}
                     >
                       <GoBook size={16} />
                     </button>
@@ -1830,7 +1871,7 @@ export default function CreativeCanvas({
                       <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-[320px] bg-bg-card border border-divider rounded shadow-2xl z-50 overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
                         <div className="px-4 py-3 border-b border-divider flex items-center justify-between bg-bg-page/30">
                           <div>
-                            <h3 className="text-[12px] font-bold text-primary-text uppercase tracking-tight">Expert Skills</h3>
+                            <h3 className="text-[12px] font-bold text-primary-text uppercase tracking-tight">{t("expert_skills")}</h3>
                           </div>
                         </div>
                         <div className="max-h-80 overflow-y-auto p-1.5 scrollbar-subtle">
@@ -1851,7 +1892,7 @@ export default function CreativeCanvas({
                                 <div className={`font-bold capitalize text-[12px] transition-colors ${activeSkill?.name === skill.name ? "text-primary" : "text-primary-text group-hover:text-primary"}`}>
                                   {skill.name}
                                 </div>
-                                <div className="text-[10px] text-secondary-text mt-0.5 line-clamp-1 opacity-70 italic">{skill.description || "Specialized workflow"}</div>
+                                <div className="text-[10px] text-secondary-text mt-0.5 line-clamp-1 opacity-70 italic">{skill.description || t("specialized_workflow")}</div>
                               </div>
                             </button>
                           ))}
@@ -1861,7 +1902,7 @@ export default function CreativeCanvas({
                             onClick={() => setShowSkillsMenu(false)}
                             className="text-[10px] font-bold text-secondary-text hover:text-primary-text transition-colors"
                           >
-                            Dismiss
+                            {t("dismiss")}
                           </button>
                         </div>
                       </div>
@@ -1882,7 +1923,7 @@ export default function CreativeCanvas({
                       onClick={() => setShowAssetsMenu(!showAssetsMenu)}
                       className={`p-1.5 rounded hover:bg-bg-page transition-all flex items-center gap-1.5
                         ${showAssetsMenu ? "bg-bg-page text-primary shadow-inner" : "text-secondary-text"}`}
-                      title="Session Assets"
+                      title={t("session_assets")}
                     >
                       <FiImage size={16} />
                     </button>
@@ -1890,12 +1931,12 @@ export default function CreativeCanvas({
                     {showAssetsMenu && (
                       <div className="absolute bottom-full right-0 mb-2 w-72 bg-bg-card border border-divider rounded shadow-2xl z-30 animate-fade-in-up">
                         <div className="p-2 mb-2 border-b border-divider text-[10px] font-bold text-secondary-text flex items-center justify-between">
-                          <span>Session Assets</span>
-                          <span className="opacity-50">{assets.length} items</span>
+                          <span>{t("session_assets")}</span>
+                          <span className="opacity-50">{t("items", assets.length)}</span>
                         </div>
                         <div className="max-h-80 overflow-y-auto scrollbar-subtle p-2 grid grid-cols-3 gap-2">
                           {assets.length === 0 ? (
-                            <div className="col-span-3 py-8 text-center text-secondary-text text-[10px] italic">No assets generated yet</div>
+                            <div className="col-span-3 py-8 text-center text-secondary-text text-[10px] italic">{t("no_assets_yet")}</div>
                           ) : (
                             assets.map((asset, i) => (
                               <div 
@@ -1910,10 +1951,14 @@ export default function CreativeCanvas({
                               >
                                 {asset.kind === "image" && <img src={asset.url} className="w-full h-full object-cover" />}
                                 {asset.kind === "video" && <video src={asset.url} className="w-full h-full object-cover" />}
-                                {asset.kind === "audio" && <div className="w-full h-full flex items-center justify-center bg-primary/5 text-primary text-[8px] font-bold uppercase tracking-tight">Audio</div>}
+                                {asset.kind === "audio" && <div className="w-full h-full flex items-center justify-center bg-primary/5 text-primary text-[8px] font-bold uppercase tracking-tight">{t("audio")}</div>}
                                 
                                 <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-1 text-center">
                                   <span className="text-[10px] text-white font-bold truncate w-full mb-1">{asset.asset_label}</span>
+                                  {/* AI 识别的图片描述（存在 prompt 字段），不展示就浪费了 */}
+                                  {asset.prompt && (
+                                    <span className="text-[8px] text-white/80 leading-tight line-clamp-3 w-full">{asset.prompt}</span>
+                                  )}
                                 </div>
                               </div>
                             ))
@@ -1982,7 +2027,7 @@ function EventPill({ event }) {
               ))}
             </div>
           )}
-          <div className="text-[10px] text-secondary-text mt-1.5 italic">Reply to continue.</div>
+          <div className="text-[10px] text-secondary-text mt-1.5 italic">{t("reply_to_continue")}</div>
         </div>
       );
     }
@@ -1996,8 +2041,8 @@ function EventPill({ event }) {
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <span className="font-semibold">
             {ok
-              ? (event.asset ? `Generated ${event.asset.kind}` : `Done`)
-              : `Failed`}
+              ? (event.asset ? t("generated", event.asset.kind) : t("done"))
+              : t("failed")}
           </span>
           {ok && model && (
             <span className="text-[9px] font-bold uppercase tracking-tight opacity-80">
@@ -2024,13 +2069,13 @@ function EventPill({ event }) {
           onClick={() => event.onAction?.(event.job_id, "approve")}
           className="flex-1 py-2 rounded bg-primary text-black text-[12px] font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2"
         >
-          <FiCheck /> Approve & Execute
+          <FiCheck /> {t("approve_execute")}
         </button>
-        <button 
+        <button
           onClick={() => event.onAction?.(event.job_id, "reject")}
           className="px-4 py-2 rounded bg-bg-card border border-divider text-secondary-text text-[12px] hover:bg-bg-page transition-all"
         >
-          Cancel
+          {t("cancel")}
         </button>
       </div>
     </div>
@@ -2060,13 +2105,13 @@ function EventPill({ event }) {
               onClick={() => event.onAction?.(event.job_id, "approve")}
               className="px-2 py-1 rounded bg-primary text-black text-[10px] font-bold hover:brightness-110 transition-all"
             >
-              Approve
+              {t("approve")}
             </button>
-            <button 
+            <button
               onClick={() => event.onAction?.(event.job_id, "reject")}
               className="px-2 py-1 rounded bg-bg-card border border-divider text-secondary-text text-[10px] hover:bg-bg-page transition-all"
             >
-              Reject
+              {t("reject")}
             </button>
           </div>
         )}

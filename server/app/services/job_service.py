@@ -92,6 +92,7 @@ async def _run_job(job_id: str) -> None:
                 await doc_ingest.ingest(
                     job_id, session_id, user_id,
                     job_input.get("filename", "document"), job_input.get("doc_key"), emit,
+                    lang=job_input.get("lang", "zh"), sha256=job_input.get("sha256"),
                 )
                 await _set_status(job_id, "done")
             except ValueError as exc:

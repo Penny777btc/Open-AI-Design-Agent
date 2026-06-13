@@ -145,6 +145,9 @@ class ReferenceDoc(Base):
     filename: Mapped[str] = mapped_column(String(255))
     extracted_text: Mapped[str] = mapped_column(Text, default="")
     image_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 文件内容指纹：同一 session 重复上传同一文档时跳过解析（省两次 Gemini 视觉调用）。
+    # 可空——旧数据及迁移补列的行没有指纹，按「未去重」对待。
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

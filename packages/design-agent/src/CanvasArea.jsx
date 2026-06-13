@@ -20,6 +20,7 @@ import {
   Arc,
 } from "react-konva";
 import toast from "react-hot-toast";
+import { t } from "./i18n";
 
 const MenuButton = ({ label, shortcut, onClick, theme }) => (
   <button
@@ -141,7 +142,7 @@ const URLImage = ({
           />
           {/* Asset Type */}
           <KonvaText
-            text="Image"
+            text={t("image")}
             fontSize={11}
             fontFamily="sans-serif"
             fill="#3898ec"
@@ -322,7 +323,7 @@ const URLVideo = ({
           scaleY={1 / (shapeRef.current?.getStage()?.scaleY() || 1)}
         >
           <KonvaText
-            text="Video"
+            text={t("video")}
             fontSize={11}
             fontFamily="sans-serif"
             fill="#3898ec"
@@ -448,9 +449,7 @@ const URLAudio = ({
     } else {
       audio.play().catch((err) => {
         console.error("Audio playback failed:", err);
-        toast.error(
-          "Playback failed. Please try clicking the play button again.",
-        );
+        toast.error(t("playback_failed"));
       });
     }
   };
@@ -513,7 +512,7 @@ const URLAudio = ({
         <KonvaText
           x={45}
           y={15}
-          text={audioObj.label || "Audio Asset"}
+          text={audioObj.label || t("audio_asset")}
           fontSize={12}
           fontFamily="sans-serif"
           fontStyle="bold"
@@ -710,8 +709,8 @@ const LoaderNode = ({ task, isSelected, onSelect, onChange, theme }) => {
           y={45}
           text={
             task.status === "completed"
-              ? `Rendering...\n\n${task.modelName}`
-              : `Generating...\n\n${task.modelName}`
+              ? `${t("rendering")}\n\n${task.modelName}`
+              : `${t("generating")}\n\n${task.modelName}`
           }
           fontSize={14}
           fontFamily="sans-serif"
@@ -723,7 +722,7 @@ const LoaderNode = ({ task, isSelected, onSelect, onChange, theme }) => {
         <KonvaText
           x={10}
           y={110}
-          text="(Move to change spawn location)"
+          text={t("move_to_change_spawn")}
           fontSize={10}
           fill="#3898ec"
           width={220}
@@ -841,7 +840,7 @@ const CanvasArea = forwardRef(
         return false;
       });
       if (!intersects) {
-        toast.error("请在选中的图片范围内涂抹");
+        toast.error(t("paint_within_image"));
         return;
       }
       const nw = img.image?.naturalWidth || 1024;
@@ -994,9 +993,7 @@ const CanvasArea = forwardRef(
           document.body.removeChild(link);
         } catch (err) {
           console.error("Export failed:", err);
-          toast.error(
-            "Export failed: This image might be from an external source without CORS permission.",
-          );
+          toast.error(t("export_failed"));
         }
       }
       setContextMenu(null);
@@ -1009,7 +1006,7 @@ const CanvasArea = forwardRef(
       const item = [...images, ...videos, ...audios].find((i) => i.id === id);
       if (item && item.src) {
         try {
-          toast.loading("Preparing download...", { id: "download" });
+          toast.loading(t("preparing_download"), { id: "download" });
           const response = await fetch(item.src);
           const blob = await response.blob();
           const url = window.URL.createObjectURL(blob);
@@ -1025,10 +1022,10 @@ const CanvasArea = forwardRef(
           document.body.removeChild(link);
           window.URL.revokeObjectURL(url);
           
-          toast.success("Download started", { id: "download" });
+          toast.success(t("download_started"), { id: "download" });
         } catch (err) {
           console.error("Download failed:", err);
-          toast.error("Download failed. CORS might be blocking direct download.", { id: "download" });
+          toast.error(t("download_failed"), { id: "download" });
           // Fallback to old method if fetch fails
           const link = document.createElement("a");
           link.href = item.src;
@@ -1037,7 +1034,7 @@ const CanvasArea = forwardRef(
           link.click();
         }
       } else {
-        toast.error("Source URL not found");
+        toast.error(t("source_url_not_found"));
       }
       setContextMenu(null);
     };
@@ -1047,18 +1044,18 @@ const CanvasArea = forwardRef(
       setVideos((prev) => prev.map((v) => ({ ...v, hidden: false })));
       setAudios((prev) => prev.map((a) => ({ ...a, hidden: false })));
       setTexts((prev) => prev.map((t) => ({ ...t, hidden: false })));
-      toast.success("All items are now visible");
+      toast.success(t("all_items_visible"));
       setContextMenu(null);
     };
 
     const handleClearCanvas = () => {
-      if (window.confirm("Are you sure you want to clear the entire canvas?")) {
+      if (window.confirm(t("confirm_clear_canvas"))) {
         setImages([]);
         setVideos([]);
         setAudios([]);
         setTexts([]);
         setSelectedId(null);
-        toast.success("Canvas cleared");
+        toast.success(t("canvas_cleared"));
       }
       setContextMenu(null);
     };
@@ -1075,9 +1072,7 @@ const CanvasArea = forwardRef(
         document.body.removeChild(link);
       } catch (err) {
         console.error("Canvas export failed:", err);
-        toast.error(
-          "Canvas export failed: One or more images on the canvas are from an external source without CORS permission.",
-        );
+        toast.error(t("canvas_export_failed"));
       }
       setContextMenu(null);
     };
@@ -1147,7 +1142,7 @@ const CanvasArea = forwardRef(
           // 加载失败的图片绝不能上画布：broken 状态的 HTMLImageElement
           // 会让 Konva drawImage 抛 InvalidStateError 并进入崩溃循环
           console.error("Failed to load image after retry:", src);
-          toast.error("素材加载失败，已跳过（仅支持图片格式）");
+          toast.error(t("image_load_failed"));
           if (typeof onLoaded === "function") onLoaded();
         }
       };
@@ -1282,7 +1277,7 @@ const CanvasArea = forwardRef(
           src,
           x: targetX,
           y: targetY,
-          label: label || "Audio Asset",
+          label: label || t("audio_asset"),
           rotation: 0,
         },
       ]);
@@ -1300,7 +1295,7 @@ const CanvasArea = forwardRef(
         ...prev,
         {
           id,
-          text: text || "Double-click to Edit",
+          text: text || t("double_click_edit"),
           fontSize: 24,
           x: targetX,
           y: targetY,
@@ -2151,8 +2146,16 @@ const CanvasArea = forwardRef(
               onClick={() => enterMaskMode(selectedId)}
               className="px-4 py-2 bg-white text-black rounded text-[11px] font-bold uppercase tracking-wider shadow-lg hover:bg-gray-200 transition-all"
             >
-              🖌 局部编辑 · Edit Region
+              {t("edit_region")}
             </button>
+          </div>
+        )}
+
+        {/* 局部编辑操作提示层（C6）：进入蒙版模式后告知可用操作。
+            HTML 浮层、绝对定位、pointer-events-none——不进 Konva 场景图。 */}
+        {maskMode && (
+          <div className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 z-30 px-3 py-1.5 rounded bg-bg-card/90 border border-white/10 shadow-lg text-[11px] text-secondary-text backdrop-blur-sm">
+            {t("mask_hint")}
           </div>
         )}
 
@@ -2160,18 +2163,18 @@ const CanvasArea = forwardRef(
         {maskMode && (
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 w-[min(560px,90%)]">
             <div className="flex items-center gap-3 px-4 py-2 rounded bg-bg-card border border-divider shadow-2xl text-[11px] text-secondary-text">
-              <span className="font-bold uppercase tracking-wider">涂抹要修改的区域</span>
-              <span>笔刷</span>
+              <span className="font-bold uppercase tracking-wider">{t("paint_area")}</span>
+              <span>{t("brush")}</span>
               <input
                 type="range" min="12" max="160" value={brushSize}
                 onChange={(e) => setBrushSize(Number(e.target.value))}
                 className="w-28 accent-white"
               />
               <button onClick={() => setMaskStrokes([])} className="px-2 py-1 border border-divider rounded hover:text-primary-text transition-colors">
-                清除
+                {t("clear")}
               </button>
               <button onClick={exitMaskMode} className="px-2 py-1 border border-divider rounded hover:text-primary-text transition-colors">
-                取消
+                {t("cancel")}
               </button>
             </div>
             <div className="flex items-center gap-2 w-full px-3 py-2 rounded bg-bg-card border border-divider shadow-2xl">
@@ -2179,7 +2182,7 @@ const CanvasArea = forwardRef(
                 value={maskPrompt}
                 onChange={(e) => setMaskPrompt(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") applyRegionEdit(); }}
-                placeholder="描述这块区域要怎么改，如：把文字改成「限时 8 折」"
+                placeholder={t("region_prompt_placeholder")}
                 className="flex-1 bg-transparent text-[13px] text-primary-text placeholder:text-secondary-text/50 focus:outline-none"
                 autoFocus
               />
@@ -2188,7 +2191,7 @@ const CanvasArea = forwardRef(
                 disabled={!maskPrompt.trim() || maskStrokes.length === 0}
                 className="shrink-0 px-4 py-1.5 bg-white text-black rounded text-[11px] font-bold uppercase tracking-wider hover:bg-gray-200 transition-all disabled:opacity-40"
               >
-                应用 · 15 CR
+                {t("apply_credits", 15)}
               </button>
             </div>
           </div>
@@ -2252,75 +2255,75 @@ const CanvasArea = forwardRef(
             {contextMenu.type === "node" ? (
               <>
                 <MenuButton
-                  label="Copy"
+                  label={t("copy")}
                   shortcut="Ctrl+C"
                   onClick={handleCopy}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Cut"
+                  label={t("cut")}
                   shortcut="Ctrl+X"
                   onClick={handleCut}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Duplicate"
+                  label={t("duplicate")}
                   shortcut="Ctrl+D"
                   onClick={handleDuplicate}
                   theme={theme}
                 />
                 <MenuDivider theme={theme} />
                 <MenuButton
-                  label="Bring to Front"
+                  label={t("bring_to_front")}
                   shortcut="]"
                   onClick={() => handleZIndex("front")}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Send to Back"
+                  label={t("send_to_back")}
                   shortcut="["
                   onClick={() => handleZIndex("back")}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Move Up"
+                  label={t("move_up")}
                   shortcut="Ctrl+]"
                   onClick={() => handleZIndex("up")}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Move Down"
+                  label={t("move_down")}
                   shortcut="Ctrl+["
                   onClick={() => handleZIndex("down")}
                   theme={theme}
                 />
                 <MenuDivider theme={theme} />
                 <MenuButton
-                  label="Lock/Unlock"
+                  label={t("lock_unlock")}
                   shortcut="Ctrl+Shift+L"
                   onClick={() => handleToggleState("locked")}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Show/Hide"
+                  label={t("show_hide")}
                   shortcut="Ctrl+Shift+H"
                   onClick={() => handleToggleState("hidden")}
                   theme={theme}
                 />
                 <MenuDivider theme={theme} />
                 <MenuButton
-                  label="Flip Horizontal"
+                  label={t("flip_horizontal")}
                   onClick={() => handleFlip("horizontal")}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Flip Vertical"
+                  label={t("flip_vertical")}
                   onClick={() => handleFlip("vertical")}
                   theme={theme}
                 />
                 <MenuDivider theme={theme} />
                 <MenuButton
-                  label="Download"
+                  label={t("download")}
                   onClick={handleDownload}
                   theme={theme}
                 />
@@ -2330,7 +2333,7 @@ const CanvasArea = forwardRef(
                     <button
                       className={`w-full text-left px-4 py-1.5 flex justify-between items-center transition-colors ${theme === "dark" ? "hover:bg-bg-page" : "hover:bg-bg-page"}`}
                     >
-                      <span>Export As</span>
+                      <span>{t("export_as")}</span>
                       <span>›</span>
                     </button>
                     <div
@@ -2356,7 +2359,7 @@ const CanvasArea = forwardRef(
                 )}
                 <MenuDivider theme={theme} />
                 <MenuButton
-                  label="Delete"
+                  label={t("delete")}
                   shortcut="Del"
                   onClick={handleDelete}
                   theme={theme}
@@ -2365,49 +2368,49 @@ const CanvasArea = forwardRef(
             ) : (
               <>
                 <MenuButton
-                  label="Paste"
+                  label={t("paste")}
                   shortcut="Ctrl+V"
                   onClick={handlePasteNode}
                   theme={theme}
                 />
                 <MenuDivider theme={theme} />
                 <MenuButton
-                  label="Zoom In"
+                  label={t("zoom_in")}
                   shortcut="Ctrl++"
                   onClick={() => updateZoom(Math.min(5, zoom + 0.1))}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Zoom Out"
+                  label={t("zoom_out")}
                   shortcut="Ctrl+-"
                   onClick={() => updateZoom(Math.max(0.1, zoom - 0.1))}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Zoom to Fit"
+                  label={t("zoom_to_fit")}
                   shortcut="Shift+1"
                   onClick={handleZoomToFit}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Reset Zoom"
+                  label={t("reset_zoom")}
                   shortcut="Ctrl+0"
                   onClick={() => updateZoom(1)}
                   theme={theme}
                 />
                 <MenuDivider theme={theme} />
                 <MenuButton
-                  label="Export Canvas"
+                  label={t("export_canvas")}
                   onClick={handleExportCanvas}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Show All Hidden"
+                  label={t("show_all_hidden")}
                   onClick={handleShowAllHidden}
                   theme={theme}
                 />
                 <MenuButton
-                  label="Clear Canvas"
+                  label={t("clear_canvas")}
                   onClick={handleClearCanvas}
                   theme={theme}
                 />

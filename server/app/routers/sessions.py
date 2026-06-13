@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +9,15 @@ router = APIRouter()
 
 
 @router.get("/sessions")
-async def list_sessions(db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+async def list_sessions(
+    # 分页参数：防止重度用户会话数无限增长拖慢页面。
+    # 默认值 limit=200/offset=0 保证现有前端不改动也能正常工作（历史行为兼容）。
+    # limit 上限 500 防止恶意大值一次拉爆数据库。
+    limit: int = Query(default=200, ge=1, le=500, description="每页最多返回条数"),
+    offset: int = Query(default=0, ge=0, description="跳过前 N 条（用于翻页）"),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+):
     rows = (
         await db.execute(
             select(DesignSession, func.count(Asset.id))
@@ -17,8 +25,12 @@ async def list_sessions(db: AsyncSession = Depends(get_db), user=Depends(get_cur
             .where(DesignSession.user_id == user.id, DesignSession.deleted_at.is_(None))
             .group_by(DesignSession.id)
             .order_by(DesignSession.updated_at.desc())
+            # 服务端分页：先 offset 再 limit，顺序不能反（SQLAlchemy 会正确生成 LIMIT/OFFSET）
+            .offset(offset)
+            .limit(limit)
         )
     ).all()
+    # 响应仍是纯数组，不包 envelope，前端直接 .map 不受影响
     return [
         {"id": s.id, "name": s.name, "asset_count": count, "timestamp": s.created_at.isoformat()}
         for s, count in rows

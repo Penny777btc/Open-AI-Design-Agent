@@ -122,3 +122,6 @@ venv.bak/
 server/dev.db
 server/storage/
 server/scripts/samples/
+
+# 备份产物（由 scripts/backup.sh 生成，不应进版本库）
+backups/

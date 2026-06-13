@@ -190,6 +190,31 @@ npm run start
 | **Data privacy** | Cloud-based | Your data stays local |
 | **Source code** | Closed | MIT licensed |
 
+## 💾 数据备份
+
+`scripts/backup.sh` 对 SQLite 数据库和上传文件目录做在线一致性备份，产物为带时间戳的 `.tar.gz`。
+
+```bash
+# 从仓库根目录运行
+bash scripts/backup.sh
+
+# 覆盖数据库路径（Docker / 生产环境）
+DB_PATH=/data/prod.db bash scripts/backup.sh
+```
+
+- 备份产物存放于 `backups/picsmith-YYYYmmdd-HHMMSS.tar.gz`，自动保留最近 7 份
+- 数据库采用 `sqlite3 ".backup"` 在线备份，WAL 写入期间也安全
+- 上传文件目录路径从 `server/app/config.py` 的 `storage_dir` 读取（默认 `server/storage/`）
+- `backups/` 目录已加入 `.gitignore`，不会误提交到版本库
+
+**推荐 crontab（每日 04:00）：**
+
+```cron
+0 4 * * * cd /path/to/Open-AI-Design-Agent && bash scripts/backup.sh >> backups/backup.log 2>&1
+```
+
+---
+
 ## 📄 License
 
 MIT

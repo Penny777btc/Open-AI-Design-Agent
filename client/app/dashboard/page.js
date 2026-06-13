@@ -188,6 +188,7 @@ export default function AssistantDashboard() {
         const { data: session } = await axios.post(`${API}/sessions`, {});
         const formData = new FormData();
         formData.append("file", file);
+        formData.append("lang", localStorage.getItem("lang") || "zh"); // 解析回执跟随站点语言
         await axios.post(`/api/v1/sessions/${session.id}/reference-docs`, formData, {
           headers: { "Content-Type": "multipart/form-data" },
           onUploadProgress: (pe) => setUploadProgress(Math.round((pe.loaded * 100) / pe.total)),

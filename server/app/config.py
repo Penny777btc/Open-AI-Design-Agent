@@ -66,6 +66,17 @@ def validate_production_config() -> list[str]:
         errors.append("生产环境 AUTH_MODE 必须为 jwt（dev 模式存在共享账号后门）")
     if settings.stripe_secret_key and not settings.stripe_webhook_secret:
         errors.append("启用了 Stripe 但未配置 STRIPE_WEBHOOK_SECRET——webhook 可被伪造刷积分")
+    if any("localhost" in o or "127.0.0.1" in o for o in settings.cors_origins):
+        errors.append("CORS_ORIGINS 仍包含 localhost——生产域名未配置，前端将无法访问")
+    if settings.provider_mode == "mock":
+        errors.append("PROVIDER_MODE 仍是 mock——用户将拿到占位图而非真实生成结果")
+    if "sqlite" in settings.database_url:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "生产环境仍在使用 SQLite + 本地磁盘存储：单点、无备份冗余，仅适合软启动期，"
+            "请尽快完成 Postgres + R2 迁移（M4）并启用 scripts/backup.sh 定时备份"
+        )
     return errors
 
 
