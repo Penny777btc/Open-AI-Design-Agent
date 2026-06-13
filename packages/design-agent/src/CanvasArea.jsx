@@ -166,7 +166,7 @@ const URLImage = ({
   imageObj,
   isSelected,
   multiSelected,
-  selectMode,
+  spaceDown,
   onToggleMulti,
   onSelect,
   onChange,
@@ -214,20 +214,19 @@ const URLImage = ({
         opacity={imageObj.hidden ? 0 : 1}
         listening={!imageObj.hidden}
         onClick={(e) => {
-          if (imageObj.locked) return;
-          if (selectMode) { e.cancelBubble = true; onToggleMulti(); return; }
+          if (imageObj.locked || spaceDown) return;
+          if (e.evt?.shiftKey) { e.cancelBubble = true; onToggleMulti(); return; }
           onSelect(e);
         }}
         onTap={(e) => {
-          if (imageObj.locked) return;
-          if (selectMode) { e.cancelBubble = true; onToggleMulti(); return; }
+          if (imageObj.locked || spaceDown) return;
           onSelect(e);
         }}
         ref={shapeRef}
         {...restImageObj}
         id={imageObj.id}
         name="konva-item"
-        draggable={!imageObj.locked && !selectMode}
+        draggable={!imageObj.locked && !spaceDown}
         onDragMove={(e) => {
           setPos({ x: e.target.x(), y: e.target.y() });
           onDragMove(e);
@@ -909,10 +908,11 @@ const CanvasArea = forwardRef(
     const [setTpl, setSetTpl] = useState("ecom");              // 套图：选中的模板
     const [setGenMode, setSetGenMode] = useState("ai");        // 套图模式：ai 融合 / editable 可编辑
 
-    // ===== 框选多选（拖拽橡皮筋）=====
-    const [selectMode, setSelectMode] = useState(false);       // 框选模式：拖拽=框选而非平移
+    // ===== 框选多选（拖拽橡皮筋，默认行为）+ 空格平移 =====
     const [marquee, setMarquee] = useState(null);              // 正在拖的选框（世界坐标 {x,y,w,h}）
     const marqueeStartRef = useRef(null);                      // 拖拽起点（世界坐标）+ 是否叠加
+    const [spaceDown, setSpaceDown] = useState(false);         // 空格按下=手型平移（拖拽=移动画布）
+    const spaceRef = useRef(false);
 
     const worldPointer = () => {
       const stage = stageRef.current;
@@ -975,7 +975,25 @@ const CanvasArea = forwardRef(
       setSelectedId(null);
     };
 
-    const exitSelectMode = () => { setSelectMode(false); setSetSel(new Set()); setMarquee(null); marqueeStartRef.current = null; };
+    // 空格键 = 手型平移工具（按住时拖拽移动画布，松开恢复框选）
+    useEffect(() => {
+      const isTyping = () => {
+        const el = document.activeElement;
+        return el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+      };
+      const down = (e) => {
+        if (e.code === "Space" && !isTyping()) {
+          if (!spaceRef.current) { spaceRef.current = true; setSpaceDown(true); }
+          e.preventDefault(); // 防止页面滚动/按钮触发
+        }
+      };
+      const up = (e) => {
+        if (e.code === "Space") { spaceRef.current = false; setSpaceDown(false); }
+      };
+      window.addEventListener("keydown", down);
+      window.addEventListener("keyup", up);
+      return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
+    }, []);
 
     // ===== 局部编辑（蒙版涂抹）=====
     const [maskMode, setMaskMode] = useState(null); // 进入编辑的 image id
@@ -2231,7 +2249,7 @@ const CanvasArea = forwardRef(
 
     return (
       <div
-        className={`relative w-full h-full bg-bg-page overflow-hidden ${maskMode || selectMode ? "cursor-crosshair" : ""}`}
+        className={`relative w-full h-full bg-bg-page overflow-hidden ${maskMode ? "cursor-crosshair" : spaceDown ? "cursor-grab" : "cursor-crosshair"}`}
         ref={containerRef}
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
@@ -2243,13 +2261,12 @@ const CanvasArea = forwardRef(
             onMouseDown={(e) => {
               if (maskMode) return; // 蒙版模式：绘制走 pointer 事件
               if (e.evt.button === 2) return;
+              if (spaceDown) return; // 空格平移：交给 Stage 拖拽
               setContextMenu(null);
-              // 框选模式 或 Shift+拖拽：在空白处起框（命中图片节点不起框，让点击/拖动正常）
-              if ((selectMode || e.evt.shiftKey) && e.target === e.target.getStage()) {
+              // 默认：在空白处左键拖拽 = 框选（Shift = 叠加到已选）
+              if (e.target === e.target.getStage()) {
                 marqueeBegin(e.evt.shiftKey);
-                return;
               }
-              if (e.target === e.target.getStage()) setSelectedId(null);
             }}
             onMouseMove={maskMode ? undefined : () => { if (marqueeStartRef.current) marqueeMove(); }}
             onMouseUp={maskMode ? undefined : () => { if (marqueeStartRef.current) marqueeEnd(); }}
@@ -2274,7 +2291,7 @@ const CanvasArea = forwardRef(
             scaleX={zoom}
             scaleY={zoom}
             ref={stageRef}
-            draggable={!maskMode && !selectMode && !marquee}
+            draggable={!maskMode && spaceDown}
             onDragMove={(e) => {
               if (e.target === stageRef.current && containerRef.current) {
                 containerRef.current.style.backgroundPosition = `${e.target.x()}px ${e.target.y()}px`;
@@ -2292,11 +2309,11 @@ const CanvasArea = forwardRef(
                       <URLImage
                         key={item.id}
                         imageObj={item}
-                        isSelected={item.id === selectedId && !selectMode}
+                        isSelected={item.id === selectedId && setSel.size === 0}
                         multiSelected={setSel.has(item.id)}
-                        selectMode={selectMode}
+                        spaceDown={spaceDown}
                         onToggleMulti={() => toggleMultiSelect(item.id)}
-                        onSelect={() => setSelectedId(item.id)}
+                        onSelect={() => { setSelectedId(item.id); if (setSel.size) setSetSel(new Set()); }}
                         onDragMove={handleDragMove}
                         onDragEnd={handleDragEnd}
                         onChange={(attrs) =>
@@ -2476,14 +2493,11 @@ const CanvasArea = forwardRef(
             >
               <span className="font-bold">▦</span> 套图模板
             </button>
-            {/* 框选多选：拖拽鼠标一次框选多张图 */}
-            <button
-              onClick={() => { selectMode ? exitSelectMode() : setSelectMode(true); setShowTextMenu(false); }}
-              className={`mt-2 px-3 py-2 border rounded text-[11px] font-bold shadow-lg transition-all flex items-center gap-1.5 w-full ${selectMode ? "bg-primary text-black border-primary" : "bg-bg-card text-primary-text border-divider hover:border-primary"}`}
-              title="拖拽鼠标一次框选多张图（也可按住 Shift 拖拽）"
-            >
-              <span className="font-bold">⬚</span> {selectMode ? "框选中…" : "框选多选"}
-            </button>
+            {/* 操作提示（自然交互，无需按钮）：拖拽=框选，空格+拖拽=平移 */}
+            <div className="mt-2 px-2.5 py-1.5 rounded bg-bg-card/70 border border-divider/60 text-[10px] text-secondary-text leading-relaxed select-none">
+              <div><span className="text-primary-text font-semibold">拖拽</span> 框选多张 · <span className="text-primary-text font-semibold">Shift+拖</span> 加选</div>
+              <div><span className="text-primary-text font-semibold">空格+拖拽</span> 平移画布 · 滚轮缩放</div>
+            </div>
           </div>
         )}
 
@@ -2500,7 +2514,7 @@ const CanvasArea = forwardRef(
               className="px-3 py-1.5 rounded-full text-[11px] font-bold text-red-400 hover:bg-red-500/15"
             >删除</button>
             <button
-              onClick={() => { setSetSel(new Set()); if (selectMode) setSelectMode(false); }}
+              onClick={() => setSetSel(new Set())}
               className="px-3 py-1.5 rounded-full text-[11px] text-secondary-text hover:text-primary-text"
             >清空</button>
           </div>
