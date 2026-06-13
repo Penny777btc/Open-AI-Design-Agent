@@ -357,9 +357,10 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         ).scalar_one()
         label = f"asset_{count + 1}"
 
-        # 摆放：编辑结果放源图右侧，新生成走行排布
+        # 摆放：普通编辑结果放源图右侧；套图（set_*）是一组成套结果，走行排布成整齐网格
+        # 而不是散落在各自源图旁边（否则交错在原图中间显得很乱）。
         canvas_x = canvas_y = None
-        if node.tool == "edit_image":
+        if node.tool == "edit_image" and not node.id.startswith("set_"):
             source = (
                 await db.execute(
                     select(Asset).where(
@@ -385,7 +386,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         await db.commit()
 
     result = {"ok": True, "model": image.model}
-    if node.tool == "edit_image":
+    # 套图结果不走「放在源图旁」的前端逻辑，改用 arrange 落到网格位（见下）
+    if node.tool == "edit_image" and not node.id.startswith("set_"):
         result["source_asset_id"] = node.args.get("source_asset")
     await emit(job_id, "tool_result", {
         "name": node.tool,
@@ -395,8 +397,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             "model": image.model, "prompt": prompt, "source_tool": node.tool,
         },
     })
-    # 编辑结果由前端 placeNextToSource 实时摆放；生成结果用 arrange 事件落位
-    if node.tool != "edit_image" and canvas_x is not None:
+    # 普通编辑结果由前端 placeNextToSource 摆放；生成结果与套图（set_*）用 arrange 落到网格位
+    if (node.tool != "edit_image" or node.id.startswith("set_")) and canvas_x is not None:
         await emit(job_id, "canvas_op", {
             "op": "arrange",
             "args": {"moves": [{"asset_id": label, "x": canvas_x, "y": canvas_y}]},

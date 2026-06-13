@@ -674,6 +674,20 @@ export default function CreativeCanvas({
             </a>
           </span>
         ), { duration: 8000 });
+      } else if (err.response?.status === 409 || err.response?.status === 410) {
+        // 计划已失效（已处理 / 已拒 / 超时 / 服务重启）：把这张卡标记为已处理、按钮消失，温和提示而非红错
+        setMessages(prev => prev.map(m => ({
+          ...m,
+          events: (m.events || []).map(e =>
+            e.job_id === jobId && (
+              (e.type === "info" && (e.content?.includes("approval") || e.content?.includes("confirmation"))) ||
+              (e.type === "plan_propose")
+            )
+              ? { ...e, handled: true }
+              : e
+          )
+        })));
+        toast("该计划已失效（可能已处理、超时或被取消），如需可重新发起。", { icon: "ℹ️" });
       } else {
         toast.error(err.response?.data?.detail || t("job_action_failed", action));
       }
