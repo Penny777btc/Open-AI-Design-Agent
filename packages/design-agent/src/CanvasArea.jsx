@@ -54,6 +54,27 @@ const SET_TEMPLATES = {
   minimal: { label: "极简画册", desc: "纯净留白 · 单标题 · 编辑感" },
 };
 
+// 混合方案的【固定文字模板】：AI 出干净底图后，前端在每张图上叠这些槽位。
+// 坐标/字号都相对图片尺寸（rel*）→ 全集排版/字体/字号 100% 一致，只有文字内容可改。
+// 槽位区域要对得上后端生成提示里预留的空白区（标题区/卖点区）。
+const _SETPT = { fontStyle: "bold", fill: "#1a1a1a", fontFamily: "Inter, sans-serif" };
+const SET_TEMPLATE_SLOTS = {
+  ecom: [
+    { text: "产品标题", relX: 0, relY: 0.055, relW: 1, align: "center", relSize: 0.06, style: { ..._SETPT } },
+    { text: "副标题 · 一句卖点", relX: 0, relY: 0.135, relW: 1, align: "center", relSize: 0.032, style: { fontStyle: "normal", fill: "#666666", fontFamily: "Inter, sans-serif" } },
+    { text: "• 卖点一", relX: 0.06, relY: 0.74, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
+    { text: "• 卖点二", relX: 0.06, relY: 0.80, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
+    { text: "• 卖点三", relX: 0.06, relY: 0.86, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
+  ],
+  rednote: [
+    { text: "大标题", relX: 0, relY: 0.08, relW: 1, align: "center", relSize: 0.075, style: { ..._SETPT, fill: "#222222" } },
+    { text: "副标题说明", relX: 0, relY: 0.18, relW: 1, align: "center", relSize: 0.035, style: { fontStyle: "normal", fill: "#666666", fontFamily: "Inter, sans-serif" } },
+  ],
+  minimal: [
+    { text: "标题", relX: 0.07, relY: 0.82, relW: 0.86, align: "left", relSize: 0.05, style: { ..._SETPT } },
+  ],
+};
+
 const MenuButton = ({ label, shortcut, onClick, theme }) => (
   <button
     className={`w-full text-left px-4 py-1.5 flex justify-between items-center transition-colors ${
@@ -1115,7 +1136,7 @@ const CanvasArea = forwardRef(
       setContextMenu(null);
     };
 
-    const addImage = (src, x, y, width, height, onLoaded, assetLabel) => {
+    const addImage = (src, x, y, width, height, onLoaded, assetLabel, setTemplate) => {
       if (!src) return;
       const stage = stageRef.current;
       if (!stage) {
@@ -1164,6 +1185,28 @@ const CanvasArea = forwardRef(
             rotation: 0,
           },
         ]);
+        // 套图混合方案：AI 出干净底图后，在图上叠【固定模板文字】（位置/字体/字号锁死、
+        // 相对图片尺寸算 → 全集 100% 一致，只有文字内容可逐张改）。
+        const slots = setTemplate && SET_TEMPLATE_SLOTS[setTemplate];
+        if (slots) {
+          const dw = finalWidth / 2 || 200;
+          const dh = finalHeight / 2 || 200;
+          const stamp = Date.now();
+          const slotTexts = slots.map((slot, i) => ({
+            id: `txt-${stamp}-${(assetLabel || id).slice(-6)}-${i}`,
+            text: slot.text,
+            x: targetX + slot.relX * dw,
+            y: targetY + slot.relY * dh,
+            width: slot.relW ? slot.relW * dw : undefined,
+            align: slot.align || "left",
+            fontSize: Math.max(8, Math.round(slot.relSize * dh)),
+            fontFamily: "Inter, sans-serif",
+            draggable: true,
+            rotation: 0,
+            ...slot.style,
+          }));
+          setTexts((prev) => [...prev, ...slotTexts]);
+        }
         setSelectedId(id);
         if (typeof onLoaded === "function") onLoaded();
       };

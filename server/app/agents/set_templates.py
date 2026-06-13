@@ -1,48 +1,53 @@
-"""套图模板：把「固定排版 + 固定字体 + 统一风格」写成生成约束提示。
+"""套图模板（混合方案）：AI 出「干净无字底图」+ 前端固定矢量模板叠字。
 
-机制：用户选一批产品图，选一个模板，系统为每张图建一个 edit_image 节点，
-每个节点的提示词都注入【同一段】模板约束 → AI 生成出来的一组新图在
-版式/字体/配色/风格上保持一致（靠系统提示约束生成，而非事后叠图层）。
+为什么这么做：扩散模型每张图独立生成，字体/位置必然漂移，纯 AI 无法做到 100% 排版统一。
+所以分两步——
+  1) AI 只负责生成统一风格的「干净产品图」，明确禁止渲染任何文字、并预留标题区/卖点区；
+  2) 前端在生成图上叠加【固定矢量文字模板】（位置/字体/字号锁死），只有文字内容可改。
+这样画面是 AI 生成的（风格统一），排版字体是模板锁死的（100% 一致）。
+
+模板的【文字槽位坐标/字体】定义在前端（CanvasArea 的 SET_TEMPLATE_SLOTS），与这里的
+key 一一对应；后端只管生成提示 + 把模板 key 透传给前端去叠字。
 """
 
 from app.agents.planner import Plan, PlanNode
 
-# 每个模板：面向用户的名字 + 注入每张生成的英文约束提示（全集共享 → 一致性来源）
+_NO_TEXT = (
+    "CRITICAL: do NOT render any text, words, letters, numbers, logos or labels onto the image. "
+    "Produce a clean image with ZERO typography — text will be added afterward by a fixed template. "
+)
+
 SET_TEMPLATES = {
     "ecom": {
-        "label": "电商主图套图",
+        "label": "电商主图",
         "prompt": (
-            "Redesign this into a premium e-commerce product MAIN IMAGE. "
-            "Keep the product's exact appearance from the source photo (bottle shape, label, packaging, colors) unchanged. "
-            "Apply this FIXED template consistently (this image is part of a set that must look identical in layout and typography): "
-            "clean light-gray studio gradient background; product centered and prominent; "
-            "a BOLD sans-serif PRODUCT TITLE at the top center; a one-line SUBTITLE directly below the title; "
-            "THREE short selling-point lines as a left-aligned list in the lower-left corner. "
-            "Typography is fixed: one clean modern sans-serif family, consistent weights and sizes, same color scheme across the whole set. "
-            "Square 1:1 composition, professional studio lighting."
+            "Redesign this into a clean premium e-commerce product MAIN IMAGE. "
+            "Keep the product's exact appearance from the source photo (bottle, label, packaging, colors) unchanged. "
+            + _NO_TEXT +
+            "Reserve clean EMPTY space: a clear horizontal band across the TOP (for a title later) and a clear area in the LOWER-LEFT (for spec lines later). "
+            "Consistent across the whole set: light-gray studio gradient background, product centered and prominent, identical professional studio lighting and composition. Square 1:1."
         ),
         "aspect_ratio": "1:1",
     },
     "rednote": {
-        "label": "小红书封面套图",
+        "label": "小红书封面",
         "prompt": (
-            "Redesign this into a Xiaohongshu (RED) cover image, part of a consistent set. "
+            "Redesign this into a Xiaohongshu (RED) cover, part of a consistent set. "
             "Keep the product's exact appearance from the source unchanged. "
-            "FIXED template across the set: bright clean lifestyle background; product placed naturally; "
-            "a LARGE bold title across the upper-middle; a smaller subtitle line below it; "
-            "fixed typography (one warm modern sans-serif, same weights and sizes, same accent color) for the whole set. "
-            "Vertical 3:4 composition, soft natural lighting, cohesive cover style."
+            + _NO_TEXT +
+            "Reserve a clean EMPTY band across the UPPER-MIDDLE for a title to be added later. "
+            "Consistent across the set: bright clean lifestyle background, product placed naturally, identical soft lighting and composition. Vertical 3:4."
         ),
         "aspect_ratio": "3:4",
     },
     "minimal": {
-        "label": "极简画册套图",
+        "label": "极简画册",
         "prompt": (
             "Redesign this into a minimal product catalog image, part of a consistent set. "
             "Keep the product's exact appearance from the source unchanged. "
-            "FIXED template across the set: pure off-white seamless background; product centered with generous negative space; "
-            "a single understated title in the lower-left; one thin sans-serif typeface, same size and weight across the whole set; monochrome palette. "
-            "Square 1:1, even soft lighting, editorial minimal aesthetic."
+            + _NO_TEXT +
+            "Reserve clean EMPTY space in the LOWER-LEFT for a single title line later. "
+            "Consistent across the set: pure off-white seamless background, product centered with generous negative space, identical even soft lighting. Square 1:1."
         ),
         "aspect_ratio": "1:1",
     },
@@ -50,7 +55,7 @@ SET_TEMPLATES = {
 
 
 def build_set_plan(template_key: str, asset_labels: list[str]) -> Plan:
-    """为选中的每张产品图建一个 edit_image 节点，注入同一模板约束。"""
+    """每张选中图建一个 edit_image 节点，注入同一「干净无字底图」约束，并带上模板 key。"""
     tpl = SET_TEMPLATES.get(template_key)
     if tpl is None:
         raise ValueError(f"未知套图模板：{template_key}")
@@ -62,10 +67,15 @@ def build_set_plan(template_key: str, asset_labels: list[str]) -> Plan:
             id=f"set_{i + 1}",
             tool="edit_image",
             label=f"套图 {i + 1}/{len(labels)} · {tpl['label']}",
-            args={"prompt": tpl["prompt"], "source_asset": label, "aspect_ratio": tpl["aspect_ratio"]},
+            args={
+                "prompt": tpl["prompt"],
+                "source_asset": label,
+                "aspect_ratio": tpl["aspect_ratio"],
+                "set_template": template_key,  # 透传给前端：生成完用此模板叠固定文字
+            },
             depends=[],
         )
         for i, label in enumerate(labels)
     ]
     return Plan(mode="plan", title=f"{tpl['label']}（{len(labels)} 张统一风格）", nodes=nodes,
-                notes=[f"已选 {len(labels)} 张，将按「{tpl['label']}」统一排版/字体/风格生成"])
+                notes=[f"AI 生成 {len(labels)} 张干净统一底图，再叠固定模板文字（排版/字体 100% 一致，可改内容）"])

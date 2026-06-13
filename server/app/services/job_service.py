@@ -123,6 +123,7 @@ async def _run_job(job_id: str) -> None:
             return
 
         await _set_status(job_id, "planning")
+        brief = job_input.get("message") or ""  # 末尾总结的语言检测用；set_template 也需有值
 
         # 套图：跳过 AI 规划器，按固定模板直接构造批量 edit_image 计划（每张注入同一约束）
         if job.kind == "set_template":
@@ -389,13 +390,19 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
     # 套图结果不走「放在源图旁」的前端逻辑，改用 arrange 落到网格位（见下）
     if node.tool == "edit_image" and not node.id.startswith("set_"):
         result["source_asset_id"] = node.args.get("source_asset")
+    asset_payload = {
+        "asset_label": label, "url": url, "kind": "image",
+        "model": image.model, "prompt": prompt, "source_tool": node.tool,
+    }
+    # 套图：把模板 key + 网格落位坐标带给前端 → 前端按确定坐标放图、并在其上叠固定文字（100% 统一）
+    if node.args.get("set_template"):
+        asset_payload["set_template"] = node.args["set_template"]
+        asset_payload["canvas_x"] = canvas_x
+        asset_payload["canvas_y"] = canvas_y
     await emit(job_id, "tool_result", {
         "name": node.tool,
         "result": result,
-        "asset": {
-            "asset_label": label, "url": url, "kind": "image",
-            "model": image.model, "prompt": prompt, "source_tool": node.tool,
-        },
+        "asset": asset_payload,
     })
     # 普通编辑结果由前端 placeNextToSource 摆放；生成结果与套图（set_*）用 arrange 落到网格位
     if (node.tool != "edit_image" or node.id.startswith("set_")) and canvas_x is not None:
