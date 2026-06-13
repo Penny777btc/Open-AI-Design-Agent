@@ -81,13 +81,15 @@ async def set_template(session_id: str, request: Request, db: AsyncSession = Dep
     body = await request.json()
     template = body.get("template")
     labels = body.get("asset_labels") or []
-    if template != "main6" and template not in SET_TEMPLATES:
+    single_kinds = {"main6": ("电商主图六联", 6), "detail7": ("电商详情页七段", 7)}
+    if template not in single_kinds and template not in SET_TEMPLATES:
         raise HTTPException(status_code=422, detail="未知套图模板")
     if not labels:
         raise HTTPException(status_code=422, detail="请先选择图片")
-    if template == "main6":
-        # 电商主图六联：取第一张产品图，出 6 张角色分工主图
-        message = f"🛍 电商主图六联（基于 {labels[0]} 出 6 张）"
+    if template in single_kinds:
+        # 电商主图六联 / 详情页七段：取第一张产品图，出固定张数
+        name, n = single_kinds[template]
+        message = f"🛍 {name}（基于 {labels[0]} 出 {n} 张）"
     else:
         message = f"🎨 套图：{SET_TEMPLATES[template]['label']}（{len(labels)} 张）"
     return await _enqueue(db, user, session_id, "set_template", {

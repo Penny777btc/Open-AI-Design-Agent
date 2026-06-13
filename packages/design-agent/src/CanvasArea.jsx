@@ -49,7 +49,8 @@ const TEXT_SWATCHES = ["#ffffff", "#000000", "#ffe24d", "#ff3b3b", "#19c37d", "#
 // 一组风格统一的「新图」——不是事后叠文字图层，而是约束生成本身。模板细节在后端
 // app/agents/set_templates.py；这里只用 key/label/desc 做选择。后端 key 必须一致。
 const SET_TEMPLATES = {
-  main6: { label: "电商主图六联", desc: "选 1 张产品图 → AI 出 6 张（白底/卖点/风味/工艺/场景/参数）", single: true },
+  main6: { label: "电商主图六联", desc: "选 1 张产品图 → AI 出 6 张（白底/卖点/风味/工艺/场景/参数）", single: true, count: 6, cta: "生成主图六联" },
+  detail7: { label: "电商详情页七段", desc: "选 1 张产品图 → AI 出 7 段暗调详情页（封面/参数/风味/工艺/产区/餐配/规格）", single: true, count: 7, cta: "生成详情页七段" },
   ecom: { label: "电商主图", desc: "白底影棚 · 标题居中 · 三条卖点" },
   rednote: { label: "小红书封面", desc: "生活场景 · 大标题 · 竖版 3:4" },
   minimal: { label: "极简画册", desc: "纯净留白 · 单标题 · 编辑感" },
@@ -976,6 +977,45 @@ const CanvasArea = forwardRef(
       setImages((prev) => prev.filter((i) => !setSel.has(i.id)));
       setSetSel(new Set());
       setSelectedId(null);
+    };
+
+    // 拼长图：把多选的图按画布位置(上→下、左→右)纵向拼成一张长图导出（电商详情页用）。
+    const [stitching, setStitching] = useState(false);
+    const exportLongImage = async () => {
+      const sel = images.filter((i) => setSel.has(i.id));
+      if (sel.length < 2) { toast.error("请至少选择 2 张图"); return; }
+      sel.sort((a, b) => (a.y - b.y) || (a.x - b.x)); // 阅读顺序 = 详情页段落顺序
+      setStitching(true);
+      try {
+        const loaded = await Promise.all(sel.map((s) => new Promise((res, rej) => {
+          const im = new Image();
+          im.crossOrigin = "anonymous";
+          im.onload = () => res(im);
+          im.onerror = () => rej(new Error("img load failed"));
+          im.src = s.src;
+        })));
+        const W = Math.max(...loaded.map((im) => im.naturalWidth || 750));
+        const segs = loaded.map((im) => ({ im, h: Math.round((im.naturalHeight || 1) * W / (im.naturalWidth || 1)) }));
+        const totalH = segs.reduce((s, x) => s + x.h, 0);
+        const c = document.createElement("canvas");
+        c.width = W; c.height = totalH;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, totalH);
+        let y = 0;
+        for (const x of segs) { ctx.drawImage(x.im, 0, y, W, x.h); y += x.h; }
+        const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.92));
+        if (!blob) throw new Error("toBlob failed");
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `详情页长图_${W}x${totalH}.jpg`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        toast.success(`已拼接 ${sel.length} 段 → 长图 ${W}×${totalH}`);
+      } catch (e) {
+        toast.error("拼图失败（可能是图片跨域）。可右键单张另存后再拼。");
+      } finally {
+        setStitching(false);
+      }
     };
 
     // 方向键微移：选中（单个或多选）的节点整体平移。Shift = 10px，否则 1px。
@@ -2644,6 +2684,12 @@ const CanvasArea = forwardRef(
               className="px-3 py-1.5 bg-primary text-black rounded-full text-[11px] font-bold hover:opacity-90"
             >▦ 套图生成</button>
             <button
+              onClick={exportLongImage}
+              disabled={stitching}
+              className="px-3 py-1.5 rounded-full text-[11px] font-bold text-primary-text hover:bg-bg-page disabled:opacity-40"
+              title="把选中的图按上下顺序拼成一张详情页长图导出"
+            >{stitching ? "拼接中…" : "🧩 拼长图"}</button>
+            <button
               onClick={deleteMultiSelected}
               className="px-3 py-1.5 rounded-full text-[11px] font-bold text-red-400 hover:bg-red-500/15"
             >删除</button>
@@ -2731,7 +2777,7 @@ const CanvasArea = forwardRef(
                 <div className="flex gap-2">
                   <button onClick={() => setShowSetPanel(false)} className="px-4 py-2 border border-divider text-secondary-text rounded text-[11px] font-bold hover:text-primary-text">取消</button>
                   <button onClick={applySetTemplate} disabled={setSel.size === 0} className="px-5 py-2 bg-primary text-black rounded text-[11px] font-bold disabled:opacity-40 disabled:cursor-not-allowed">
-                    {SET_TEMPLATES[setTpl]?.single ? "生成主图六联（6 张）" : `生成套图（${setSel.size} 张）`}
+                    {SET_TEMPLATES[setTpl]?.single ? `${SET_TEMPLATES[setTpl].cta}（${SET_TEMPLATES[setTpl].count} 张）` : `生成套图（${setSel.size} 张）`}
                   </button>
                 </div>
               </div>

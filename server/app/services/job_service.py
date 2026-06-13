@@ -151,6 +151,12 @@ async def _run_job(job_id: str) -> None:
 
                 main_content = await generate_main_content(items[0], doc_text, lang=lang) if items else {}
                 plan = build_main_set_plan(labels[0], content_map=main_content, lang=lang)
+            elif tpl_key == "detail7":
+                # 详情页七段：用第一张产品图，出 7 段暗调详情页
+                from app.agents.set_templates import build_detail_set_plan, generate_detail_content
+
+                detail_content = await generate_detail_content(items[0], doc_text, lang=lang) if items else {}
+                plan = build_detail_set_plan(labels[0], content_map=detail_content, lang=lang)
             else:
                 content = await generate_set_content(tpl_key, items, doc_text, lang=lang)
                 plan = build_set_plan(tpl_key, labels, content_map=content, lang=lang, mode=job_input.get("set_mode", "ai"))

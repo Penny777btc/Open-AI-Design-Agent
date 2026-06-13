@@ -334,3 +334,130 @@ def build_main_set_plan(source_label: str, content_map: dict | None = None, lang
         mode="plan", title="电商主图六联（6 张）", nodes=nodes,
         notes=["AI 生成 6 张角色分工的电商主图：白底 / 卖点 / 风味 / 工艺 / 场景 / 参数，文案取自产品信息与文档"],
     )
+
+
+# ============================================================================
+# 电商详情页七段：从「单个产品」生成 7 段长详情页（暗调影院风、中英双语、竖版）
+# 与主图六联是「一套两风格」：主图明亮通透，详情页暗调高级。竖版便于拼成长图。
+# ============================================================================
+
+_DETAIL_STYLE = (
+    "PREMIUM e-commerce DETAIL-PAGE section for a wine product, part of a CONSISTENT set sharing the exact same "
+    "CINEMATIC visual language: a DARK, moody, atmospheric background (deep burgundy to near-black, a soft warm "
+    "spotlight, subtle bokeh and smoke), elegant GOLD SERIF typography, BILINGUAL headings (Chinese title with a "
+    "smaller English subtitle), refined gold divider rules and thin-line gold icons. Keep the product EXACTLY as in "
+    "the source photo including its label. Vertical 3:4, luxurious editorial, high contrast, rich and premium."
+)
+
+DETAIL_ROLES = [
+    {"key": "banner", "label": "封面",
+     "prompt": _DETAIL_STYLE + (
+         " ROLE — cover banner: a dramatic hero with the bottle and a glass against a moody vineyard/mountain "
+         "backdrop at dusk; a large bilingual product name (Chinese + English) in gold serif at the top, with a "
+         "one-line meta strip (aging | vintage | alcohol) beneath.")},
+    {"key": "coreinfo", "label": "核心信息",
+     "prompt": _DETAIL_STYLE + (
+         " ROLE — core info: a bold bilingual heading 核心信息; the bottle on the left and a large label close-up on "
+         "the upper-right; a neat BILINGUAL spec table (each row: gold icon + Chinese label + value + small English) "
+         "for region / grade / variety / vintage / alcohol / aging / aging-potential.")},
+    {"key": "flavor", "label": "风味口感",
+     "prompt": _DETAIL_STYLE + (
+         " ROLE — tasting notes: bilingual heading 风味口感 / TASTING NOTES; a column of 6 round-icon tasting-note "
+         "rows beside the bottle and glass; and at the bottom a tasteful FLAVOR PYRAMID infographic with 4 tiers "
+         "(初闻 / 中段 / 后段 / 余味), each tier a thin gold band with a short note.")},
+    {"key": "craft", "label": "橡木桶陈酿",
+     "prompt": _DETAIL_STYLE + (
+         " ROLE — oak aging: bilingual heading 橡木桶陈酿 / OAK BARREL AGING; a short poetic line; 4 icon+text bullet "
+         "rows about the craft; the bottle among oak barrels in a dim cellar; a strip of 3 atmospheric close-up "
+         "photos (barrel grain / charred oak / swirling wine) along the bottom.")},
+    {"key": "origin", "label": "产区与酒庄",
+     "prompt": _DETAIL_STYLE + (
+         " ROLE — origin & winery: bilingual heading 产区与酒庄 / ORIGIN & WINERY; a short winery story; a row of 4 "
+         "gold-icon feature cards (sunlight / terroir / quality grapes / heritage); a golden-hour vineyard landscape "
+         "with the bottle composited naturally in the foreground.")},
+    {"key": "pairing", "label": "侍酒与餐配",
+     "prompt": _DETAIL_STYLE + (
+         " ROLE — serving & pairing: bilingual heading 侍酒与餐配 / SERVING & PAIRING; 3 icon+text bullet rows "
+         "(serving temperature / food pairings / tannin); the bottle and a glass set within an elegant warm "
+         "candle-lit dining scene with plated food.")},
+    {"key": "footer", "label": "规格物流",
+     "prompt": _DETAIL_STYLE + (
+         " ROLE — footer: a refined brand crest at the top, the bilingual product name, the bottle with a glass and "
+         "food in a dim luxurious setting; 2 icon+text lines for packaging spec and shipping note. Wide short "
+         "banner feel, brand sign-off at the bottom.")},
+]
+
+_DETAIL_CONTENT_SPEC = {
+    "banner": "name（产品中文名）、subtitle（产品英文名/系列）、points（1 条：陈酿|年份|酒精度 合并成一行）",
+    "coreinfo": "title（固定『核心信息』）、points（7 条参数：产区/等级/品种/年份/酒精度/陈酿/陈年潜力，写成『产区：xx』）",
+    "flavor": "title（固定『风味口感』）、points（6 条品鉴词，每条很短）",
+    "craft": "title（固定『橡木桶陈酿』）、subtitle（一句诗意文案）、points（4 条工艺卖点）",
+    "origin": "title（固定『产区与酒庄』）、subtitle（一句酒庄简介）、points（4 条：充足日照/得天独厚/优质葡萄/百年传承 各配很短说明）",
+    "pairing": "title（固定『侍酒与餐配』）、points（3 条：建议侍酒温度/适合搭配/单宁佐餐）",
+    "footer": "title（产品中文名）、points（2 条：规格如『一箱6瓶装』、运费如『偏远地区运费另计』）",
+}
+
+
+async def generate_detail_content(item: dict, doc_text: str, lang: str = "zh") -> dict:
+    """为单个产品生成详情页七段各段的真实文案。返回 {role_key: {title, subtitle?, points[]}}。"""
+    from app.providers import get_llm
+
+    lang_word = "中文" if lang != "en" else "English"
+    roles_desc = "\n".join(f'- {k}: {v}' for k, v in _DETAIL_CONTENT_SPEC.items())
+    schema = ('{"banner":{"name":"...","subtitle":"...","points":["..."]},'
+              '"coreinfo":{"title":"核心信息","points":["产区：...","等级：...","品种：...","年份：...","酒精度：...","陈酿：...","陈年潜力：..."]},'
+              '"flavor":{"title":"风味口感","points":["...","...","...","...","...","..."]},'
+              '"craft":{"title":"橡木桶陈酿","subtitle":"...","points":["...","...","...","..."]},'
+              '"origin":{"title":"产区与酒庄","subtitle":"...","points":["...","...","...","..."]},'
+              '"pairing":{"title":"侍酒与餐配","points":["...","...","..."]},'
+              '"footer":{"title":"...","points":["...","..."]}}')
+    prompt = (
+        f"为一款电商产品生成「详情页七段」各段的文案。需要这几段：\n{roles_desc}\n\n"
+        f"用{lang_word}，文案精炼、真实、可直接用，**优先取自下方参考资料里的事实**，不要编造；"
+        f"banner 的 name 用中文名、subtitle 用英文名/系列。\n\n"
+        f"产品：{item.get('label', '')} — {item.get('caption', '')}\n\n"
+        f"参考资料（产品手册）：\n{(doc_text or '（无）')[:5000]}\n\n"
+        f"只输出一个 JSON：{schema}"
+    )
+    try:
+        import json
+        import re
+
+        raw = await get_llm().complete([{"role": "user", "content": prompt}], json_only=True)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group(0)) if m else {}
+        out = {}
+        for key in _DETAIL_CONTENT_SPEC:
+            c = data.get(key) or {}
+            out[key] = {
+                "title": str(c.get("title", "") or c.get("name", ""))[:30],
+                "subtitle": str(c.get("subtitle", ""))[:60],
+                "points": [str(p)[:48] for p in (c.get("points") or [])][:7],
+            }
+        return out
+    except Exception:
+        return {}
+
+
+def build_detail_set_plan(source_label: str, content_map: dict | None = None, lang: str = "zh") -> Plan:
+    """从单个产品图构造 7 段详情页计划（AI 直接渲染文案，暗调影院风，竖版 3:4）。"""
+    if not source_label:
+        raise ValueError("未选择产品图")
+    content_map = content_map or {}
+    nodes = []
+    for i, role in enumerate(DETAIL_ROLES):
+        rc = content_map.get(role["key"])
+        prompt = role["prompt"] + (_main_block(rc, lang) if rc else "")
+        nodes.append(PlanNode(
+            id=f"set_{i + 1}", tool="edit_image",
+            label=f"详情页 {i + 1}/7 · {role['label']}",
+            args={
+                "prompt": prompt, "source_asset": source_label,
+                "aspect_ratio": "3:4", "set_member": True,
+            },
+            depends=[],
+        ))
+    return Plan(
+        mode="plan", title="电商详情页七段（7 张）", nodes=nodes,
+        notes=["AI 生成 7 段详情页：封面 / 核心信息 / 风味 / 工艺 / 产区 / 餐配 / 规格，暗调影院风，文案取自产品与文档"],
+    )
