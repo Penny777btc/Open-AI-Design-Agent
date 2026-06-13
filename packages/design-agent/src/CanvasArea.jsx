@@ -1778,19 +1778,29 @@ const CanvasArea = forwardRef(
       setContextMenu(null);
     };
 
-    // Resize Observer for Stage
+    // Stage 尺寸跟随容器：必须可靠填满，否则会卡在默认 800×600 → 画布上出现一个
+    // 有边界的方块（无限画布破功）。只靠 ResizeObserver 不够：首帧布局未稳时它常先
+    // 量到 0 被丢弃、之后不再触发。故再叠加「立即测 + 下一帧再测 + window resize」。
     useEffect(() => {
-      if (!stageWrapperRef.current) return;
-      const resizeObserver = new ResizeObserver((entries) => {
-        for (let entry of entries) {
-          const { width, height } = entry.contentRect;
-          if (width > 0 && height > 0) {
-            setCanvasSize({ width, height });
-          }
+      const measure = () => {
+        const el = stageWrapperRef.current;
+        if (!el) return;
+        const w = el.clientWidth;
+        const h = el.clientHeight;
+        if (w > 0 && h > 0) {
+          setCanvasSize((prev) => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
         }
-      });
-      resizeObserver.observe(stageWrapperRef.current);
-      return () => resizeObserver.disconnect();
+      };
+      measure();
+      const raf = requestAnimationFrame(measure); // 布局稳定后再测一次，避免卡默认值
+      const resizeObserver = new ResizeObserver(measure);
+      if (stageWrapperRef.current) resizeObserver.observe(stageWrapperRef.current);
+      window.addEventListener("resize", measure);
+      return () => {
+        cancelAnimationFrame(raf);
+        resizeObserver.disconnect();
+        window.removeEventListener("resize", measure);
+      };
     }, []);
 
     // Keyboard Shortcuts
