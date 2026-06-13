@@ -22,6 +22,29 @@ import {
 import toast from "react-hot-toast";
 import { t } from "./i18n";
 
+// 电商文字预设：AI 出背景，文字做成可编辑矢量图层叠加，导出精确不糊（扩散模型渲染文字必错）。
+// 统一带描边 + 阴影，保证在杂乱产品图上也清晰可读；fillAfterStrokeEnabled 让填充压在描边上、字形干净。
+const TEXT_PRESETS = {
+  title: {
+    label: "大标题", text: "主标题",
+    style: { fontSize: 48, fontStyle: "bold", fill: "#ffffff", stroke: "#000000", strokeWidth: 2, fillAfterStrokeEnabled: true, lineJoin: "round", align: "center", shadowColor: "#000000", shadowBlur: 8, shadowOpacity: 0.5, fontFamily: "Inter, sans-serif" },
+  },
+  price: {
+    label: "价格", text: "¥99",
+    style: { fontSize: 56, fontStyle: "bold", fill: "#ffe24d", stroke: "#7a1f1f", strokeWidth: 3, fillAfterStrokeEnabled: true, lineJoin: "round", align: "left", shadowColor: "#000000", shadowBlur: 6, shadowOpacity: 0.45, fontFamily: "Inter, sans-serif" },
+  },
+  badge: {
+    label: "促销角标", text: "限时5折",
+    style: { fontSize: 30, fontStyle: "bold", fill: "#ffffff", stroke: "#dd1111", strokeWidth: 4, fillAfterStrokeEnabled: true, lineJoin: "round", align: "center", shadowColor: "#000000", shadowBlur: 4, shadowOpacity: 0.4, fontFamily: "Inter, sans-serif" },
+  },
+  body: {
+    label: "正文", text: "产品卖点描述",
+    style: { fontSize: 22, fontStyle: "normal", fill: "#ffffff", stroke: "#000000", strokeWidth: 1, fillAfterStrokeEnabled: true, lineJoin: "round", align: "left", shadowColor: "#000000", shadowBlur: 4, shadowOpacity: 0.4, fontFamily: "Inter, sans-serif" },
+  },
+};
+
+const TEXT_SWATCHES = ["#ffffff", "#000000", "#ffe24d", "#ff3b3b", "#19c37d", "#3b82f6"];
+
 const MenuButton = ({ label, shortcut, onClick, theme }) => (
   <button
     className={`w-full text-left px-4 py-1.5 flex justify-between items-center transition-colors ${
@@ -767,6 +790,7 @@ const CanvasArea = forwardRef(
     const [selectedId, setSelectedId] = useState(null);
     const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
     const [zoom, setZoom] = useState(1);
+    const [showTextMenu, setShowTextMenu] = useState(false); // 「添加文字」预设菜单
 
     // ===== 局部编辑（蒙版涂抹）=====
     const [maskMode, setMaskMode] = useState(null); // 进入编辑的 image id
@@ -1284,7 +1308,7 @@ const CanvasArea = forwardRef(
       setSelectedId(id);
     };
 
-    const addNewText = (text, x, y) => {
+    const addNewText = (text, x, y, style) => {
       const stage = stageRef.current;
       const targetX =
         x !== undefined ? x : (-stage.x() + canvasSize.width / 2) / zoom - 50;
@@ -1297,14 +1321,29 @@ const CanvasArea = forwardRef(
           id,
           text: text || t("double_click_edit"),
           fontSize: 24,
+          fill: theme === "dark" ? "white" : "black",
+          fontFamily: "Inter, sans-serif",
           x: targetX,
           y: targetY,
           draggable: true,
-          fill: theme === "dark" ? "white" : "black",
           rotation: 0,
+          ...(style || {}),  // 预设/面板样式覆盖默认
         },
       ]);
       setSelectedId(id);
+    };
+
+    // 电商文字预设：一键加入带样式的标题/价格/促销角标/正文
+    const addPresetText = (key) => {
+      const p = TEXT_PRESETS[key];
+      if (p) addNewText(p.text, undefined, undefined, p.style);
+      setShowTextMenu(false);
+    };
+
+    // 样式面板：改当前选中文字的属性
+    const updateSelectedText = (attrs) => {
+      if (!selectedId?.startsWith("txt")) return;
+      setTexts((prev) => prev.map((tx) => (tx.id === selectedId ? { ...tx, ...attrs } : tx)));
     };
 
     // Snapshot the canvas in the shape the agent expects (see SYSTEM_PROMPT).
@@ -2150,6 +2189,68 @@ const CanvasArea = forwardRef(
             </button>
           </div>
         )}
+
+        {/* 添加文字：电商预设（标题/价格/促销/正文），AI 出背景 + 矢量文字精确叠加 */}
+        {!maskMode && (
+          <div className="absolute top-4 left-4 z-20">
+            <button
+              onClick={() => setShowTextMenu((v) => !v)}
+              className="px-3 py-2 bg-bg-card border border-divider rounded text-[11px] font-bold text-primary-text shadow-lg hover:border-primary transition-all flex items-center gap-1.5"
+              title="在图上叠加文字（导出精确不糊）"
+            >
+              <span className="font-bold">T</span> 添加文字
+            </button>
+            {showTextMenu && (
+              <div className="absolute top-full left-0 mt-1 w-32 bg-bg-card border border-divider rounded shadow-2xl overflow-hidden">
+                {Object.entries(TEXT_PRESETS).map(([key, p]) => (
+                  <button
+                    key={key}
+                    onClick={() => addPresetText(key)}
+                    className="w-full text-left px-3 py-2 text-[12px] text-primary-text hover:bg-bg-page transition-colors flex items-center justify-between"
+                  >
+                    <span>{p.label}</span>
+                    <span className="text-secondary-text text-[10px] truncate ml-2 max-w-[60px]">{p.text}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 文字样式面板：选中文字时出现 */}
+        {!maskMode && selectedId?.startsWith("txt") && (() => {
+          const sel = texts.find((tx) => tx.id === selectedId);
+          if (!sel) return null;
+          const bold = sel.fontStyle?.includes("bold");
+          const hasStroke = (sel.strokeWidth || 0) > 0;
+          const hasShadow = (sel.shadowBlur || 0) > 0;
+          return (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-bg-card border border-divider rounded shadow-2xl px-2 py-1.5">
+              {/* 字号 */}
+              <button onClick={() => updateSelectedText({ fontSize: Math.max(8, (sel.fontSize || 24) - 4) })} className="w-6 h-6 rounded hover:bg-bg-page text-secondary-text hover:text-primary-text text-sm">A−</button>
+              <span className="text-[10px] text-secondary-text font-mono w-6 text-center tabular-nums">{Math.round(sel.fontSize || 24)}</span>
+              <button onClick={() => updateSelectedText({ fontSize: Math.min(200, (sel.fontSize || 24) + 4) })} className="w-6 h-6 rounded hover:bg-bg-page text-secondary-text hover:text-primary-text text-sm">A+</button>
+              <div className="w-px h-5 bg-divider mx-0.5" />
+              {/* 加粗 */}
+              <button onClick={() => updateSelectedText({ fontStyle: bold ? "normal" : "bold" })} className={`w-6 h-6 rounded text-sm font-bold ${bold ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-text hover:text-primary-text"}`}>B</button>
+              {/* 对齐 */}
+              {["left", "center", "right"].map((a) => (
+                <button key={a} onClick={() => updateSelectedText({ align: a })} className={`w-6 h-6 rounded text-[10px] ${sel.align === a ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-text hover:text-primary-text"}`}>{a === "left" ? "⬅" : a === "center" ? "⬌" : "➡"}</button>
+              ))}
+              <div className="w-px h-5 bg-divider mx-0.5" />
+              {/* 颜色 */}
+              {TEXT_SWATCHES.map((c) => (
+                <button key={c} onClick={() => updateSelectedText({ fill: c })} title={c} className={`w-5 h-5 rounded-full border ${sel.fill === c ? "border-primary ring-1 ring-primary" : "border-white/20"}`} style={{ backgroundColor: c }} />
+              ))}
+              <div className="w-px h-5 bg-divider mx-0.5" />
+              {/* 描边 / 阴影：杂乱产品图上的可读性处理 */}
+              <button onClick={() => updateSelectedText(hasStroke ? { strokeWidth: 0 } : { stroke: "#000000", strokeWidth: 2, fillAfterStrokeEnabled: true, lineJoin: "round" })} className={`px-1.5 h-6 rounded text-[10px] ${hasStroke ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-text hover:text-primary-text"}`}>描边</button>
+              <button onClick={() => updateSelectedText(hasShadow ? { shadowBlur: 0 } : { shadowColor: "#000000", shadowBlur: 6, shadowOpacity: 0.45 })} className={`px-1.5 h-6 rounded text-[10px] ${hasShadow ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-text hover:text-primary-text"}`}>阴影</button>
+              <div className="w-px h-5 bg-divider mx-0.5" />
+              <button onClick={() => { setTexts((prev) => prev.filter((tx) => tx.id !== selectedId)); setSelectedId(null); }} className="w-6 h-6 rounded hover:bg-red-500/15 text-secondary-text hover:text-red-400 text-sm" title="删除">✕</button>
+            </div>
+          );
+        })()}
 
         {/* 局部编辑操作提示层（C6）：进入蒙版模式后告知可用操作。
             HTML 浮层、绝对定位、pointer-events-none——不进 Konva 场景图。 */}
