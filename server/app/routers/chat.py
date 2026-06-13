@@ -81,13 +81,17 @@ async def set_template(session_id: str, request: Request, db: AsyncSession = Dep
     body = await request.json()
     template = body.get("template")
     labels = body.get("asset_labels") or []
-    if template not in SET_TEMPLATES:
+    if template != "main6" and template not in SET_TEMPLATES:
         raise HTTPException(status_code=422, detail="未知套图模板")
     if not labels:
         raise HTTPException(status_code=422, detail="请先选择图片")
-    tpl_label = SET_TEMPLATES[template]["label"]
+    if template == "main6":
+        # 电商主图六联：取第一张产品图，出 6 张角色分工主图
+        message = f"🛍 电商主图六联（基于 {labels[0]} 出 6 张）"
+    else:
+        message = f"🎨 套图：{SET_TEMPLATES[template]['label']}（{len(labels)} 张）"
     return await _enqueue(db, user, session_id, "set_template", {
-        "message": f"🎨 套图：{tpl_label}（{len(labels)} 张）",
+        "message": message,
         "template": template,
         "asset_labels": labels,
         "set_mode": "editable" if body.get("mode") == "editable" else "ai",

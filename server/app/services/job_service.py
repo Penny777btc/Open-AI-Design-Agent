@@ -144,8 +144,16 @@ async def _run_job(job_id: str) -> None:
                 )).scalars().first()
             items = [{"label": l, "caption": cap.get(l, "")} for l in labels]
             lang = job_input.get("lang", "zh")
-            content = await generate_set_content(tpl_key, items, doc.extracted_text if doc else "", lang=lang)
-            plan = build_set_plan(tpl_key, labels, content_map=content, lang=lang, mode=job_input.get("set_mode", "ai"))
+            doc_text = doc.extracted_text if doc else ""
+            if tpl_key == "main6":
+                # 主图六联：用第一张选中的产品图，出 6 张角色分工主图
+                from app.agents.set_templates import build_main_set_plan, generate_main_content
+
+                main_content = await generate_main_content(items[0], doc_text, lang=lang) if items else {}
+                plan = build_main_set_plan(labels[0], content_map=main_content, lang=lang)
+            else:
+                content = await generate_set_content(tpl_key, items, doc_text, lang=lang)
+                plan = build_set_plan(tpl_key, labels, content_map=content, lang=lang, mode=job_input.get("set_mode", "ai"))
         else:
             brief = job_input.get("message") or _skill_brief(job_input)
             async with SessionLocal() as db:

@@ -49,6 +49,7 @@ const TEXT_SWATCHES = ["#ffffff", "#000000", "#ffe24d", "#ff3b3b", "#19c37d", "#
 // 一组风格统一的「新图」——不是事后叠文字图层，而是约束生成本身。模板细节在后端
 // app/agents/set_templates.py；这里只用 key/label/desc 做选择。后端 key 必须一致。
 const SET_TEMPLATES = {
+  main6: { label: "电商主图六联", desc: "选 1 张产品图 → AI 出 6 张（白底/卖点/风味/工艺/场景/参数）", single: true },
   ecom: { label: "电商主图", desc: "白底影棚 · 标题居中 · 三条卖点" },
   rednote: { label: "小红书封面", desc: "生活场景 · 大标题 · 竖版 3:4" },
   minimal: { label: "极简画册", desc: "纯净留白 · 单标题 · 编辑感" },
@@ -2678,7 +2679,8 @@ const CanvasArea = forwardRef(
                   </button>
                 ))}
               </div>
-              {/* 模式切换：AI 融合 vs 可编辑 */}
+              {/* 模式切换：AI 融合 vs 可编辑（主图六联固定 AI 融合，不显示） */}
+              {!SET_TEMPLATES[setTpl]?.single && (
               <div className="px-5 pt-3 flex items-center gap-2">
                 {[
                   { k: "ai", label: "AI 融合版", hint: "设计最融合 · 文字不可编辑" },
@@ -2697,6 +2699,7 @@ const CanvasArea = forwardRef(
                   </button>
                 ))}
               </div>
+              )}
               {/* 图片勾选 */}
               <div className="px-5 py-4 flex-1 overflow-y-auto scrollbar-subtle">
                 {images.length === 0 ? (
@@ -2720,10 +2723,16 @@ const CanvasArea = forwardRef(
                 )}
               </div>
               <div className="px-5 py-3 border-t border-divider flex items-center justify-between">
-                <span className="text-[11px] text-secondary-text">已选 {setSel.size} 张 · 排版/字体/风格统一，每张消耗积分</span>
+                <span className="text-[11px] text-secondary-text">
+                  {SET_TEMPLATES[setTpl]?.single
+                    ? `已选 ${setSel.size} 张 · 用第 1 张产品图出 6 张角色主图`
+                    : `已选 ${setSel.size} 张 · 排版/字体/风格统一，每张消耗积分`}
+                </span>
                 <div className="flex gap-2">
                   <button onClick={() => setShowSetPanel(false)} className="px-4 py-2 border border-divider text-secondary-text rounded text-[11px] font-bold hover:text-primary-text">取消</button>
-                  <button onClick={applySetTemplate} disabled={setSel.size === 0} className="px-5 py-2 bg-primary text-black rounded text-[11px] font-bold disabled:opacity-40 disabled:cursor-not-allowed">生成套图（{setSel.size} 张）</button>
+                  <button onClick={applySetTemplate} disabled={setSel.size === 0} className="px-5 py-2 bg-primary text-black rounded text-[11px] font-bold disabled:opacity-40 disabled:cursor-not-allowed">
+                    {SET_TEMPLATES[setTpl]?.single ? "生成主图六联（6 张）" : `生成套图（${setSel.size} 张）`}
+                  </button>
                 </div>
               </div>
             </div>
