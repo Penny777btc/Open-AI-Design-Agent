@@ -115,6 +115,8 @@ export default function CreativeCanvas({
   const [activeSkill, setActiveSkill] = useState(null);
   const [showSkillsMenu, setShowSkillsMenu] = useState(false);
   const [showAssetsMenu, setShowAssetsMenu] = useState(false);
+  // 极速模式：计划一到自动批准、跳过手动确认卡（简单需求直出）。持久化在 localStorage
+  const [expressMode, setExpressMode] = useState(false);
   const [showMentionPopup, setShowMentionPopup] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionCursorPos, setMentionCursorPos] = useState(0);
@@ -160,6 +162,19 @@ export default function CreativeCanvas({
   // 会话首次加载后把镜头对准内容（zoom-to-fit），后续生成不抢镜头
   const initialFitDoneRef = useRef(false);
   const initialHandoffProcessed = useRef(false);
+  const autoApprovedRef = useRef(new Set()); // 极速模式已自动批准过的 job，防重复批准
+
+  // 极速开关持久化：初始读取 + 写回（localStorage 是自动批准判断的事实来源，避免闭包过期）
+  useEffect(() => {
+    if (typeof localStorage !== "undefined") setExpressMode(localStorage.getItem("picsmith_express") === "1");
+  }, []);
+  const toggleExpress = () => {
+    setExpressMode((v) => {
+      const next = !v;
+      if (typeof localStorage !== "undefined") localStorage.setItem("picsmith_express", next ? "1" : "0");
+      return next;
+    });
+  };
 
   const getHeaders = useCallback(() => {
     if (inEmbedMode) {
@@ -327,6 +342,20 @@ export default function CreativeCanvas({
     })();
     if (!flat) return;
     flat.job_id = ev.job_id || p.job_id;
+
+    // 极速模式：计划一到且尚未定夺 → 自动批准（每个 job 只批一次）。
+    // 读 localStorage 而非闭包变量，避免轮询回调里拿到过期的 expressMode。
+    if (
+      flat.type === "plan_propose" &&
+      (ev.approved === undefined || ev.approved === null) &&
+      typeof localStorage !== "undefined" &&
+      localStorage.getItem("picsmith_express") === "1" &&
+      flat.job_id &&
+      !autoApprovedRef.current.has(flat.job_id)
+    ) {
+      autoApprovedRef.current.add(flat.job_id);
+      setTimeout(() => handleJobAction(flat.job_id, "approve"), 60);
+    }
 
     // If the job has already been approved or rejected, mark approval events as handled.
     if (ev.approved !== undefined && ev.approved !== null) {
@@ -1849,7 +1878,17 @@ export default function CreativeCanvas({
                     <FiUpload size={16} />
                   </button>
 
-                  <div 
+                  {/* 极速模式：开启后计划自动批准、跳过确认卡 */}
+                  <button
+                    type="button"
+                    onClick={toggleExpress}
+                    className={`p-1.5 rounded transition-all ${expressMode ? "bg-primary/15 text-primary" : "hover:bg-bg-page text-secondary-text"}`}
+                    title={expressMode ? "极速模式：开（计划自动批准）" : "极速模式：关（需手动确认计划）"}
+                  >
+                    <FiZap size={16} />
+                  </button>
+
+                  <div
                     className="relative"
                     tabIndex={-1}
                     onBlur={(e) => {

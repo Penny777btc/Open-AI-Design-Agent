@@ -78,6 +78,13 @@ export default function BillingPage() {
           <div className="text-right">
             <div className="micro-label">{t.balance}</div>
             <div className="font-data text-4xl">{userData?.balance ?? "—"}</div>
+            {userData?.balance > 0 && (
+              <div className="text-secondary-text text-[11px] mt-1">
+                {zh
+                  ? `≈ ${Math.floor(userData.balance / 10)} 张图`
+                  : `≈ ${Math.floor(userData.balance / 10)} images`}
+              </div>
+            )}
           </div>
         </div>
 
@@ -87,6 +94,11 @@ export default function BillingPage() {
             <div key={p.id} className="bg-bg-card border border-white/[0.08] rounded-sm p-6 flex flex-col gap-3 hover:border-white/20 transition-all">
               <div className="micro-label">{p.label}</div>
               <div className="font-data text-3xl">{p.credits.toLocaleString()}<span className="text-sm text-gray-500 ml-1 font-normal">credits</span></div>
+              <div className="text-secondary-text text-[11px] -mt-1">
+                {zh
+                  ? `≈ ${Math.floor(p.credits / 10).toLocaleString()} 张图`
+                  : `≈ ${Math.floor(p.credits / 10).toLocaleString()} images`}
+              </div>
               <div className="text-secondary-text text-[13px]">${(p.amount_cents / 100).toFixed(2)}</div>
               <button
                 onClick={() => buy(p.id)}
