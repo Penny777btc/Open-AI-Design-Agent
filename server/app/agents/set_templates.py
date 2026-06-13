@@ -177,62 +177,66 @@ def build_set_plan(template_key: str, asset_labels: list[str], content_map: dict
 # 文案由 generate_main_content 从产品说明 + PDF 自动生成，AI 直接渲染进画面。
 # ============================================================================
 
-# 全集共享的版式/风格约束（保证 6 张是同一套设计语言）
+# 全集共享约束：一致 = 品牌一致（配色/金色/字体/光感氛围），**不是构图一致**。
+# 关键：每张必须用「不同的机位、瓶子大小与位置、裁切、道具」，否则 6 张会像同一张换字。
 _MAIN_STYLE = (
-    "PREMIUM e-commerce product main image, part of a CONSISTENT 6-image set that MUST share the exact same "
-    "visual language: a bright, airy studio with a soft arch-shaped backdrop and clean light-gray gradient, "
-    "soft professional lighting, refined GOLD accent lines, an elegant bold Chinese title with a thin gold "
-    "underline rule, and neat icon+text bullet rows. Keep the product EXACTLY as in the source photo, including "
-    "its own label and branding. Match the props to the wine: dark berries/plums for red wine, citrus & green "
-    "grapes for white. Square 1:1, high-end, uncluttered, plenty of negative space."
+    "PREMIUM bright e-commerce product main image. This is one of a 6-image set: keep the BRAND look consistent "
+    "(same airy light-gray studio palette, refined GOLD accents, elegant bold Chinese title with a thin gold rule, "
+    "neat icon+text rows, soft pro lighting) — but each image MUST have a DISTINCT composition. VARY the camera "
+    "angle, the bottle's scale and placement, the crop and the props from image to image so the set reads as a rich "
+    "editorial series, NEVER near-duplicate frames. This is an EDIT of a product photo: you MUST RE-STAGE the scene "
+    "as the role specifies (new angle / scale / placement) — do NOT preserve the source framing. Keep the product "
+    "itself and its label EXACTLY accurate. Square 1:1, high-end, uncluttered, generous negative space."
 )
 
 MAIN_ROLES = [
     {
         "key": "hero", "label": "白底主图",
         "prompt": _MAIN_STYLE + (
-            " ROLE — clean HERO shot: pure clean white/light studio background, the bottle and a poured glass of "
-            "wine centered and prominent, elegant props (soft silk fabric + fresh fruit) arranged at the base. "
-            "Do NOT add any title, caption or marketing text — a pristine clean product hero."
+            " ROLE — clean HERO: straight-on EYE-LEVEL, pure white seamless background, the FULL bottle and a poured "
+            "glass CENTERED at medium scale, a sweep of soft silk and a few fresh fruits at the base. No text at all "
+            "— a pristine clean product hero."
         ),
     },
     {
         "key": "sell", "label": "标题卖点",
         "prompt": _MAIN_STYLE + (
-            " ROLE — title + key selling points: on the LEFT place a large bold two-line Chinese TITLE with a short "
-            "subtitle beneath and a thin gold rule, then a column of 4 icon+text bullet rows (origin / aging / "
-            "alcohol / variety). On the RIGHT the bottle with a glass and a little fruit."
+            " ROLE — title + selling points: a dramatic LOW-ANGLE looking UP at the bottle so it stands tall and "
+            "heroic on the RIGHT third; on the LEFT a large bold two-line Chinese TITLE + subtitle + thin gold rule, "
+            "then 4 icon+text bullet rows (origin / aging / alcohol / variety). Minimal props, lots of clean space."
         ),
     },
     {
         "key": "flavor", "label": "风味口感",
         "prompt": _MAIN_STYLE + (
-            " ROLE — flavor & tasting: top-left a bold title plus the product name; a column of 5 icon+text "
-            "tasting-note rows on the left; the bottle on the right set within a tasteful food-pairing lifestyle "
-            "scene (e.g. steak / pasta / cheese for red wine)."
+            " ROLE — flavor & tasting: a gently HIGH-ANGLE styled TABLETOP looking down ~30°, the bottle laid/standing "
+            "mid-scene with the specific tasting fruits & spices artfully scattered (the actual notes, not generic "
+            "fruit); top-left a bold title + product name; a column of 5 icon+text tasting-note rows down the left."
         ),
     },
     {
         "key": "craft", "label": "工艺陈酿",
         "prompt": _MAIN_STYLE + (
-            " ROLE — craft / oak aging: a bold title with a subtitle; 4 icon+text bullet rows about the craft; the "
-            "bottle beside oak barrels; and a row of 3 small rounded thumbnail cards along the bottom (oak barrel / "
-            "caramel / vanilla)."
+            " ROLE — craft / oak aging: a 3/4 SIDE angle, the bottle nestled among stacked OAK BARRELS toward the "
+            "LEFT in a warm wood-toned setting (props = oak, cork, staves — no fruit); a bold title + subtitle and 4 "
+            "icon+text craft bullets on the right; a row of 3 small rounded thumbnail cards along the bottom."
         ),
     },
     {
         "key": "scene", "label": "场景佐餐",
         "prompt": _MAIN_STYLE + (
-            " ROLE — serving & pairing: a bold title with subtitle; 3 icon+text bullet rows (serving temperature / "
-            "food pairings / tannin); the bottle and a glass within an elegant warm dining scene."
+            " ROLE — serving & pairing: a TABLE-LEVEL low shot of an elegant place setting, PLATED FOOD prominent in "
+            "the foreground and the bottle + glass set back to one side (props = food, not loose fruit); a bold title "
+            "+ subtitle and 3 icon+text rows (serving temperature / food pairings / tannin)."
         ),
     },
     {
         "key": "spec", "label": "产品档案",
         "prompt": _MAIN_STYLE + (
-            " ROLE — product profile: a bold title plus a small 'PRODUCT PROFILE' label; a column of 5 icon+text "
-            "spec rows (region / grade / variety / vintage / alcohol); the bottle on the right with a circular "
-            "close-up inset of the label."
+            " ROLE — product profile: combine TWO scales — the full bottle standing on the RIGHT plus a large circular "
+            "MACRO close-up inset of the LABEL (extreme detail crop); clean minimal studio, no fruit; a bold title + "
+            "a small 'PRODUCT PROFILE' kicker and a column of 5 icon+text spec rows (region / grade / variety / "
+            "vintage / alcohol)."
         ),
     },
 ]
@@ -341,50 +345,60 @@ def build_main_set_plan(source_label: str, content_map: dict | None = None, lang
 # 与主图六联是「一套两风格」：主图明亮通透，详情页暗调高级。竖版便于拼成长图。
 # ============================================================================
 
+# 一致 = 品牌一致（暗调影院氛围/金色衬线/中英双语/金色描边图标），**构图必须每段不同**。
+# 每段强制不同的机位、瓶子大小与位置、裁切、道具，避免 7 段像同一张图换文字。
 _DETAIL_STYLE = (
-    "PREMIUM e-commerce DETAIL-PAGE section for a wine product, part of a CONSISTENT set sharing the exact same "
-    "CINEMATIC visual language: a DARK, moody, atmospheric background (deep burgundy to near-black, a soft warm "
-    "spotlight, subtle bokeh and smoke), elegant GOLD SERIF typography, BILINGUAL headings (Chinese title with a "
-    "smaller English subtitle), refined gold divider rules and thin-line gold icons. Keep the product EXACTLY as in "
-    "the source photo including its label. Vertical 3:4, luxurious editorial, high contrast, rich and premium."
+    "PREMIUM cinematic e-commerce DETAIL-PAGE section for a wine product. This is one of a 7-section page: keep the "
+    "BRAND mood consistent (dark moody premium atmosphere, deep burgundy-to-black, GOLD serif typography, BILINGUAL "
+    "Chinese+English headings, thin gold dividers and line icons) — but each section MUST have a DISTINCT "
+    "composition. VARY the camera angle, the bottle's scale and placement, the crop, the depth and the props from "
+    "section to section so the page reads as a rich editorial spread, NEVER near-duplicate frames. This is an EDIT "
+    "of a product photo: you MUST RE-STAGE each section as specified (new angle / scale / placement / setting) — do "
+    "NOT preserve the source framing. Keep the product and its label EXACTLY accurate. Vertical 3:4, luxurious, high "
+    "contrast."
 )
 
 DETAIL_ROLES = [
     {"key": "banner", "label": "封面",
      "prompt": _DETAIL_STYLE + (
-         " ROLE — cover banner: a dramatic hero with the bottle and a glass against a moody vineyard/mountain "
-         "backdrop at dusk; a large bilingual product name (Chinese + English) in gold serif at the top, with a "
-         "one-line meta strip (aging | vintage | alcohol) beneath.")},
+         " ROLE — cover banner: a WIDE cinematic establishing shot. Place the bottle SMALLER in the LOWER-RIGHT "
+         "within a vast dusk vineyard-and-mountain panorama with lots of sky and depth (environmental, not a "
+         "studio). A large bilingual product name in gold serif across the top, a one-line meta strip "
+         "(aging | vintage | alcohol) beneath. No loose fruit.")},
     {"key": "coreinfo", "label": "核心信息",
      "prompt": _DETAIL_STYLE + (
-         " ROLE — core info: a bold bilingual heading 核心信息; the bottle on the left and a large label close-up on "
-         "the upper-right; a neat BILINGUAL spec table (each row: gold icon + Chinese label + value + small English) "
-         "for region / grade / variety / vintage / alcohol / aging / aging-potential.")},
+         " ROLE — core info: combine TWO scales — the full bottle standing on the LEFT and a LARGE MACRO close-up of "
+         "the LABEL filling the upper-right (extreme detail crop). Dark studio, minimal props. Bold bilingual heading "
+         "核心信息; a neat BILINGUAL spec table (each row: gold icon + Chinese label + value + small English) for "
+         "region / grade / variety / vintage / alcohol / aging / aging-potential.")},
     {"key": "flavor", "label": "风味口感",
      "prompt": _DETAIL_STYLE + (
-         " ROLE — tasting notes: bilingual heading 风味口感 / TASTING NOTES; a column of 6 round-icon tasting-note "
-         "rows beside the bottle and glass; and at the bottom a tasteful FLAVOR PYRAMID infographic with 4 tiers "
-         "(初闻 / 中段 / 后段 / 余味), each tier a thin gold band with a short note.")},
+         " ROLE — tasting notes: a dramatic slightly LOW spotlit angle, the bottle + glass CENTER on near-black with "
+         "the actual tasting fruits & spices catching the light (the real notes, not generic fruit). Bilingual "
+         "heading 风味口感 / TASTING NOTES; a column of 6 round-icon tasting-note rows; and a FLAVOR PYRAMID "
+         "infographic at the bottom with 4 tiers (初闻 / 中段 / 后段 / 余味), each a thin gold band with a short note.")},
     {"key": "craft", "label": "橡木桶陈酿",
      "prompt": _DETAIL_STYLE + (
-         " ROLE — oak aging: bilingual heading 橡木桶陈酿 / OAK BARREL AGING; a short poetic line; 4 icon+text bullet "
-         "rows about the craft; the bottle among oak barrels in a dim cellar; a strip of 3 atmospheric close-up "
-         "photos (barrel grain / charred oak / swirling wine) along the bottom.")},
+         " ROLE — oak aging: a 3/4 angle deep inside a DIM CELLAR, the bottle among stacked OAK BARRELS in heavy "
+         "shadow (props = oak, char, cork — no fruit), texture-rich. Bilingual heading 橡木桶陈酿 / OAK BARREL AGING; "
+         "a short poetic line; 4 icon+text craft bullets; and a strip of 3 atmospheric MACRO photos along the bottom "
+         "(barrel grain / charred oak / swirling wine).")},
     {"key": "origin", "label": "产区与酒庄",
      "prompt": _DETAIL_STYLE + (
-         " ROLE — origin & winery: bilingual heading 产区与酒庄 / ORIGIN & WINERY; a short winery story; a row of 4 "
-         "gold-icon feature cards (sunlight / terroir / quality grapes / heritage); a golden-hour vineyard landscape "
-         "with the bottle composited naturally in the foreground.")},
+         " ROLE — origin & winery: a GOLDEN-HOUR vineyard LANDSCAPE, warmer and brighter than the other sections (a "
+         "deliberate contrast), the bottle SMALL in the lower foreground among grapevines (props = grapes on the "
+         "vine). Bilingual heading 产区与酒庄 / ORIGIN & WINERY; a short winery story; a row of 4 gold-icon feature "
+         "cards (sunlight / terroir / quality grapes / heritage).")},
     {"key": "pairing", "label": "侍酒与餐配",
      "prompt": _DETAIL_STYLE + (
-         " ROLE — serving & pairing: bilingual heading 侍酒与餐配 / SERVING & PAIRING; 3 icon+text bullet rows "
-         "(serving temperature / food pairings / tannin); the bottle and a glass set within an elegant warm "
-         "candle-lit dining scene with plated food.")},
+         " ROLE — serving & pairing: a TABLE-LEVEL candle-lit dining scene, PLATED FOOD prominent in the foreground "
+         "and the bottle + glass set back to one side (props = food, not loose fruit), warm and intimate. Bilingual "
+         "heading 侍酒与餐配 / SERVING & PAIRING; 3 icon+text rows (serving temperature / food pairings / tannin).")},
     {"key": "footer", "label": "规格物流",
      "prompt": _DETAIL_STYLE + (
-         " ROLE — footer: a refined brand crest at the top, the bilingual product name, the bottle with a glass and "
-         "food in a dim luxurious setting; 2 icon+text lines for packaging spec and shipping note. Wide short "
-         "banner feel, brand sign-off at the bottom.")},
+         " ROLE — footer: a WIDE SHORT banner-feel composition, a refined brand crest centered at top, the bottle "
+         "off to ONE SIDE in a dim luxurious setting with minimal props; the bilingual product name and 2 icon+text "
+         "lines for packaging spec and shipping note; brand sign-off at the bottom.")},
 ]
 
 _DETAIL_CONTENT_SPEC = {
