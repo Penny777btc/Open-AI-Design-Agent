@@ -45,6 +45,35 @@ const TEXT_PRESETS = {
 
 const TEXT_SWATCHES = ["#ffffff", "#000000", "#ffe24d", "#ff3b3b", "#19c37d", "#3b82f6"];
 
+// 套图模板：选中多张图，按同一套「固定排版 + 固定字体」叠加文字 → 风格统一的成套图。
+// 槽位坐标/字号都是相对图片尺寸（rel*），保证不同大小的图套出来排版一致。字体统一 Inter。
+const _PT_STYLE = { fontStyle: "bold", fill: "#ffffff", stroke: "#000000", strokeWidth: 1.5, fillAfterStrokeEnabled: true, lineJoin: "round", shadowColor: "#000000", shadowBlur: 4, shadowOpacity: 0.4 };
+const SET_TEMPLATES = {
+  ecom: {
+    label: "电商主图",
+    slots: [
+      { text: "产品标题", relX: 0, relY: 0.05, relW: 1, align: "center", relSize: 0.075, style: { fontStyle: "bold", fill: "#ffffff", stroke: "#000000", strokeWidth: 2, fillAfterStrokeEnabled: true, lineJoin: "round", shadowColor: "#000000", shadowBlur: 8, shadowOpacity: 0.5 } },
+      { text: "副标题 · 一句卖点", relX: 0, relY: 0.155, relW: 1, align: "center", relSize: 0.04, style: { fontStyle: "bold", fill: "#ffe24d", stroke: "#000000", strokeWidth: 1, fillAfterStrokeEnabled: true, shadowColor: "#000000", shadowBlur: 4, shadowOpacity: 0.4 } },
+      { text: "• 核心卖点一", relX: 0.05, relY: 0.68, relW: 0.6, align: "left", relSize: 0.038, style: _PT_STYLE },
+      { text: "• 核心卖点二", relX: 0.05, relY: 0.76, relW: 0.6, align: "left", relSize: 0.038, style: _PT_STYLE },
+      { text: "• 核心卖点三", relX: 0.05, relY: 0.84, relW: 0.6, align: "left", relSize: 0.038, style: _PT_STYLE },
+    ],
+  },
+  rednote: {
+    label: "小红书封面",
+    slots: [
+      { text: "大标题", relX: 0, relY: 0.4, relW: 1, align: "center", relSize: 0.11, style: { fontStyle: "bold", fill: "#ffffff", stroke: "#ff3b3b", strokeWidth: 3, fillAfterStrokeEnabled: true, lineJoin: "round", shadowColor: "#000000", shadowBlur: 6, shadowOpacity: 0.4 } },
+      { text: "副标题说明", relX: 0, relY: 0.56, relW: 1, align: "center", relSize: 0.045, style: { fontStyle: "bold", fill: "#ffffff", stroke: "#000000", strokeWidth: 1, fillAfterStrokeEnabled: true } },
+    ],
+  },
+  minimal: {
+    label: "极简标题",
+    slots: [
+      { text: "标题", relX: 0.06, relY: 0.78, relW: 0.88, align: "left", relSize: 0.06, style: { fontStyle: "bold", fill: "#ffffff", shadowColor: "#000000", shadowBlur: 6, shadowOpacity: 0.5 } },
+    ],
+  },
+};
+
 const MenuButton = ({ label, shortcut, onClick, theme }) => (
   <button
     className={`w-full text-left px-4 py-1.5 flex justify-between items-center transition-colors ${
@@ -791,6 +820,9 @@ const CanvasArea = forwardRef(
     const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
     const [zoom, setZoom] = useState(1);
     const [showTextMenu, setShowTextMenu] = useState(false); // 「添加文字」预设菜单
+    const [showSetPanel, setShowSetPanel] = useState(false);  // 套图面板
+    const [setSel, setSetSel] = useState(() => new Set());     // 套图：勾选的图片 id
+    const [setTpl, setSetTpl] = useState("ecom");              // 套图：选中的模板
 
     // ===== 局部编辑（蒙版涂抹）=====
     const [maskMode, setMaskMode] = useState(null); // 进入编辑的 image id
@@ -1344,6 +1376,38 @@ const CanvasArea = forwardRef(
     const updateSelectedText = (attrs) => {
       if (!selectedId?.startsWith("txt")) return;
       setTexts((prev) => prev.map((tx) => (tx.id === selectedId ? { ...tx, ...attrs } : tx)));
+    };
+
+    // 套图：给每张勾选的图叠加同一套模板文字（坐标/字号相对图片尺寸 → 排版统一、字体统一）
+    const applySetTemplate = () => {
+      const tpl = SET_TEMPLATES[setTpl];
+      if (!tpl || setSel.size === 0) return;
+      const stamp = Date.now();
+      const newTexts = [];
+      images.forEach((img) => {
+        if (!setSel.has(img.id)) return;
+        const w = img.width || 200;
+        const h = img.height || 200;
+        tpl.slots.forEach((slot, i) => {
+          newTexts.push({
+            id: `txt-${stamp}-${img.id.slice(-5)}-${i}`,
+            text: slot.text,
+            x: img.x + slot.relX * w,
+            y: img.y + slot.relY * h,
+            width: slot.relW ? slot.relW * w : undefined,
+            align: slot.align || "left",
+            fontSize: Math.max(8, Math.round(slot.relSize * h)),
+            fontFamily: "Inter, sans-serif", // 固定字体
+            draggable: true,
+            rotation: 0,
+            ...slot.style,
+          });
+        });
+      });
+      setTexts((prev) => [...prev, ...newTexts]);
+      toast.success(`已为 ${setSel.size} 张图套用「${tpl.label}」模板`);
+      setShowSetPanel(false);
+      setSetSel(new Set());
     };
 
     // Snapshot the canvas in the shape the agent expects (see SYSTEM_PROMPT).
@@ -2218,6 +2282,68 @@ const CanvasArea = forwardRef(
                 ))}
               </div>
             )}
+            {/* 套图：选多张图，套同一固定排版+固定字体的模板 */}
+            <button
+              onClick={() => { setShowSetPanel(true); setShowTextMenu(false); }}
+              className="mt-2 px-3 py-2 bg-bg-card border border-divider rounded text-[11px] font-bold text-primary-text shadow-lg hover:border-primary transition-all flex items-center gap-1.5 w-full"
+              title="选多张图，套用统一的固定排版模板"
+            >
+              <span className="font-bold">▦</span> 套图模板
+            </button>
+          </div>
+        )}
+
+        {/* 套图面板：勾选图片 + 选模板 + 应用 */}
+        {showSetPanel && (
+          <div className="absolute inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6" onClick={() => setShowSetPanel(false)}>
+            <div className="bg-bg-card border border-divider rounded-lg shadow-2xl w-[min(680px,92%)] max-h-[86%] flex flex-col" onClick={(e) => e.stopPropagation()}>
+              <div className="px-5 py-3 border-b border-divider flex items-center justify-between">
+                <div className="text-[13px] font-bold text-primary-text">套图模板 · 统一排版/字体</div>
+                <button onClick={() => setShowSetPanel(false)} className="text-secondary-text hover:text-primary-text text-lg leading-none">✕</button>
+              </div>
+              {/* 模板选择 */}
+              <div className="px-5 pt-4 flex gap-2">
+                {Object.entries(SET_TEMPLATES).map(([key, tpl]) => (
+                  <button
+                    key={key}
+                    onClick={() => setSetTpl(key)}
+                    className={`px-3 py-1.5 rounded text-[12px] border transition-all ${setTpl === key ? "bg-primary text-black border-primary font-bold" : "bg-bg-page text-secondary-text border-divider hover:text-primary-text"}`}
+                  >
+                    {tpl.label}
+                    <span className="ml-1.5 opacity-60 text-[10px]">{tpl.slots.length} 槽位</span>
+                  </button>
+                ))}
+              </div>
+              {/* 图片勾选 */}
+              <div className="px-5 py-4 flex-1 overflow-y-auto scrollbar-subtle">
+                {images.length === 0 ? (
+                  <div className="py-10 text-center text-secondary-text text-[12px]">画布上还没有图片</div>
+                ) : (
+                  <div className="grid grid-cols-4 gap-2">
+                    {images.map((img) => {
+                      const on = setSel.has(img.id);
+                      return (
+                        <button
+                          key={img.id}
+                          onClick={() => setSetSel((prev) => { const n = new Set(prev); n.has(img.id) ? n.delete(img.id) : n.add(img.id); return n; })}
+                          className={`relative aspect-square rounded overflow-hidden border-2 transition-all ${on ? "border-primary" : "border-divider hover:border-secondary-text"}`}
+                        >
+                          <img src={img.src} className="w-full h-full object-cover" />
+                          {on && <span className="absolute top-1 right-1 w-5 h-5 rounded-full bg-primary text-black text-[11px] font-bold flex items-center justify-center">✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="px-5 py-3 border-t border-divider flex items-center justify-between">
+                <span className="text-[11px] text-secondary-text">已选 {setSel.size} 张 · 排版与字体固定，套用后逐张改文字内容</span>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowSetPanel(false)} className="px-4 py-2 border border-divider text-secondary-text rounded text-[11px] font-bold hover:text-primary-text">取消</button>
+                  <button onClick={applySetTemplate} disabled={setSel.size === 0} className="px-5 py-2 bg-primary text-black rounded text-[11px] font-bold disabled:opacity-40 disabled:cursor-not-allowed">套用到 {setSel.size} 张</button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
