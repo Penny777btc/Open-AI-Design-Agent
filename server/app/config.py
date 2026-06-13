@@ -57,8 +57,18 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str = ""
 
 
-def tool_cost(tool: str) -> int:
-    return settings.edit_credits if tool == "edit_image" else settings.image_credits
+def tool_cost(tool: str, model: str | None = None, seconds: float | None = None) -> int:
+    """节点积分价。按模型差异化：高级图片模型/视频不能再走统一 10 积分（会亏）。
+
+    向后兼容：旧调用 tool_cost(tool) 不传 model → 默认图片模型（gpt-image-2，10 积分）。
+    """
+    from app.services import model_catalog
+
+    if tool == "edit_image":
+        return model_catalog.EDIT_CREDITS
+    if tool == "generate_video":
+        return model_catalog.video_credits(model or "seedance-2-480p", seconds or 5)
+    return model_catalog.image_credits(model)
 
 
 def validate_production_config() -> list[str]:

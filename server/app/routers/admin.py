@@ -541,6 +541,14 @@ async def recent_assets(
     ]
 
 
+@router.get("/models")
+async def list_models():
+    """模型目录与毛利透视：每个模型的拿货成本 / 积分价 / 毛利率。"""
+    from app.services import model_catalog
+
+    return model_catalog.catalog()
+
+
 @router.get("/audit-logs")
 async def audit_logs(
     db: AsyncSession = Depends(get_db),
