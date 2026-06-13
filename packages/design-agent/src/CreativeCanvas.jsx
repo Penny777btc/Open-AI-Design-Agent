@@ -1460,11 +1460,11 @@ export default function CreativeCanvas({
 
         {/* Right Panel: Chat Sidebar */}
         <div 
-          className={`flex-shrink-0 flex flex-col bg-bg-card border-l border-divider shadow-[-10px_0_20px_rgba(0,0,0,0.02)] z-20 transition-all duration-300 ${!showChat ? 'overflow-hidden' : ''}`}
+          className={`flex-shrink-0 flex flex-col min-h-0 overflow-hidden bg-bg-card border-l border-divider shadow-[-10px_0_20px_rgba(0,0,0,0.02)] z-20 transition-all duration-300`}
           style={{ width: sidebarWidth }}
         >
           {/* Sidebar Header */}
-          <div className="p-4 flex items-center justify-between border-b border-divider bg-bg-card">
+          <div className="p-4 flex items-center justify-between border-b border-divider bg-bg-card shrink-0">
             <div className="flex flex-col">
               <h2 className="font-bold text-[13px] text-primary-text uppercase tracking-widest leading-none flex items-center gap-2">
                 <RiSparklingLine className="text-primary" /> Picsmith
@@ -1494,7 +1494,8 @@ export default function CreativeCanvas({
             </div>
           </div>
           {/* Chat History */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-6 scrollbar-subtle">
+          {/* min-h-0：flex-1 子项默认 min-height:auto（=内容高），消息多时不肯收缩会把输入框顶出可视区；置 0 才能让 overflow 滚动生效 */}
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6 scrollbar-subtle">
             {messages.map((msg, idx) => {
               if (!msg) return null;
               const prevMsg = idx > 0 ? messages[idx - 1] : null;
@@ -1655,7 +1656,7 @@ export default function CreativeCanvas({
           </div>
 
           {/* Chat Input Area */}
-          <div className="p-2 bg-bg-card">
+          <div className="p-2 bg-bg-card shrink-0">
             <div 
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}

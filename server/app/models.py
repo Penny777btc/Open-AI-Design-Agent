@@ -140,6 +140,45 @@ class Order(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class Package(Base):
+    """充值套餐/价格档位。从代码硬编码迁到库里，管理后台可增删改。
+
+    type 与 billing_period 是订阅制的预留口子：现在只用 one_time，
+    将来加订阅时复用同一张表（subscription + monthly/yearly），不改结构。
+    """
+
+    __tablename__ = "packages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    slug: Mapped[str] = mapped_column(String(48), unique=True, index=True)  # 稳定标识，前端/Stripe 引用
+    label: Mapped[str] = mapped_column(String(64))
+    credits: Mapped[int] = mapped_column(Integer)
+    amount_cents: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(8), default="usd")
+    type: Mapped[str] = mapped_column(String(16), default="one_time")  # one_time | subscription（预留）
+    billing_period: Mapped[str | None] = mapped_column(String(16), nullable=True)  # null | monthly | yearly（预留）
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class RedeemCode(Base):
+    """兑换码/卡密：运营发券，核销即向积分账本写一条 grant 流水。"""
+
+    __tablename__ = "redeem_codes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    credits: Mapped[int] = mapped_column(Integer)
+    batch: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)  # 批次号，便于成批管理
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active | redeemed | disabled
+    redeemed_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    redeemed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class AdminAuditLog(Base):
     """管理员操作审计：谁、对谁、做了什么——积分补偿/封禁必须可追溯。"""
 

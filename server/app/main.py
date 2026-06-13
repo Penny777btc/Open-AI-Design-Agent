@@ -44,8 +44,17 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     await _bootstrap_admins()
+    await _seed_packages()
     await mark_stale_jobs_failed()
     yield
+
+
+async def _seed_packages():
+    from app.db import SessionLocal
+    from app.routers.billing import seed_packages_if_empty
+
+    async with SessionLocal() as db:
+        await seed_packages_if_empty(db)
 
 
 async def _bootstrap_admins():

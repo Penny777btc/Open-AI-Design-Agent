@@ -20,6 +20,9 @@ export default function BillingPage() {
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [ledger, setLedger] = useState([]);
   const [buying, setBuying] = useState(null);
+  const [redeemCode, setRedeemCode] = useState("");
+  const [redeeming, setRedeeming] = useState(false);
+  const zh = lang === "zh";
 
   useEffect(() => {
     axios.get(`${API}/api/v1/billing/packages`).then(({ data }) => {
@@ -43,6 +46,23 @@ export default function BillingPage() {
     } catch (err) {
       toast.error(err.response?.data?.detail || "下单失败");
       setBuying(null);
+    }
+  };
+
+  const redeem = async () => {
+    const code = redeemCode.trim();
+    if (!code) return;
+    setRedeeming(true);
+    try {
+      const { data } = await axios.post(`${API}/api/v1/billing/redeem`, { code });
+      toast.success(zh ? `已到账 ${data.credits} 积分` : `${data.credits} credits added`);
+      setRedeemCode("");
+      fetchUserData(); // 刷新顶部余额
+      axios.get(`${API}/api/v1/billing/ledger`).then(({ data }) => setLedger(data)).catch(() => {});
+    } catch (err) {
+      toast.error(err.response?.data?.detail || (zh ? "兑换失败" : "Redeem failed"));
+    } finally {
+      setRedeeming(false);
     }
   };
 
@@ -81,6 +101,27 @@ export default function BillingPage() {
               </button>
             </div>
           ))}
+        </div>
+
+        {/* 兑换码 */}
+        <div className="flex flex-col gap-3">
+          <div className="micro-label">{zh ? "兑换码" : "Redeem code"}</div>
+          <div className="bg-bg-card border border-white/[0.08] rounded-sm p-5 flex flex-col sm:flex-row gap-3 sm:items-center">
+            <input
+              value={redeemCode}
+              onChange={(e) => setRedeemCode(e.target.value.toUpperCase())}
+              onKeyDown={(e) => { if (e.key === "Enter" && !redeeming) redeem(); }}
+              placeholder={zh ? "输入兑换码，如 PIC-XXXX-XXXX-XXXX-XXXX" : "Enter your code"}
+              className="flex-1 px-4 py-2.5 bg-white/[0.02] border border-white/10 rounded-sm text-white placeholder-gray-600 focus:outline-none focus:border-white/30 transition-all font-mono text-sm"
+            />
+            <button
+              onClick={redeem}
+              disabled={redeeming || !redeemCode.trim()}
+              className="py-2.5 px-6 rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] bg-white text-black hover:bg-gray-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {redeeming ? (zh ? "兑换中…" : "Redeeming…") : (zh ? "兑换" : "Redeem")}
+            </button>
+          </div>
         </div>
 
         {/* 用量流水 */}

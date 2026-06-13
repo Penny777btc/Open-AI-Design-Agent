@@ -13,6 +13,7 @@ import {
   CsvButton,
   cardCls,
   btnGhost,
+  btnPrimary,
   btnDanger,
   Badge,
   LoadMore,
@@ -75,6 +76,48 @@ function RefundModal({ order, onClose, onDone }) {
   );
 }
 
+// 手动补单确认弹层：线下付款/回调丢失时人工入账（sudo）。
+function MarkPaidModal({ order, onClose, onDone }) {
+  const { run } = useSudo();
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const res = await run((pw) =>
+        axios.post(`${ADMIN}/orders/${order.id}/mark-paid`, {}, sudoConfig(pw))
+      );
+      if (!res) return;
+      toast.success("已标记为已付，积分已发放");
+      onDone(order.id);
+      onClose();
+    } catch (err) {
+      toast.error(errMsg(err, "操作失败"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Overlay onClose={onClose}>
+      <div className="micro-label">// 手动标记已付</div>
+      <p className="text-[12px] text-gray-400 leading-relaxed">
+        即将把 <span className="text-white font-mono">{order.user_email}</span> 的订单标记为已付，
+        并向该用户发放 <span className="font-data text-emerald-400">{order.credits}</span> 积分。
+      </p>
+      <p className="text-[11px] text-gray-600 leading-relaxed">
+        用于线下付款或支付回调丢失的人工入账。操作幂等，不会重复发放。
+      </p>
+      <div className="flex justify-end gap-3 mt-1">
+        <button onClick={onClose} className={btnGhost}>取消</button>
+        <button onClick={submit} disabled={busy} className={btnPrimary}>
+          {busy ? "处理中…" : "确认入账"}
+        </button>
+      </div>
+    </Overlay>
+  );
+}
+
 export default function OrdersTab({ readOnly }) {
   const [rows, setRows] = useState([]);
   const [offset, setOffset] = useState(0);
@@ -82,6 +125,7 @@ export default function OrdersTab({ readOnly }) {
   const [done, setDone] = useState(false);
   const [inited, setInited] = useState(false);
   const [refundFor, setRefundFor] = useState(null);
+  const [markFor, setMarkFor] = useState(null);
 
   const load = useCallback(async (reset) => {
     setLoading(true);
@@ -145,9 +189,11 @@ export default function OrdersTab({ readOnly }) {
                 <td className="px-4 py-3 text-gray-600 font-mono text-[11px]">{o.provider || "—"}</td>
                 <td className="px-4 py-3 text-gray-600 font-mono text-[11px]">{fmtDate(o.paid_at || o.created_at)}</td>
                 <td className="px-4 py-3">
-                  <div className="flex justify-end">
+                  <div className="flex justify-end gap-2">
                     {!readOnly && o.status === "paid" ? (
                       <button className={btnDanger} onClick={() => setRefundFor(o)}>退款</button>
+                    ) : !readOnly && o.status === "pending" ? (
+                      <button className={btnPrimary} onClick={() => setMarkFor(o)}>标记已付</button>
                     ) : (
                       <span className="text-gray-700 font-mono text-[11px]">—</span>
                     )}
@@ -172,6 +218,18 @@ export default function OrdersTab({ readOnly }) {
           onClose={() => setRefundFor(null)}
           onDone={(id, status) =>
             setRows((prev) => prev.map((o) => (o.id === id ? { ...o, status } : o)))
+          }
+        />
+      ) : null}
+
+      {markFor ? (
+        <MarkPaidModal
+          order={markFor}
+          onClose={() => setMarkFor(null)}
+          onDone={(id) =>
+            setRows((prev) =>
+              prev.map((o) => (o.id === id ? { ...o, status: "paid", paid_at: new Date().toISOString() } : o))
+            )
           }
         />
       ) : null}

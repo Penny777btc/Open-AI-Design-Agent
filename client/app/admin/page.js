@@ -2,20 +2,43 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import {
+  FiGrid, FiUsers, FiUserPlus, FiActivity, FiZap, FiDollarSign, FiHardDrive,
+  FiShoppingCart, FiBox, FiGift, FiImage, FiFileText, FiMenu, FiX, FiChevronLeft, FiChevronRight, FiLogOut,
+} from "react-icons/fi";
 import { PicsmithMark } from "@/components/Logo";
-import { API, adminGet, Metric, MiniBars, SudoProvider, fmtMoney, fmtBytes } from "./ui";
+import { API, adminGet, MiniBars, SudoProvider, cardCls, fmtMoney, fmtBytes } from "./ui";
 import axios from "axios";
 import UsersTab from "./UsersTab";
 import OrdersTab from "./OrdersTab";
+import PackagesTab from "./PackagesTab";
+import RedeemTab from "./RedeemTab";
 import AssetsTab from "./AssetsTab";
 import AuditTab from "./AuditTab";
 
-const TABS = [
-  { key: "users", label: "用户" },
-  { key: "orders", label: "订单" },
-  { key: "assets", label: "内容巡查" },
-  { key: "audit", label: "审计日志" },
+// 侧边栏分组导航（取代顶部 Tab）。subtitle 进顶栏，符合常规后台「左导航 + 顶栏 + 卡片区」布局。
+const NAV = [
+  { group: null, items: [{ key: "overview", label: "概览", icon: FiGrid, sub: "账户与运营概览" }] },
+  { group: "用户管理", items: [{ key: "users", label: "用户", icon: FiUsers, sub: "查询 · 积分 · 封禁" }] },
+  {
+    group: "财务",
+    items: [
+      { key: "orders", label: "订单", icon: FiShoppingCart, sub: "充值订单与退款" },
+      { key: "packages", label: "套餐", icon: FiBox, sub: "价格档位配置" },
+      { key: "redeem", label: "兑换码", icon: FiGift, sub: "批量生成与核销" },
+    ],
+  },
+  {
+    group: "运营",
+    items: [
+      { key: "assets", label: "内容巡查", icon: FiImage, sub: "生成内容审查" },
+      { key: "audit", label: "审计日志", icon: FiFileText, sub: "管理操作留痕" },
+    ],
+  },
 ];
+
+const ITEMS = NAV.flatMap((g) => g.items);
+const META = Object.fromEntries(ITEMS.map((i) => [i.key, i]));
 
 // 与 not-found.js 一致的「页面不存在」（不暴露这是管理入口）
 function NotFoundDisguise() {
@@ -26,13 +49,50 @@ function NotFoundDisguise() {
       <h1 className="font-display text-4xl sm:text-6xl font-extrabold tracking-tight">页面不存在</h1>
       <p className="text-secondary-text text-sm max-w-sm">你访问的页面已被移动或从未存在。</p>
       <div className="flex gap-3 mt-2">
-        <Link href="/" className="px-6 py-2.5 bg-white text-black rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all">
-          返回首页
-        </Link>
-        <Link href="/dashboard" className="px-6 py-2.5 border border-white/15 bg-white/5 text-gray-400 rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] hover:text-white hover:border-white/30 transition-all">
-          进入工作台
-        </Link>
+        <Link href="/" className="px-6 py-2.5 bg-white text-black rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all">返回首页</Link>
+        <Link href="/dashboard" className="px-6 py-2.5 border border-white/15 bg-white/5 text-gray-400 rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] hover:text-white hover:border-white/30 transition-all">进入工作台</Link>
       </div>
+    </div>
+  );
+}
+
+// 指标卡：左侧图标块 + 数值 + 副标（对齐参考后台的卡片质感）
+function StatCard({ icon: Icon, label, value, hint }) {
+  return (
+    <div className={`${cardCls} px-5 py-4 flex items-center gap-4`}>
+      <div className="w-10 h-10 rounded-sm bg-white/[0.05] border border-white/10 flex items-center justify-center text-gray-300 shrink-0">
+        <Icon size={17} />
+      </div>
+      <div className="flex flex-col gap-0.5 min-w-0">
+        <div className="micro-label text-gray-500">{label}</div>
+        <div className="font-data text-2xl leading-none">{value}</div>
+        {hint ? <div className="text-[11px] text-gray-600 font-mono truncate">{hint}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function Overview({ metrics, series }) {
+  const jobs = metrics?.jobs_24h || {};
+  const jobsTotal = Object.values(jobs).reduce((a, b) => a + (b || 0), 0);
+  const successRate = jobsTotal > 0 ? Math.round(((jobs.done || 0) / jobsTotal) * 100) : 0;
+  return (
+    <div className="flex flex-col gap-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <StatCard icon={FiUsers} label="总用户" value={metrics.users_total ?? "—"} />
+        <StatCard icon={FiUserPlus} label="7 日新增" value={metrics.users_new_7d ?? "—"} />
+        <StatCard icon={FiActivity} label="24H 任务成功率" value={`${successRate}%`} hint={`${jobs.done || 0}/${jobsTotal}`} />
+        <StatCard icon={FiZap} label="24H 积分消耗" value={metrics.credits_consumed_24h ?? "—"} />
+        <StatCard icon={FiDollarSign} label="累计收入" value={fmtMoney(metrics.revenue_cents_total)} hint={`${metrics.orders_paid_total ?? 0} 笔已付`} />
+        <StatCard icon={FiHardDrive} label="存储用量" value={fmtBytes(metrics.storage_bytes_total)} />
+      </div>
+      {series?.length ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <MiniBars label="近 30 天 · 注册" data={series.map((d) => d.signups)} color="white" />
+          <MiniBars label="近 30 天 · 积分消耗" data={series.map((d) => d.credits_consumed)} color="gray" />
+          <MiniBars label="近 30 天 · 收入" data={series.map((d) => d.revenue_cents)} color="emerald" format={(c) => fmtMoney(c)} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -41,122 +101,137 @@ export default function AdminPage() {
   const [state, setState] = useState("loading"); // loading | denied | ready
   const [metrics, setMetrics] = useState(null);
   const [series, setSeries] = useState(null);
-  const [role, setRole] = useState(null); // admin | support
-  const [tab, setTab] = useState("users");
+  const [me, setMe] = useState(null);
+  const [tab, setTab] = useState("overview");
+  const [navOpen, setNavOpen] = useState(false);   // 移动抽屉
+  const [collapsed, setCollapsed] = useState(false); // 桌面侧边栏收起为图标条
 
   useEffect(() => {
-    adminGet("/metrics")
-      .then(({ data }) => {
-        setMetrics(data);
-        setState("ready");
-      })
-      .catch((err) => {
-        // 非管理员后端一律返回 404 → 渲染伪装页。其余错误同样不暴露入口。
-        setState("denied");
-      });
-    // 角色：support 仅可读 → 隐藏一切变更钮。
-    axios
-      .get(`${API}/api/v1/auth/me`)
-      .then(({ data }) => setRole(data.role || "user"))
-      .catch(() => {});
-    // 30 天趋势：失败静默（不阻塞主指标）。
-    adminGet("/metrics/timeseries?days=30")
-      .then(({ data }) => setSeries(data))
-      .catch(() => {});
+    adminGet("/metrics").then(({ data }) => { setMetrics(data); setState("ready"); }).catch(() => setState("denied"));
+    axios.get(`${API}/api/v1/auth/me`).then(({ data }) => setMe(data)).catch(() => {});
+    adminGet("/metrics/timeseries?days=30").then(({ data }) => setSeries(data)).catch(() => {});
   }, []);
 
   if (state === "loading") {
-    return (
-      <div className="min-h-dvh bg-bg-page flex items-center justify-center">
-        <div className="micro-label animate-pulse">// LOADING</div>
-      </div>
-    );
+    return <div className="min-h-dvh bg-bg-page flex items-center justify-center"><div className="micro-label animate-pulse">// LOADING</div></div>;
   }
   if (state === "denied") return <NotFoundDisguise />;
 
-  const jobs = metrics?.jobs_24h || {};
-  const jobsTotal = Object.values(jobs).reduce((a, b) => a + (b || 0), 0);
-  const successRate = jobsTotal > 0 ? Math.round(((jobs.done || 0) / jobsTotal) * 100) : 0;
+  const role = me?.role || "user";
   const readOnly = role === "support";
+  const go = (key) => { setTab(key); setNavOpen(false); };
+  const cur = META[tab] || {};
+  const initials = (me?.email || "AD").slice(0, 2).toUpperCase();
+
+  const Sidebar = ({ mobile }) => (
+    <nav className="flex flex-col h-full">
+      {/* 品牌 */}
+      <div className={`h-16 flex items-center border-b border-white/[0.06] ${collapsed && !mobile ? "justify-center px-0" : "px-5 gap-2.5"}`}>
+        <PicsmithMark size={22} className="text-white shrink-0" />
+        {(!collapsed || mobile) && (
+          <div className="flex flex-col leading-none">
+            <span className="font-display font-extrabold tracking-tight text-[15px]">PICSMITH</span>
+            <span className="micro-label text-gray-600 mt-1">运营控制台</span>
+          </div>
+        )}
+        {mobile && <button onClick={() => setNavOpen(false)} className="ml-auto text-gray-500 hover:text-white"><FiX /></button>}
+      </div>
+
+      {/* 分组菜单 */}
+      <div className="flex-1 min-h-0 overflow-y-auto py-4 flex flex-col gap-5 scrollbar-subtle">
+        {NAV.map((g, gi) => (
+          <div key={gi} className="flex flex-col gap-1 px-3">
+            {g.group && (!collapsed || mobile) ? <div className="micro-label px-2 pb-1 text-gray-600">{g.group}</div> : null}
+            {g.items.map((it) => {
+              const Icon = it.icon;
+              const active = tab === it.key;
+              return (
+                <button
+                  key={it.key}
+                  onClick={() => go(it.key)}
+                  title={collapsed && !mobile ? it.label : undefined}
+                  className={`relative flex items-center rounded-sm transition-all ${collapsed && !mobile ? "justify-center px-0 py-2.5" : "gap-3 px-3 py-2"} ${
+                    active ? "bg-white/[0.08] text-white" : "text-gray-500 hover:text-gray-200 hover:bg-white/[0.03]"
+                  }`}
+                >
+                  {/* 选中态左侧白色强调条（替代参考图的橙色块，贴合单色品牌） */}
+                  {active ? <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-white" /> : null}
+                  <Icon size={16} className="shrink-0" />
+                  {(!collapsed || mobile) && <span className="text-[13px] font-medium tracking-tight">{it.label}</span>}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+
+      {/* 底部：收起 + 退出 */}
+      <div className="border-t border-white/[0.06] p-3 flex flex-col gap-1">
+        {!mobile && (
+          <button onClick={() => setCollapsed((c) => !c)} className={`flex items-center rounded-sm text-gray-500 hover:text-white hover:bg-white/[0.03] transition-all ${collapsed ? "justify-center px-0 py-2" : "gap-3 px-3 py-2"}`}>
+            {collapsed ? <FiChevronRight size={16} /> : <><FiChevronLeft size={16} /><span className="text-[12px]">收起</span></>}
+          </button>
+        )}
+        <Link href="/dashboard" className={`flex items-center rounded-sm text-gray-500 hover:text-white hover:bg-white/[0.03] transition-all ${collapsed && !mobile ? "justify-center px-0 py-2" : "gap-3 px-3 py-2"}`}>
+          <FiLogOut size={16} />
+          {(!collapsed || mobile) && <span className="text-[12px]">返回工作台</span>}
+        </Link>
+      </div>
+    </nav>
+  );
 
   return (
     <SudoProvider>
-    <div className="min-h-dvh bg-bg-page text-primary-text">
-      <main className="max-w-6xl mx-auto px-6 py-10 flex flex-col gap-8">
-        {/* 头部 */}
-        <div className="flex items-end justify-between">
-          <div className="flex flex-col gap-2">
-            <div className="micro-label">// ADMIN · 运营控制台</div>
-            <div className="flex items-center gap-3">
-              <h1 className="font-display text-3xl font-extrabold tracking-tight">管理后台</h1>
-              {readOnly ? (
-                <span className="inline-block px-2.5 py-1 rounded-sm border border-amber-500/40 text-amber-400 bg-amber-500/10 text-[9px] font-bold uppercase tracking-[0.15em] font-mono">
-                  只读 · SUPPORT
-                </span>
-              ) : null}
-            </div>
-          </div>
-          <Link href="/dashboard" className="micro-label hover:text-white transition-colors">// ← STUDIO</Link>
-        </div>
+      <div className="min-h-dvh bg-bg-page text-primary-text flex">
+        {/* 桌面侧边栏（用 max-md:hidden 而非 hidden md:flex：本项目 Tailwind v4 下 base hidden 会压过 md:flex） */}
+        <aside className={`flex max-md:hidden shrink-0 flex-col bg-black/30 border-r border-white/[0.06] sticky top-0 h-dvh transition-all duration-200 ${collapsed ? "w-16" : "w-60"}`}>
+          <Sidebar mobile={false} />
+        </aside>
 
-        {/* 指标卡 */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-          <Metric label="总用户" value={metrics.users_total ?? "—"} />
-          <Metric label="7日新增" value={metrics.users_new_7d ?? "—"} />
-          <Metric
-            label="24H 任务成功率"
-            value={`${successRate}%`}
-            hint={`${jobs.done || 0}/${jobsTotal}`}
-          />
-          <Metric label="24H 积分消耗" value={metrics.credits_consumed_24h ?? "—"} />
-          <Metric
-            label="累计收入"
-            value={fmtMoney(metrics.revenue_cents_total)}
-            hint={`${metrics.orders_paid_total ?? 0} 笔已付`}
-          />
-          <Metric label="存储用量" value={fmtBytes(metrics.storage_bytes_total)} />
-        </div>
-
-        {/* 30 天趋势迷你图 */}
-        {series?.length ? (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <MiniBars label="近 30 天 · 注册" data={series.map((d) => d.signups)} color="white" />
-            <MiniBars label="近 30 天 · 积分消耗" data={series.map((d) => d.credits_consumed)} color="gray" />
-            <MiniBars
-              label="近 30 天 · 收入"
-              data={series.map((d) => d.revenue_cents)}
-              color="emerald"
-              format={(c) => fmtMoney(c)}
-            />
+        {/* 移动抽屉 */}
+        {navOpen ? (
+          <div className="md:hidden fixed inset-0 z-50 flex">
+            <div className="w-64 bg-bg-page border-r border-white/[0.06]"><Sidebar mobile /></div>
+            <div className="flex-1 bg-black/60" onClick={() => setNavOpen(false)} />
           </div>
         ) : null}
 
-        {/* Tab 导航 */}
-        <div className="flex gap-1 border-b border-white/[0.08]">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={`px-4 py-2.5 text-[11px] font-bold uppercase tracking-[0.15em] border-b-2 -mb-px transition-all ${
-                tab === t.key
-                  ? "border-white text-white"
-                  : "border-transparent text-gray-500 hover:text-gray-300"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        {/* 主列 */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          {/* 顶栏：左标题+副标，右身份簇 */}
+          <header className="h-16 shrink-0 border-b border-white/[0.06] px-5 sm:px-7 flex items-center gap-4 sticky top-0 bg-bg-page/80 backdrop-blur z-30">
+            <button className="md:hidden text-gray-400 hover:text-white" onClick={() => setNavOpen(true)}><FiMenu size={18} /></button>
+            <div className="flex flex-col min-w-0">
+              <h1 className="font-display text-lg font-extrabold tracking-tight leading-none">{cur.label}</h1>
+              {cur.sub ? <span className="text-[11px] text-gray-600 mt-1 truncate">{cur.sub}</span> : null}
+            </div>
+            <div className="ml-auto flex items-center gap-3">
+              <span className={`px-2.5 py-1 rounded-sm border text-[9px] font-bold uppercase tracking-[0.15em] font-mono ${readOnly ? "border-amber-500/40 text-amber-400 bg-amber-500/10" : "border-white/20 text-white bg-white/[0.06]"}`}>
+                {readOnly ? "Support · 只读" : "Admin"}
+              </span>
+              <div className="flex max-sm:hidden items-center gap-2.5 pl-3 border-l border-white/[0.08]">
+                <div className="w-8 h-8 rounded-full bg-white/[0.06] border border-white/10 flex items-center justify-center text-[11px] font-bold font-mono text-gray-300">{initials}</div>
+                <div className="flex flex-col leading-none">
+                  <span className="text-[12px] text-gray-200 font-medium max-w-[160px] truncate">{me?.email || "—"}</span>
+                  <span className="micro-label text-gray-600 mt-0.5">{role}</span>
+                </div>
+              </div>
+            </div>
+          </header>
 
-        {/* Tab 内容 */}
-        <div>
-          {tab === "users" && <UsersTab readOnly={readOnly} />}
-          {tab === "orders" && <OrdersTab readOnly={readOnly} />}
-          {tab === "assets" && <AssetsTab readOnly={readOnly} />}
-          {tab === "audit" && <AuditTab />}
+          <main className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-7 py-7 scrollbar-subtle">
+            <div className="max-w-6xl">
+              {tab === "overview" && <Overview metrics={metrics} series={series} />}
+              {tab === "users" && <UsersTab readOnly={readOnly} />}
+              {tab === "orders" && <OrdersTab readOnly={readOnly} />}
+              {tab === "packages" && <PackagesTab readOnly={readOnly} />}
+              {tab === "redeem" && <RedeemTab readOnly={readOnly} />}
+              {tab === "assets" && <AssetsTab readOnly={readOnly} />}
+              {tab === "audit" && <AuditTab />}
+            </div>
+          </main>
         </div>
-      </main>
-    </div>
+      </div>
     </SudoProvider>
   );
 }

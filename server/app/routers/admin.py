@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps import get_current_admin, get_db, get_sudo_admin
-from app.models import AdminAuditLog, Asset, CreditLedger, Job, Order, UploadedFile, User
+from app.models import AdminAuditLog, Asset, CreditLedger, Job, Order, Package, RedeemCode, UploadedFile, User
 from app.config import settings
 from app.services import credit_service, storage
 
@@ -323,6 +323,202 @@ async def list_orders(
          "created_at": o.created_at.isoformat()}
         for o, email in rows
     ]
+
+
+@router.post("/orders/{order_id}/mark-paid")
+async def mark_order_paid(
+    order_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin)
+):
+    """手动补单：线下付款/支付回调丢失时人工入账。幂等——已付订单直接返回。"""
+    order = await db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    if order.status == "paid":
+        return {"ok": True, "status": "paid", "idempotent": True}
+    if order.status == "refunded":
+        raise HTTPException(status_code=400, detail="已退款订单不能再标记为已付")
+    order.status = "paid"
+    order.paid_at = datetime.now(timezone.utc)
+    await credit_service.apply(
+        db, order.user_id, order.credits, "purchase",
+        order_id=order.id, memo=f"[admin {admin.email}] 手动补单入账", enforce=False,
+    )
+    db.add(AdminAuditLog(
+        admin_id=admin.id, action="mark_paid", target_user_id=order.user_id,
+        detail=f"order={order.id} credits={order.credits}",
+    ))
+    await db.commit()
+    return {"ok": True, "status": "paid"}
+
+
+# ---- 套餐配置（订阅字段预留，现仅 one_time 走通） ----
+
+def _pkg_admin(p: Package) -> dict:
+    return {"id": p.id, "slug": p.slug, "label": p.label, "credits": p.credits,
+            "amount_cents": p.amount_cents, "currency": p.currency, "type": p.type,
+            "billing_period": p.billing_period, "active": p.active, "sort_order": p.sort_order}
+
+
+@router.get("/packages")
+async def list_packages(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Package).order_by(Package.sort_order, Package.created_at))).scalars().all()
+    return [_pkg_admin(p) for p in rows]
+
+
+class PackageIn(BaseModel):
+    slug: str = Field(..., min_length=2, max_length=48, pattern=r"^[a-z0-9_-]+$")
+    label: str = Field(..., min_length=1, max_length=64)
+    credits: int = Field(..., ge=1, le=10_000_000)
+    amount_cents: int = Field(..., ge=0, le=100_000_000)
+    currency: str = Field("usd", min_length=3, max_length=8)
+    type: str = Field("one_time", pattern="^(one_time|subscription)$")
+    billing_period: str | None = Field(None, pattern="^(monthly|yearly)$")
+    active: bool = True
+    sort_order: int = 0
+
+
+@router.post("/packages")
+async def create_package(
+    body: PackageIn, db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin)
+):
+    if (await db.execute(select(Package.id).where(Package.slug == body.slug))).first():
+        raise HTTPException(status_code=409, detail="slug 已存在")
+    pkg = Package(**body.model_dump())
+    db.add(pkg)
+    db.add(AdminAuditLog(admin_id=admin.id, action="package_create", detail=f"slug={body.slug}"))
+    await db.commit()
+    return _pkg_admin(pkg)
+
+
+class PackagePatch(BaseModel):
+    label: str | None = Field(None, min_length=1, max_length=64)
+    credits: int | None = Field(None, ge=1, le=10_000_000)
+    amount_cents: int | None = Field(None, ge=0, le=100_000_000)
+    currency: str | None = Field(None, min_length=3, max_length=8)
+    active: bool | None = None
+    sort_order: int | None = None
+
+
+@router.patch("/packages/{package_id}")
+async def update_package(
+    package_id: str, body: PackagePatch,
+    db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin),
+):
+    pkg = await db.get(Package, package_id)
+    if pkg is None:
+        raise HTTPException(status_code=404, detail="套餐不存在")
+    changes = body.model_dump(exclude_unset=True)
+    for k, v in changes.items():
+        setattr(pkg, k, v)
+    db.add(AdminAuditLog(admin_id=admin.id, action="package_update", detail=f"slug={pkg.slug} {changes}"))
+    await db.commit()
+    return _pkg_admin(pkg)
+
+
+@router.delete("/packages/{package_id}")
+async def delete_package(
+    package_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin)
+):
+    """下架而非物理删除：历史订单仍引用其 slug，软删保留可追溯。"""
+    pkg = await db.get(Package, package_id)
+    if pkg is None:
+        raise HTTPException(status_code=404, detail="套餐不存在")
+    pkg.active = False
+    db.add(AdminAuditLog(admin_id=admin.id, action="package_delete", detail=f"slug={pkg.slug}"))
+    await db.commit()
+    return {"ok": True}
+
+
+# ---- 兑换码 ----
+
+@router.get("/redeem-codes")
+async def list_redeem_codes(
+    db: AsyncSession = Depends(get_db),
+    status: str = Query("all", pattern="^(all|active|redeemed|disabled)$"),
+    batch: str = "",
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    stmt = select(RedeemCode).order_by(RedeemCode.created_at.desc()).limit(limit).offset(offset)
+    if status != "all":
+        stmt = stmt.where(RedeemCode.status == status)
+    if batch.strip():
+        stmt = stmt.where(RedeemCode.batch == batch.strip())
+    rows = (await db.execute(stmt)).scalars().all()
+    return [
+        {"id": c.id, "code": c.code, "credits": c.credits, "batch": c.batch, "status": c.status,
+         "redeemed_by": c.redeemed_by, "redeemed_at": c.redeemed_at.isoformat() if c.redeemed_at else None,
+         "expires_at": c.expires_at.isoformat() if c.expires_at else None,
+         "created_at": c.created_at.isoformat()}
+        for c in rows
+    ]
+
+
+class RedeemBatchIn(BaseModel):
+    count: int = Field(..., ge=1, le=1000)  # 单批上限 1000，防误操作生成天量码
+    credits: int = Field(..., ge=1, le=1_000_000)
+    batch: str | None = Field(None, max_length=48)
+    expires_at: str | None = None  # ISO 日期；空=永不过期
+
+
+def _gen_code(rng_seed: str) -> str:
+    """无歧义字符集（去掉 0/O/1/I/L）的 16 位码，PIC- 前缀便于识别。"""
+    import hashlib
+
+    alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+    h = hashlib.sha256(rng_seed.encode()).digest()
+    body = "".join(alphabet[b % len(alphabet)] for b in h[:16])
+    return f"PIC-{body[:4]}-{body[4:8]}-{body[8:12]}-{body[12:16]}"
+
+
+@router.post("/redeem-codes")
+async def create_redeem_codes(
+    body: RedeemBatchIn, db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin)
+):
+    """批量生成兑换码。码由 admin/批次/序号哈希派生，避免依赖运行期随机源。"""
+    from datetime import datetime as _dt
+
+    expires = None
+    if body.expires_at:
+        try:
+            expires = _dt.fromisoformat(body.expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="expires_at 日期格式无效")
+
+    batch = body.batch or f"batch-{admin.id[:8]}"
+    created = []
+    for i in range(body.count):
+        # 种子含 admin、批次、序号、已建数——同批不重码；撞库则跳过重试
+        for attempt in range(5):
+            code = _gen_code(f"{admin.id}:{batch}:{i}:{len(created)}:{attempt}")
+            if not (await db.execute(select(RedeemCode.id).where(RedeemCode.code == code))).first():
+                break
+        else:
+            continue
+        db.add(RedeemCode(code=code, credits=body.credits, batch=batch,
+                          expires_at=expires, created_by=admin.id))
+        created.append(code)
+    db.add(AdminAuditLog(
+        admin_id=admin.id, action="redeem_create",
+        detail=f"batch={batch} count={len(created)} credits={body.credits}",
+    ))
+    await db.commit()
+    return {"ok": True, "batch": batch, "count": len(created), "codes": created}
+
+
+@router.post("/redeem-codes/{code_id}/disable")
+async def disable_redeem_code(
+    code_id: str, db: AsyncSession = Depends(get_db), admin: User = Depends(get_sudo_admin)
+):
+    rc = await db.get(RedeemCode, code_id)
+    if rc is None:
+        raise HTTPException(status_code=404, detail="兑换码不存在")
+    if rc.status == "redeemed":
+        raise HTTPException(status_code=400, detail="已使用的兑换码不能停用")
+    rc.status = "disabled"
+    db.add(AdminAuditLog(admin_id=admin.id, action="redeem_disable", detail=f"code={rc.code}"))
+    await db.commit()
+    return {"ok": True}
 
 
 @router.get("/assets/recent")
