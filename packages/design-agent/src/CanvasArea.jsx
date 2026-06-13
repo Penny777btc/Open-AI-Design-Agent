@@ -975,6 +975,57 @@ const CanvasArea = forwardRef(
       setSelectedId(null);
     };
 
+    // 方向键微移：选中（单个或多选）的节点整体平移。Shift = 10px，否则 1px。
+    const nudgeSelected = (dx, dy) => {
+      if (setSel.size > 0) {
+        setImages((prev) => prev.map((i) => (setSel.has(i.id) ? { ...i, x: i.x + dx, y: i.y + dy } : i)));
+        return true;
+      }
+      if (!selectedId) return false;
+      const move = (set) => set((prev) => prev.map((n) => (n.id === selectedId ? { ...n, x: n.x + dx, y: n.y + dy } : n)));
+      if (selectedId.startsWith("img")) move(setImages);
+      else if (selectedId.startsWith("vid")) move(setVideos);
+      else if (selectedId.startsWith("aud")) move(setAudios);
+      else if (selectedId.startsWith("txt")) move(setTexts);
+      else return false;
+      return true;
+    };
+
+    // Cmd/Ctrl+A：全选画布上的图片到多选集
+    const selectAllImages = () => {
+      if (images.length === 0) return;
+      setSelectedId(null);
+      setSetSel(new Set(images.map((i) => i.id)));
+    };
+
+    // Esc：清空所有选择
+    const clearSelection = () => { setSelectedId(null); setSetSel(new Set()); };
+
+    // 以视口中心为锚点设定缩放（Shift+0 = 100%），内容不跳变
+    const zoomKeepingCenter = (z) => {
+      const stage = stageRef.current;
+      if (!stage) return;
+      const vw = stage.width(), vh = stage.height(), s = stage.scaleX();
+      const cx = (vw / 2 - stage.x()) / s, cy = (vh / 2 - stage.y()) / s;
+      updateZoom(z, { x: vw / 2 - cx * z, y: vh / 2 - cy * z });
+    };
+
+    // Shift+2：缩放到选中内容
+    const zoomToSelection = () => {
+      const ids = setSel.size > 0 ? setSel : (selectedId ? new Set([selectedId]) : null);
+      if (!ids) return;
+      const sel = [...images, ...videos, ...audios, ...texts].filter((n) => ids.has(n.id));
+      if (sel.length === 0) return;
+      const minX = Math.min(...sel.map((n) => n.x));
+      const minY = Math.min(...sel.map((n) => n.y));
+      const maxX = Math.max(...sel.map((n) => n.x + (n.width || 150)));
+      const maxY = Math.max(...sel.map((n) => n.y + (n.height || 50)));
+      const bw = Math.max(maxX - minX, 1), bh = Math.max(maxY - minY, 1);
+      const pad = 80;
+      const z = Math.max(0.1, Math.min(5, Math.min((canvasSize.width - pad * 2) / bw, (canvasSize.height - pad * 2) / bh)));
+      updateZoom(z, { x: canvasSize.width / 2 - (minX + bw / 2) * z, y: canvasSize.height / 2 - (minY + bh / 2) * z });
+    };
+
     // 空格键 = 手型平移工具（按住时拖拽移动画布，松开恢复框选）
     useEffect(() => {
       const isTyping = () => {
@@ -2016,6 +2067,13 @@ const CanvasArea = forwardRef(
     };
 
     const handleDelete = () => {
+      // 多选优先：方向键/Delete 一次删掉框选的多张
+      if (!contextMenu?.nodeId && setSel.size > 0) {
+        setImages((prev) => prev.filter((i) => !setSel.has(i.id)));
+        setSetSel(new Set());
+        setSelectedId(null);
+        return;
+      }
       const id = contextMenu?.nodeId || selectedId;
       if (id) {
         setImages(images.filter((img) => img.id !== id));
@@ -2082,21 +2140,37 @@ const CanvasArea = forwardRef(
           } else if (e.key === "[") {
             e.preventDefault();
             handleZIndex("down");
+          } else if (e.key === "a" || e.key === "A") {
+            e.preventDefault();
+            selectAllImages(); // Cmd/Ctrl+A 全选
           }
         } else if (e.key === "Delete" || e.key === "Backspace") {
           handleDelete();
+        } else if (e.key === "Escape") {
+          clearSelection();
+        } else if (e.key.startsWith("Arrow")) {
+          // 方向键微移选中节点：Shift=10px，否则 1px
+          const step = e.shiftKey ? 10 : 1;
+          const d = { ArrowUp: [0, -step], ArrowDown: [0, step], ArrowLeft: [-step, 0], ArrowRight: [step, 0] }[e.key];
+          if (d && nudgeSelected(d[0], d[1])) e.preventDefault();
         } else if (e.key === "]") {
           if (selectedId) handleZIndex("front");
         } else if (e.key === "[") {
           if (selectedId) handleZIndex("back");
         } else if (e.shiftKey && (e.key === "!" || e.key === "1")) {
           e.preventDefault();
-          handleZoomToFit();
+          handleZoomToFit(); // Shift+1 适配全部内容
+        } else if (e.shiftKey && (e.key === ")" || e.key === "0")) {
+          e.preventDefault();
+          zoomKeepingCenter(1); // Shift+0 回到 100%
+        } else if (e.shiftKey && (e.key === "@" || e.key === "2")) {
+          e.preventDefault();
+          zoomToSelection(); // Shift+2 缩放到选中
         }
       };
       window.addEventListener("keydown", handleKeyDown);
       return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [zoom, images, videos, texts, selectedId, clipboardNode]);
+    }, [zoom, images, videos, audios, texts, selectedId, setSel, clipboardNode]);
 
     // Snapping Guides
     const getLineGuide = (node) => {
@@ -2205,26 +2279,37 @@ const CanvasArea = forwardRef(
       setGuides([]);
     };
 
+    // Figma 式滚轮：普通滚动=平移，Cmd/Ctrl+滚动 或 触控板捏合=以光标为中心缩放。
     const handleWheel = (e) => {
       e.evt.preventDefault();
       const stage = stageRef.current;
       if (!stage) return;
-      const scaleBy = 1.05;
-      const oldScale = stage.scaleX();
-      const pointer = stage.getPointerPosition();
-      if (!pointer) return;
-      const mousePointTo = {
-        x: (pointer.x - stage.x()) / oldScale,
-        y: (pointer.y - stage.y()) / oldScale,
-      };
-      const newScale =
-        e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
-      const boundedScale = Math.max(0.1, Math.min(5, newScale));
-      updateZoom(boundedScale, {
-        x: pointer.x - mousePointTo.x * boundedScale,
-        y: pointer.y - mousePointTo.y * boundedScale,
-      });
       setContextMenu(null);
+      // 触控板捏合在浏览器里表现为 ctrlKey=true 的 wheel 事件；Cmd/Ctrl+滚轮亦然
+      if (e.evt.ctrlKey || e.evt.metaKey) {
+        const oldScale = stage.scaleX();
+        const pointer = stage.getPointerPosition();
+        if (!pointer) return;
+        const mousePointTo = {
+          x: (pointer.x - stage.x()) / oldScale,
+          y: (pointer.y - stage.y()) / oldScale,
+        };
+        // 按 deltaY 大小连续缩放：捏合(小步)顺滑，滚轮(大步)跟手
+        const factor = Math.exp(-e.evt.deltaY * 0.0025);
+        const boundedScale = Math.max(0.1, Math.min(5, oldScale * factor));
+        updateZoom(boundedScale, {
+          x: pointer.x - mousePointTo.x * boundedScale,
+          y: pointer.y - mousePointTo.y * boundedScale,
+        });
+        return;
+      }
+      // 普通滚动 = 平移（Shift 把纵向滚动转成横向，方便鼠标用户）
+      let dx = e.evt.deltaX, dy = e.evt.deltaY;
+      if (e.evt.shiftKey && dx === 0) { dx = dy; dy = 0; }
+      const np = { x: stage.x() - dx, y: stage.y() - dy };
+      stage.position(np);
+      stage.batchDraw();
+      if (containerRef.current) containerRef.current.style.backgroundPosition = `${np.x}px ${np.y}px`;
     };
 
     const handleDrop = (e) => {
@@ -2495,8 +2580,8 @@ const CanvasArea = forwardRef(
             </button>
             {/* 操作提示（自然交互，无需按钮）：拖拽=框选，空格+拖拽=平移 */}
             <div className="mt-2 px-2.5 py-1.5 rounded bg-bg-card/70 border border-divider/60 text-[10px] text-secondary-text leading-relaxed select-none">
-              <div><span className="text-primary-text font-semibold">拖拽</span> 框选多张 · <span className="text-primary-text font-semibold">Shift+拖</span> 加选</div>
-              <div><span className="text-primary-text font-semibold">空格+拖拽</span> 平移画布 · 滚轮缩放</div>
+              <div><span className="text-primary-text font-semibold">拖拽</span> 框选 · <span className="text-primary-text font-semibold">Shift+拖</span> 加选 · <span className="text-primary-text font-semibold">空格+拖</span> 平移</div>
+              <div><span className="text-primary-text font-semibold">滚轮</span> 平移 · <span className="text-primary-text font-semibold">⌘+滚轮</span> 缩放 · <span className="text-primary-text font-semibold">方向键</span> 微移</div>
             </div>
           </div>
         )}
