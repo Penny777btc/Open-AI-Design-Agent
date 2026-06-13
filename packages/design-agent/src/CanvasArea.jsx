@@ -2044,14 +2044,8 @@ const CanvasArea = forwardRef(
             }}
           >
             <Layer>
-              <Rect
-                width={10000}
-                height={10000}
-                x={-5000}
-                y={-5000}
-                fill="#ffffff03"
-                listening={false}
-              />
+              {/* 移除有限尺寸的浅色底板：它在缩放后会露出 10000×10000 的边缘，
+                  造成「画布有边界」的错觉。无限画布的背景就用容器的纯色，无需底板。 */}
               {[...images, ...videos, ...audios, ...texts]
                 .sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0))
                 .map((item) => {
