@@ -42,7 +42,7 @@ async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user=Depen
 
 @router.post("/jobs/{job_id}/approve")
 async def approve_job(job_id: str, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
-    from app.config import tool_cost
+    from app.config import node_cost
     from app.services import credit_service
 
     job = await _owned_job(db, user, job_id)
@@ -68,7 +68,7 @@ async def approve_job(job_id: str, db: AsyncSession = Depends(get_db), user=Depe
         await db.commit()
 
     # 整单预扣：余额不足直接拒绝（402），状态还原以便充值后重试
-    total = sum(tool_cost(n.get("tool", "")) for n in (job.plan or {}).get("nodes", []))
+    total = sum(node_cost(n) for n in (job.plan or {}).get("nodes", []))
     if total > 0:
         try:
             await credit_service.apply(

@@ -11,11 +11,11 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 
 from app.agents.planner import Plan, make_plan
-from app.config import settings, tool_cost
+from app.config import settings, tool_cost, node_cost
 from app.db import SessionLocal
 from app.services import credit_service
 from app.models import Asset, CreditLedger, Job, JobEvent
-from app.providers import get_image_provider
+from app.providers import get_image_provider, get_video_provider
 from app.services import storage
 from app.services.placement import PlacementPlanner, display_size
 
@@ -148,13 +148,13 @@ async def _run_job(job_id: str) -> None:
             await _set_status(job_id, "done")
             return
 
-        total_credits = sum(tool_cost(n.tool) for n in plan.nodes)
+        total_credits = sum(node_cost(n) for n in plan.nodes)
         await _set_status(job_id, "awaiting_approval", plan=plan.model_dump())
         await emit(job_id, "plan_propose", {
             "title": plan.title,
             "total_credits": total_credits,
             "nodes": [
-                {"id": n.id, "tool": n.tool, "label": n.label, "est_credits": tool_cost(n.tool), "depends": n.depends}
+                {"id": n.id, "tool": n.tool, "label": n.label, "est_credits": node_cost(n), "depends": n.depends}
                 for n in plan.nodes
             ],
             "notes": plan.notes,
@@ -221,7 +221,7 @@ async def _execute_plan(
     async def refund_node(node, reason: str) -> None:
         async with SessionLocal() as db:
             await credit_service.apply(
-                db, user_id, tool_cost(node.tool), "refund",
+                db, user_id, node_cost(node), "refund",
                 job_id=job_id, memo=f"{reason}: {node.label[:80]}", enforce=False,
             )
             await db.commit()
@@ -276,7 +276,46 @@ async def _load_asset_bytes(session_id: str, asset_label: str) -> bytes:
         return resp.content
 
 
+async def _video_node(job_id: str, session_id: str, user_id: str, node, planner: PlacementPlanner) -> bool:
+    """视频生成节点。视频接口未配置（供应商加白前）时优雅失败 → 节点退款，
+    用户看到「视频开通中」而非崩溃。配置后真实生成、按秒计费已在 reserve 时算好。"""
+    provider = get_video_provider()
+    if provider is None:
+        await emit(job_id, "error", {"message": "视频生成正在开通中（需接入视频模型 API），积分未扣除"})
+        return False  # 节点失败 → refund_node 退还该节点预扣
+
+    prompt = node.args.get("prompt") or node.label
+    model = node.args.get("model") or settings.video_model
+    seconds = float(node.args.get("seconds") or 5)
+    resolution = node.args.get("resolution") or ("480p" if "480" in model else "720p")
+    video = await provider.generate(prompt, seconds=seconds, model=model, resolution=resolution)
+
+    key = f"assets/{session_id}/{job_id}_{node.id}.mp4"
+    storage.save_bytes(key, video.data)
+    url = storage.public_url(key)
+    async with _label_lock(session_id), SessionLocal() as db:
+        count = (await db.execute(select(func.count()).select_from(Asset).where(Asset.session_id == session_id))).scalar_one()
+        label = f"asset_{count + 1}"
+        cx, cy = planner.next(video.width, video.height)
+        db.add(Asset(
+            session_id=session_id, user_id=user_id, asset_label=label, url=url, storage_key=key,
+            kind="video", mime=video.mime, width=video.width, height=video.height,
+            model=video.model, prompt=prompt, source_tool="generate_video", job_id=job_id,
+            canvas_x=cx, canvas_y=cy,
+        ))
+        await db.commit()
+    await emit(job_id, "tool_result", {
+        "name": "generate_video",
+        "result": {"ok": True, "model": video.model, "seconds": seconds},
+        "asset": {"asset_label": label, "url": url, "kind": "video", "model": video.model, "prompt": prompt, "source_tool": "generate_video"},
+    })
+    await emit(job_id, "canvas_op", {"op": "arrange", "args": {"moves": [{"asset_id": label, "x": cx, "y": cy}]}})
+    return True
+
+
 async def _generate_node(job_id: str, session_id: str, user_id: str, node, planner: PlacementPlanner) -> bool:
+    if node.tool == "generate_video":
+        return await _video_node(job_id, session_id, user_id, node, planner)
     provider = get_image_provider()
     prompt = node.args.get("prompt") or node.label
     image = None

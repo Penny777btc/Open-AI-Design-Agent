@@ -11,7 +11,7 @@ import re
 import httpx
 
 from app.config import settings
-from app.providers.base import GeneratedImage
+from app.providers.base import GeneratedImage, GeneratedVideo
 
 _TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 _MAGIC = {b"\x89PNG": "image/png", b"\xff\xd8\xff": "image/jpeg", b"RIFF": "image/webp"}
@@ -265,3 +265,69 @@ async def probe_capabilities(model: str, api_key: str | None = None) -> dict:
         result["json_object"] = False
         result["json_error"] = str(exc)[:200]
     return result
+
+
+_VIDEO_DIMS = {"480p": (854, 480), "720p": (1280, 720), "1080p": (1920, 1080)}
+
+
+class Sub2ApiVideo:
+    """视频生成（Seedance/Grok 等，供应商加白后接入）。
+
+    端点/请求体/返回形态需按供应商文档最终确认——下面按常见 OpenAI 兼容视频接口
+    （submit → 轮询 → 取 URL）实现，配置 VIDEO_API_BASE 后即生效。未配置时本类不会
+    被实例化（get_video_provider 返回 None，执行层优雅提示「视频开通中」）。
+    """
+
+    def __init__(self):
+        self.base_url = settings.video_api_base.rstrip("/")
+        self.api_key = settings.video_api_key or settings.codex_api_key
+
+    async def generate(
+        self, prompt: str, *, seconds: float = 5, model: str = "seedance-2-480p",
+        resolution: str = "480p", input_image: bytes | None = None,
+    ) -> GeneratedVideo:
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        payload = {"model": model, "prompt": prompt, "duration": seconds, "resolution": resolution}
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
+            resp = await client.post(f"{self.base_url}/v1/video/generations", json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            # 兼容两种返回：直接给 url，或给 job id 需轮询（视供应商而定）
+            url = self._extract_url(data)
+            if url is None and (job_id := data.get("id")):
+                url = await self._poll(client, job_id, headers)
+            if url is None:
+                raise RuntimeError("视频接口返回中未找到视频 URL，请核对供应商返回格式")
+            vid = await client.get(url)
+            vid.raise_for_status()
+            video_bytes = vid.content
+        w, h = _VIDEO_DIMS.get(resolution, (854, 480))
+        return GeneratedVideo(data=video_bytes, mime="video/mp4", width=w, height=h, seconds=seconds, model=model)
+
+    @staticmethod
+    def _extract_url(data: dict) -> str | None:
+        for path in (("data", 0, "url"), ("url",), ("output", "video_url"), ("video", "url")):
+            cur = data
+            try:
+                for k in path:
+                    cur = cur[k]
+                if isinstance(cur, str) and cur.startswith("http"):
+                    return cur
+            except (KeyError, IndexError, TypeError):
+                continue
+        return None
+
+    async def _poll(self, client, job_id: str, headers: dict) -> str | None:
+        import asyncio
+
+        for _ in range(120):  # 最多约 4 分钟
+            await asyncio.sleep(2)
+            r = await client.get(f"{self.base_url}/v1/video/generations/{job_id}", headers=headers)
+            if r.status_code != 200:
+                continue
+            d = r.json()
+            if (d.get("status") in ("succeeded", "completed")) or self._extract_url(d):
+                return self._extract_url(d)
+            if d.get("status") in ("failed", "error"):
+                raise RuntimeError(f"视频生成失败：{d.get('error', '未知')}")
+        raise RuntimeError("视频生成超时")

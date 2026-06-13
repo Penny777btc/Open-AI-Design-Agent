@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     planner_model: str = "codex"
     image_model: str = "gemini"
+    # 视频生成：供应商加白后给的 endpoint；为空 = 视频未开通（执行层优雅提示）
+    video_api_base: str = ""
+    video_api_key: str = ""
+    video_model: str = "seedance-2-480p"
 
     # development | production（production 下启动时强校验安全配置）
     environment: str = "development"
@@ -69,6 +73,15 @@ def tool_cost(tool: str, model: str | None = None, seconds: float | None = None)
     if tool == "generate_video":
         return model_catalog.video_credits(model or "seedance-2-480p", seconds or 5)
     return model_catalog.image_credits(model)
+
+
+def node_cost(node) -> int:
+    """从计划节点（Pydantic 或 dict）算积分价——视频要取 args 里的 model/秒数。"""
+    if isinstance(node, dict):
+        tool, args = node.get("tool", ""), (node.get("args") or {})
+    else:
+        tool, args = getattr(node, "tool", ""), (getattr(node, "args", {}) or {})
+    return tool_cost(tool, args.get("model"), args.get("seconds"))
 
 
 def validate_production_config() -> list[str]:
