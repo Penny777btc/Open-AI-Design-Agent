@@ -170,6 +170,7 @@ const URLImage = ({
   onToggleMulti,
   onSelect,
   onChange,
+  onDragStart,
   onDragMove,
   onDragEnd,
 }) => {
@@ -227,6 +228,7 @@ const URLImage = ({
         id={imageObj.id}
         name="konva-item"
         draggable={!imageObj.locked && !spaceDown}
+        onDragStart={(e) => onDragStart?.(e)}
         onDragMove={(e) => {
           setPos({ x: e.target.x(), y: e.target.y() });
           onDragMove(e);
@@ -2235,8 +2237,40 @@ const CanvasArea = forwardRef(
       return result;
     };
 
+    // 多选整体拖动：拖动选中集合里的任一元素，全部一起移动
+    const groupDragRef = useRef(null);
+
+    const handleDragStart = (e) => {
+      const node = e.target;
+      const id = node.id();
+      if (setSel.has(id) && setSel.size > 1) {
+        // 记录起点 + 全体成员起始位置，移动时整体偏移
+        groupDragRef.current = {
+          id, sx: node.x(), sy: node.y(),
+          members: images.filter((i) => setSel.has(i.id)).map((i) => ({ id: i.id, x: i.x, y: i.y })),
+        };
+      } else {
+        groupDragRef.current = null;
+        // 拖动一个未选中的元素：清掉旧的多选（与 Figma 一致），只拖这一个
+        if (setSel.size > 0 && !setSel.has(id)) setSetSel(new Set());
+      }
+    };
+
     const handleDragMove = (e) => {
       const node = e.target;
+      // 整体拖动：被拖节点由 Konva 实时控制，其余成员按相同位移更新
+      if (groupDragRef.current) {
+        const g = groupDragRef.current;
+        const dx = node.x() - g.sx, dy = node.y() - g.sy;
+        const startById = Object.fromEntries(g.members.map((m) => [m.id, m]));
+        setImages((prev) => prev.map((i) => {
+          if (i.id === g.id) return i; // 被拖的那张交给 Konva，避免回弹
+          const m = startById[i.id];
+          return m ? { ...i, x: m.x + dx, y: m.y + dy } : i;
+        }));
+        setGuides([]); // 整体移动不做对自身成员的吸附
+        return;
+      }
       const guidesFound = getLineGuide(node);
       const newGuides = [];
       if (guidesFound.vertical.length > 0) {
@@ -2264,6 +2298,19 @@ const CanvasArea = forwardRef(
 
     const handleDragEnd = (e, item) => {
       const node = e.target;
+      // 整体拖动收尾：把全体成员的最终位置一次性提交
+      if (groupDragRef.current) {
+        const g = groupDragRef.current;
+        const dx = node.x() - g.sx, dy = node.y() - g.sy;
+        const startById = Object.fromEntries(g.members.map((m) => [m.id, m]));
+        setImages((prev) => prev.map((i) => {
+          const m = startById[i.id];
+          return m ? { ...i, x: m.x + dx, y: m.y + dy } : i;
+        }));
+        groupDragRef.current = null;
+        setGuides([]);
+        return;
+      }
       const id = item.id;
       const update = (arr, setter) => {
         const idx = arr.findIndex((i) => i.id === id);
@@ -2399,6 +2446,7 @@ const CanvasArea = forwardRef(
                         spaceDown={spaceDown}
                         onToggleMulti={() => toggleMultiSelect(item.id)}
                         onSelect={() => { setSelectedId(item.id); if (setSel.size) setSetSel(new Set()); }}
+                        onDragStart={handleDragStart}
                         onDragMove={handleDragMove}
                         onDragEnd={handleDragEnd}
                         onChange={(attrs) =>
