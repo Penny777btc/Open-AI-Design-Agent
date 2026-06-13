@@ -71,6 +71,8 @@ async def login(body: Credentials, db: AsyncSession = Depends(get_db)):
         body.password.encode(), user.password_hash.encode()
     ):
         raise HTTPException(status_code=401, detail="邮箱或密码不正确")
+    if user.disabled_at is not None:
+        raise HTTPException(status_code=403, detail="账号已被停用，如有疑问请联系 support@picsmith.app")
     balance = await credit_service.get_balance(db, user.id)
     return {"token": make_token(user.id), "user": _user_out(user, balance)}
 

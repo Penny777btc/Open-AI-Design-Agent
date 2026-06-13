@@ -18,10 +18,14 @@ class Base(DeclarativeBase):
 # 挂在 connect 事件上而非 main.lifespan，是为了不改动 main.py 也能覆盖所有入口
 # （含测试直连引擎）；同步 DDL 在 SQLite 上开销可忽略。
 # M4 迁 Postgres 时改用 Alembic，删掉这段。
+# (所属表, DDL)：按表分组，表尚未建时跳过该条（首启 create_all 之前就有连接进来）
 _LIGHTWEIGHT_MIGRATIONS = (
-    "ALTER TABLE reference_docs ADD COLUMN sha256 VARCHAR(64)",
+    ("reference_docs", "ALTER TABLE reference_docs ADD COLUMN sha256 VARCHAR(64)"),
     # 去重查询按 (session_id, sha256) 命中；IF NOT EXISTS 天然幂等，补列后建索引。
-    "CREATE INDEX IF NOT EXISTS ix_reference_docs_sha256 ON reference_docs (sha256)",
+    ("reference_docs", "CREATE INDEX IF NOT EXISTS ix_reference_docs_sha256 ON reference_docs (sha256)"),
+    # 管理后台：角色与封禁。旧行 role 取默认 'user'。
+    ("users", "ALTER TABLE users ADD COLUMN role VARCHAR(16) DEFAULT 'user'"),
+    ("users", "ALTER TABLE users ADD COLUMN disabled_at DATETIME"),
 )
 
 
@@ -29,15 +33,12 @@ _LIGHTWEIGHT_MIGRATIONS = (
 def _apply_lightweight_migrations(dbapi_conn, _record):
     cur = dbapi_conn.cursor()
     try:
-        # 表可能尚未建（首次启动 create_all 之前就有连接进来）——
-        # 没有该表时 ALTER 会报错，一并归入静默跳过，下次连接 create_all 之后再补。
         # 注意：aiosqlite 适配的游标 execute() 不返回自身，须 execute 后另行 fetchone。
-        cur.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='reference_docs'"
-        )
-        if not cur.fetchone():
-            return
-        for ddl in _LIGHTWEIGHT_MIGRATIONS:
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        existing = {row[0] for row in cur.fetchall()}
+        for table, ddl in _LIGHTWEIGHT_MIGRATIONS:
+            if table not in existing:
+                continue
             try:
                 cur.execute(ddl)
             except Exception as exc:  # noqa: BLE001 — SQLite 不暴露具体异常类型

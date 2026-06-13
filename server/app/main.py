@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.db import Base, engine
-from app.routers import assets, auth, billing, chat, jobs, misc, sessions, uploads
+from app.routers import admin, assets, auth, billing, chat, jobs, misc, sessions, uploads
 from app.services.job_service import mark_stale_jobs_failed
 
 logging.basicConfig(level=logging.INFO)
@@ -43,8 +43,26 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
+    await _bootstrap_admins()
     await mark_stale_jobs_failed()
     yield
+
+
+async def _bootstrap_admins():
+    """ADMIN_EMAILS 中的账号提为 admin；从名单移除的降回 user（权限随环境变量收放）。"""
+    from sqlalchemy import update
+
+    from app.db import SessionLocal
+    from app.models import User
+
+    emails = [e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()]
+    async with SessionLocal() as db:
+        if emails:
+            await db.execute(update(User).where(User.email.in_(emails)).values(role="admin"))
+        await db.execute(
+            update(User).where(User.role == "admin", User.email.not_in(emails)).values(role="user")
+        )
+        await db.commit()
 
 
 app = FastAPI(title="Design Agent API", version="0.1.0", lifespan=lifespan)
@@ -65,6 +83,7 @@ app.include_router(misc.router, prefix="/api/v1")  # /api/v1/account/balance 兼
 app.include_router(uploads.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
 
 settings.storage_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/files", StaticFiles(directory=settings.storage_dir), name="files")

@@ -25,6 +25,9 @@ class User(Base):
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     locale: Mapped[str] = mapped_column(String(8), default="en")
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 运营侧：admin 由 ADMIN_EMAILS 启动引导，不开放接口自助升级；封禁即设 disabled_at
+    role: Mapped[str] = mapped_column(String(16), default="user")
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -111,7 +114,7 @@ class CreditLedger(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     delta: Mapped[int] = mapped_column(Integer)
-    kind: Mapped[str] = mapped_column(String(16))  # grant | purchase | reserve | settle | refund
+    kind: Mapped[str] = mapped_column(String(16))  # grant | purchase | reserve | settle | refund | adjust(管理员)
     job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     order_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     balance_after: Mapped[int] = mapped_column(Integer)
@@ -131,6 +134,19 @@ class Order(Base):
     credits: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default="pending")
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AdminAuditLog(Base):
+    """管理员操作审计：谁、对谁、做了什么——积分补偿/封禁必须可追溯。"""
+
+    __tablename__ = "admin_audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    admin_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    action: Mapped[str] = mapped_column(String(32))  # adjust_credits | ban | unban
+    target_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    detail: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

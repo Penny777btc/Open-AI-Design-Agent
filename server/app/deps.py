@@ -50,10 +50,20 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
         try:
             payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
             user = await db.get(User, payload.get("sub", ""))
-            if user is not None:
-                return user
         except jwt.PyJWTError:
-            pass
+            user = None
+        if user is not None:
+            # 封禁在鉴权层统一生效：被禁账号即便持有效 token 也立即失效
+            if user.disabled_at is not None:
+                raise HTTPException(status_code=403, detail="账号已被停用，如有疑问请联系 support@picsmith.app")
+            return user
     if settings.auth_mode == "dev":
         return await get_or_create_dev_user(db)
     raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+async def get_current_admin(user: User = Depends(get_current_user)) -> User:
+    """管理员门卫：非 admin 一律 404，不向探测者暴露管理接口的存在。"""
+    if user.role != "admin":
+        raise HTTPException(status_code=404, detail="Not Found")
+    return user

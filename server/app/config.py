@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # development | production（production 下启动时强校验安全配置）
     environment: str = "development"
 
+    # 管理员邮箱白名单（逗号分隔）：启动时把这些账号提为 admin。
+    # 不提供任何接口自助升级——管理权只能由部署者通过环境变量授予。
+    admin_emails: str = ""
+
     dev_user_email: str = "dev@local"
     signup_grant_credits: int = 200  # 审计 R3：降低薅羊毛收益
     image_credits: int = 10
