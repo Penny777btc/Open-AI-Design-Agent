@@ -42,7 +42,10 @@ class Settings(BaseSettings):
     image_credits: int = 10
     edit_credits: int = 15
     max_plan_nodes: int = 12
-    executor_concurrency: int = 2
+    # 一个计划内并发生图的张数。套图/主图六联(6)/详情页(7)等批量任务靠它并行提速；
+    # 受 sub2api 并发上限约束，超限的请求由 _post_retry 退避重试（不会失败，只是排队）。
+    # 站点余量大可调高（设环境变量 EXECUTOR_CONCURRENCY），见 429 多则调低。
+    executor_concurrency: int = 6
     approval_timeout_seconds: int = 1800  # 审计 L6：余额不足去充值后仍可回来批准
 
     # Resend 邮件（邮箱验证/密码找回；未配置时相关接口返回 503）

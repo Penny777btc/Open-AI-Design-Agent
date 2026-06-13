@@ -17,6 +17,31 @@ _TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 _MAGIC = {b"\x89PNG": "image/png", b"\xff\xd8\xff": "image/jpeg", b"RIFF": "image/webp"}
 
 
+async def _post_retry(client: httpx.AsyncClient, url: str, *, attempts: int = 3, **kwargs):
+    """图片接口 POST：对 429/5xx 与网络错做指数退避重试。
+
+    提高并发（executor_concurrency）后，瞬时限流不应让整张图失败——退避后多半能成功。
+    返回最后一次响应（4xx 非 429 直接返回，交由调用方处理，如 400 尺寸回退）。
+    """
+    import asyncio
+
+    last = None
+    for i in range(attempts):
+        try:
+            resp = await client.post(url, **kwargs)
+            if resp.status_code == 429 or resp.status_code >= 500:
+                last = RuntimeError(f"upstream {resp.status_code}: {resp.text[:200]}")
+                if i < attempts - 1:
+                    await asyncio.sleep(1.5 * (i + 1))
+                continue
+            return resp
+        except httpx.RequestError as exc:
+            last = exc
+            if i < attempts - 1:
+                await asyncio.sleep(1.5 * (i + 1))
+    raise RuntimeError(f"图片接口请求失败（{attempts} 次重试后）: {last}")
+
+
 class OpenAICompatClient:
     def __init__(self, base_url: str | None = None, api_key: str | None = None):
         self.base_url = (base_url or settings.sub2api_base_url).rstrip("/")
@@ -152,10 +177,10 @@ class GptImageProvider:
         }
         headers = {"Authorization": f"Bearer {self.api_key}"}
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
-            resp = await client.post(f"{self.base_url}/v1/images/generations", json=payload, headers=headers)
+            resp = await _post_retry(client, f"{self.base_url}/v1/images/generations", json=payload, headers=headers)
             if resp.status_code == 400 and payload["size"] != "1024x1024":
                 payload["size"] = "1024x1024"  # 尺寸不被支持时回退方图
-                resp = await client.post(f"{self.base_url}/v1/images/generations", json=payload, headers=headers)
+                resp = await _post_retry(client, f"{self.base_url}/v1/images/generations", json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
 
@@ -172,8 +197,8 @@ class GptImageProvider:
             files["mask"] = ("mask.png", mask, "image/png")
         form = {"model": self.model, "prompt": prompt}
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
-            resp = await client.post(
-                f"{self.base_url}/v1/images/edits", data=form, files=files, headers=headers
+            resp = await _post_retry(
+                client, f"{self.base_url}/v1/images/edits", data=form, files=files, headers=headers
             )
             resp.raise_for_status()
         return self._to_generated(resp.json())
