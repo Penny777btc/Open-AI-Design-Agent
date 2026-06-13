@@ -143,10 +143,9 @@ async def _run_job(job_id: str) -> None:
                     select(ReferenceDoc).where(ReferenceDoc.session_id == session_id).order_by(ReferenceDoc.created_at.desc())
                 )).scalars().first()
             items = [{"label": l, "caption": cap.get(l, "")} for l in labels]
-            content = await generate_set_content(tpl_key, items, doc.extracted_text if doc else "", lang=job_input.get("lang", "zh"))
-            plan = build_set_plan(tpl_key, labels)
-            for node in plan.nodes:
-                node.args["slot_content"] = content.get(node.args.get("source_asset"))
+            lang = job_input.get("lang", "zh")
+            content = await generate_set_content(tpl_key, items, doc.extracted_text if doc else "", lang=lang)
+            plan = build_set_plan(tpl_key, labels, content_map=content, lang=lang)
         else:
             brief = job_input.get("message") or _skill_brief(job_input)
             async with SessionLocal() as db:
@@ -411,13 +410,10 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         "asset_label": label, "url": url, "kind": "image",
         "model": image.model, "prompt": prompt, "source_tool": node.tool,
     }
-    # 套图：把模板 key + 网格落位坐标带给前端 → 前端按确定坐标放图、并在其上叠固定文字（100% 统一）
-    if node.args.get("set_template"):
-        asset_payload["set_template"] = node.args["set_template"]
+    # 套图：文字已由 AI 直接渲染进图里（不再前端叠层），这里只带网格落位坐标让一组图整齐排布
+    if node.args.get("set_member"):
         asset_payload["canvas_x"] = canvas_x
         asset_payload["canvas_y"] = canvas_y
-        if node.args.get("slot_content"):
-            asset_payload["set_content"] = node.args["slot_content"]  # 真实文案（标题/卖点）
     await emit(job_id, "tool_result", {
         "name": node.tool,
         "result": result,

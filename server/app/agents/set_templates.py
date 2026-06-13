@@ -1,62 +1,52 @@
-"""套图模板（混合方案）：AI 出「干净无字底图」+ 前端固定矢量模板叠字。
+"""套图模板（AI 直出方案）：AI 直接生成整张设计图——文字也由 AI 渲染、融入画面，
+靠「统一的版式/字体/风格约束 + 真实文案」让一组图既有设计感又尽量一致。
 
-为什么这么做：扩散模型每张图独立生成，字体/位置必然漂移，纯 AI 无法做到 100% 排版统一。
-所以分两步——
-  1) AI 只负责生成统一风格的「干净产品图」，明确禁止渲染任何文字、并预留标题区/卖点区；
-  2) 前端在生成图上叠加【固定矢量文字模板】（位置/字体/字号锁死），只有文字内容可改。
-这样画面是 AI 生成的（风格统一），排版字体是模板锁死的（100% 一致）。
-
-模板的【文字槽位坐标/字体】定义在前端（CanvasArea 的 SET_TEMPLATE_SLOTS），与这里的
-key 一一对应；后端只管生成提示 + 把模板 key 透传给前端去叠字。
+权衡：AI 渲染文字做不到 100% 像素一致（扩散模型每张独立解读），但设计感更强、
+文字与画面融为一体（用户更看重这一点）。文案取自产品信息 + PDF（generate_set_content）。
 """
 
 from app.agents.planner import Plan, PlanNode
 
-_NO_TEXT = (
-    "Keep the product EXACTLY as in the source photo, INCLUDING all the text, labels, logos and branding "
-    "printed ON the product and its packaging (e.g. the bottle label) — those belong to the product and MUST be preserved, unchanged and legible. "
-    "But do NOT ADD any NEW text, titles, captions, marketing copy, watermarks, badges or graphic overlays anywhere in the scene — "
-    "only the product itself. Keep the surrounding areas clean and empty (title/caption text will be added afterward by a fixed template). "
-)
-
+# 共享版式/风格约束（全集同一段 → 一致性来源）。{content} 处插入该产品的真实文案。
 SET_TEMPLATES = {
     "ecom": {
         "label": "电商主图",
-        "prompt": (
-            "Redesign this into a clean premium e-commerce product MAIN IMAGE. "
-            "Keep the product's exact appearance from the source photo (bottle, label, packaging, colors) unchanged. "
-            + _NO_TEXT +
-            "Reserve clean EMPTY space: a clear horizontal band across the TOP (for a title later) and a clear area in the LOWER-LEFT (for spec lines later). "
-            "Consistent across the whole set: light-gray studio gradient background, product centered and prominent, identical professional studio lighting and composition. Square 1:1."
+        "layout": (
+            "Create a PREMIUM e-commerce product main image. This image is part of a CONSISTENT SET — "
+            "every image in the set MUST share the exact same layout, typography and color treatment. "
+            "Keep the product EXACTLY as in the source photo, including its own label and branding. "
+            "Layout (identical across the set): clean light-gray studio gradient background; the product centered and prominent; "
+            "render an elegant SERIF product TITLE across the TOP CENTER, a thin gold divider rule beneath it, a short SUBTITLE line below that, "
+            "and THREE short spec lines as a neat list in the LOWER-LEFT. "
+            "Typography is refined and consistent: an elegant serif, dark charcoal ink with a muted gold accent, generous letter-spacing, balanced hierarchy. "
+            "Square 1:1, soft professional studio lighting."
         ),
         "aspect_ratio": "1:1",
     },
     "rednote": {
         "label": "小红书封面",
-        "prompt": (
-            "Redesign this into a Xiaohongshu (RED) cover, part of a consistent set. "
-            "Keep the product's exact appearance from the source unchanged. "
-            + _NO_TEXT +
-            "Reserve a clean EMPTY band across the UPPER-MIDDLE for a title to be added later. "
-            "Consistent across the set: bright clean lifestyle background, product placed naturally, identical soft lighting and composition. Vertical 3:4."
+        "layout": (
+            "Create a Xiaohongshu (RED) cover image, part of a CONSISTENT SET sharing identical layout and typography. "
+            "Keep the product exactly as the source, including its label. "
+            "Layout: bright clean lifestyle background; product placed naturally; a LARGE elegant serif TITLE across the upper-middle, "
+            "a thin divider, and a smaller SUBTITLE below it. Refined consistent typography (elegant serif, dark ink, soft accent). "
+            "Vertical 3:4, soft natural lighting."
         ),
         "aspect_ratio": "3:4",
     },
     "minimal": {
         "label": "极简画册",
-        "prompt": (
-            "Redesign this into a minimal product catalog image, part of a consistent set. "
-            "Keep the product's exact appearance from the source unchanged. "
-            + _NO_TEXT +
-            "Reserve clean EMPTY space in the LOWER-LEFT for a single title line later. "
-            "Consistent across the set: pure off-white seamless background, product centered with generous negative space, identical even soft lighting. Square 1:1."
+        "layout": (
+            "Create a minimal editorial product image, part of a CONSISTENT SET sharing identical layout and typography. "
+            "Keep the product exactly as the source, including its label. "
+            "Layout: pure off-white seamless background; product centered with generous negative space; a single understated serif TITLE "
+            "in the lower-left with a short thin rule beneath it. Monochrome refined typography, identical across the set. "
+            "Square 1:1, even soft lighting, editorial minimal aesthetic."
         ),
         "aspect_ratio": "1:1",
     },
 }
 
-
-# 每个模板要几条文案槽位（与前端 SET_TEMPLATE_SLOTS 的 key 对应）
 SET_CONTENT_SPEC = {
     "ecom": {"title": True, "subtitle": True, "points": 3},
     "rednote": {"title": True, "subtitle": True, "points": 0},
@@ -65,11 +55,7 @@ SET_CONTENT_SPEC = {
 
 
 async def generate_set_content(template_key: str, items: list[dict], doc_text: str, lang: str = "zh") -> dict:
-    """用 LLM 为每张产品图生成真实套图文案（取自产品说明 + 文档），而非占位符。
-
-    items: [{"label": "asset_3", "caption": "SANITY 5 Reserva Chardonnay 2020 白葡萄酒"}]
-    返回 {label: {"title": str, "subtitle": str, "points": [str, ...]}}；失败时返回 {} （前端回退占位符）。
-    """
+    """用 LLM 为每张产品图生成真实文案（取自产品说明 + 文档）。返回 {label: {title, subtitle, points}}。"""
     spec = SET_CONTENT_SPEC.get(template_key, {})
     if not items:
         return {}
@@ -110,28 +96,41 @@ async def generate_set_content(template_key: str, items: list[dict], doc_text: s
         return {}
 
 
-def build_set_plan(template_key: str, asset_labels: list[str]) -> Plan:
-    """每张选中图建一个 edit_image 节点，注入同一「干净无字底图」约束，并带上模板 key。"""
+def _content_block(content: dict, lang: str = "zh") -> str:
+    """把一张图的真实文案拼成给生成模型的「请渲染这些文字」指令。"""
+    if not content:
+        return ""
+    lines = [f'Title: {content.get("title", "")}']
+    if content.get("subtitle"):
+        lines.append(f'Subtitle: {content["subtitle"]}')
+    pts = content.get("points") or []
+    if pts:
+        lines.append("Spec lines: " + " / ".join(pts))
+    word = "中文" if lang != "en" else "English"
+    return (
+        f" Render EXACTLY this {word} text into the design, spelled correctly and legibly, "
+        f"placed per the layout above:\n" + "\n".join(lines)
+    )
+
+
+def build_set_plan(template_key: str, asset_labels: list[str], content_map: dict | None = None, lang: str = "zh") -> Plan:
+    """每张选中图建一个 edit_image 节点：共享版式约束 + 该产品的真实文案，AI 直接出设计图。"""
     tpl = SET_TEMPLATES.get(template_key)
     if tpl is None:
         raise ValueError(f"未知套图模板：{template_key}")
-    labels = [l for l in (asset_labels or []) if l][:12]  # 单次套图上限 12 张
+    labels = [l for l in (asset_labels or []) if l][:12]
     if not labels:
         raise ValueError("未选择任何图片")
-    nodes = [
-        PlanNode(
+    content_map = content_map or {}
+    nodes = []
+    for i, label in enumerate(labels):
+        prompt = tpl["layout"] + _content_block(content_map.get(label), lang)
+        nodes.append(PlanNode(
             id=f"set_{i + 1}",
             tool="edit_image",
             label=f"套图 {i + 1}/{len(labels)} · {tpl['label']}",
-            args={
-                "prompt": tpl["prompt"],
-                "source_asset": label,
-                "aspect_ratio": tpl["aspect_ratio"],
-                "set_template": template_key,  # 透传给前端：生成完用此模板叠固定文字
-            },
+            args={"prompt": prompt, "source_asset": label, "aspect_ratio": tpl["aspect_ratio"], "set_member": True},
             depends=[],
-        )
-        for i, label in enumerate(labels)
-    ]
+        ))
     return Plan(mode="plan", title=f"{tpl['label']}（{len(labels)} 张统一风格）", nodes=nodes,
-                notes=[f"AI 生成 {len(labels)} 张干净统一底图，再叠固定模板文字（排版/字体 100% 一致，可改内容）"])
+                notes=[f"AI 直接生成 {len(labels)} 张统一版式/字体/风格的设计图，文案取自产品信息与文档"])
