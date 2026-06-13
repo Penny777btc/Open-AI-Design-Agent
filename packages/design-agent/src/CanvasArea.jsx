@@ -57,21 +57,29 @@ const SET_TEMPLATES = {
 // 混合方案的【固定文字模板】：AI 出干净底图后，前端在每张图上叠这些槽位。
 // 坐标/字号都相对图片尺寸（rel*）→ 全集排版/字体/字号 100% 一致，只有文字内容可改。
 // 槽位区域要对得上后端生成提示里预留的空白区（标题区/卖点区）。
-const _SETPT = { fontStyle: "bold", fill: "#1a1a1a", fontFamily: "Inter, sans-serif" };
+// 精致排版：优雅衬线（思源宋体）+ 字间距 + 分隔线 + 克制配色层次，贴合高端产品气质。
+// divider 是一条 em-dash 细线（不占内容 key），靠 slotText 原样保留。
+const _SERIF = "Noto Serif SC";
+const _INK = "#262320";     // 墨黑（比纯黑柔和、更高级）
+const _GOLD = "#a8884e";    // 低饱和金（分隔线/点缀）
+const _GREY = "#8a847c";    // 副文字暖灰
 const SET_TEMPLATE_SLOTS = {
   ecom: [
-    { key: "title", text: "产品标题", relX: 0, relY: 0.055, relW: 1, align: "center", relSize: 0.06, style: { ..._SETPT } },
-    { key: "subtitle", text: "副标题 · 一句卖点", relX: 0, relY: 0.135, relW: 1, align: "center", relSize: 0.032, style: { fontStyle: "normal", fill: "#666666", fontFamily: "Inter, sans-serif" } },
-    { key: "point0", text: "• 卖点一", relX: 0.06, relY: 0.74, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
-    { key: "point1", text: "• 卖点二", relX: 0.06, relY: 0.80, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
-    { key: "point2", text: "• 卖点三", relX: 0.06, relY: 0.86, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
+    { key: "title",    text: "产品标题",        relX: 0,    relY: 0.060, relW: 1,    align: "center", relSize: 0.056, style: { fontStyle: "bold",   fill: _INK,  fontFamily: _SERIF, letterSpacing: 2 } },
+    { key: "divider",  text: "————",           relX: 0,    relY: 0.150, relW: 1,    align: "center", relSize: 0.022, style: { fontStyle: "normal", fill: _GOLD, fontFamily: _SERIF, letterSpacing: -1 } },
+    { key: "subtitle", text: "副标题 · 一句卖点", relX: 0,    relY: 0.180, relW: 1,    align: "center", relSize: 0.028, style: { fontStyle: "normal", fill: _GREY, fontFamily: _SERIF, letterSpacing: 3 } },
+    { key: "point0",   text: "卖点一",          relX: 0.07, relY: 0.730, relW: 0.55, align: "left",   relSize: 0.027, style: { fontStyle: "normal", fill: _INK,  fontFamily: _SERIF, letterSpacing: 1 } },
+    { key: "point1",   text: "卖点二",          relX: 0.07, relY: 0.795, relW: 0.55, align: "left",   relSize: 0.027, style: { fontStyle: "normal", fill: _INK,  fontFamily: _SERIF, letterSpacing: 1 } },
+    { key: "point2",   text: "卖点三",          relX: 0.07, relY: 0.860, relW: 0.55, align: "left",   relSize: 0.027, style: { fontStyle: "normal", fill: _INK,  fontFamily: _SERIF, letterSpacing: 1 } },
   ],
   rednote: [
-    { key: "title", text: "大标题", relX: 0, relY: 0.08, relW: 1, align: "center", relSize: 0.075, style: { ..._SETPT, fill: "#222222" } },
-    { key: "subtitle", text: "副标题说明", relX: 0, relY: 0.18, relW: 1, align: "center", relSize: 0.035, style: { fontStyle: "normal", fill: "#666666", fontFamily: "Inter, sans-serif" } },
+    { key: "title",    text: "大标题",     relX: 0, relY: 0.080, relW: 1, align: "center", relSize: 0.072, style: { fontStyle: "bold",   fill: _INK,  fontFamily: _SERIF, letterSpacing: 2 } },
+    { key: "divider",  text: "————",      relX: 0, relY: 0.180, relW: 1, align: "center", relSize: 0.022, style: { fontStyle: "normal", fill: _GOLD, fontFamily: _SERIF, letterSpacing: -1 } },
+    { key: "subtitle", text: "副标题说明", relX: 0, relY: 0.210, relW: 1, align: "center", relSize: 0.034, style: { fontStyle: "normal", fill: _GREY, fontFamily: _SERIF, letterSpacing: 3 } },
   ],
   minimal: [
-    { key: "title", text: "标题", relX: 0.07, relY: 0.82, relW: 0.86, align: "left", relSize: 0.05, style: { ..._SETPT } },
+    { key: "title",   text: "标题",  relX: 0.07, relY: 0.800, relW: 0.86, align: "left", relSize: 0.048, style: { fontStyle: "bold",   fill: _INK,  fontFamily: _SERIF, letterSpacing: 2 } },
+    { key: "divider", text: "———",   relX: 0.07, relY: 0.880, relW: 0.3,  align: "left", relSize: 0.02,  style: { fontStyle: "normal", fill: _GOLD, fontFamily: _SERIF, letterSpacing: -1 } },
   ],
 };
 
@@ -1262,6 +1270,15 @@ const CanvasArea = forwardRef(
             ...slot.style,
           }));
           setTexts((prev) => [...prev, ...slotTexts]);
+          // 预载模板的设计字体（思源宋体等），加载完强制重绘，否则套图文字会先停在回退字体
+          [...new Set(slotTexts.map((s) => s.fontFamily).filter(Boolean))].forEach((fam) =>
+            loadGoogleFont(fam).then(() => {
+              const redraw = () => stageRef.current?.draw();
+              redraw();
+              setTimeout(redraw, 250);
+              setTimeout(redraw, 700);
+            })
+          );
         }
         setSelectedId(id);
         if (typeof onLoaded === "function") onLoaded();

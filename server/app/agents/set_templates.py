@@ -13,8 +13,10 @@ key 一一对应；后端只管生成提示 + 把模板 key 透传给前端去�
 from app.agents.planner import Plan, PlanNode
 
 _NO_TEXT = (
-    "CRITICAL: do NOT render any text, words, letters, numbers, logos or labels onto the image. "
-    "Produce a clean image with ZERO typography — text will be added afterward by a fixed template. "
+    "Keep the product EXACTLY as in the source photo, INCLUDING all the text, labels, logos and branding "
+    "printed ON the product and its packaging (e.g. the bottle label) — those belong to the product and MUST be preserved, unchanged and legible. "
+    "But do NOT ADD any NEW text, titles, captions, marketing copy, watermarks, badges or graphic overlays anywhere in the scene — "
+    "only the product itself. Keep the surrounding areas clean and empty (title/caption text will be added afterward by a fixed template). "
 )
 
 SET_TEMPLATES = {
