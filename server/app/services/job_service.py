@@ -123,25 +123,32 @@ async def _run_job(job_id: str) -> None:
             return
 
         await _set_status(job_id, "planning")
-        brief = job_input.get("message") or _skill_brief(job_input)
-        async with SessionLocal() as db:
-            asset_rows = (
-                await db.execute(select(Asset).where(Asset.session_id == session_id).order_by(Asset.created_at))
-            ).scalars().all()
-        assets_ctx = [
-            {"asset_label": a.asset_label, "kind": a.kind, "prompt": a.prompt, "source_tool": a.source_tool}
-            for a in asset_rows
-        ]
-        async with SessionLocal() as db:
-            from app.models import ReferenceDoc
 
-            doc_rows = (
-                await db.execute(
-                    select(ReferenceDoc).where(ReferenceDoc.session_id == session_id).order_by(ReferenceDoc.created_at)
-                )
-            ).scalars().all()
-        docs_ctx = [{"filename": d.filename, "text": d.extracted_text} for d in doc_rows]
-        plan = await make_plan(brief, job_input.get("messages_snapshot"), assets_ctx, docs_ctx)
+        # 套图：跳过 AI 规划器，按固定模板直接构造批量 edit_image 计划（每张注入同一约束）
+        if job.kind == "set_template":
+            from app.agents.set_templates import build_set_plan
+
+            plan = build_set_plan(job_input.get("template"), job_input.get("asset_labels", []))
+        else:
+            brief = job_input.get("message") or _skill_brief(job_input)
+            async with SessionLocal() as db:
+                asset_rows = (
+                    await db.execute(select(Asset).where(Asset.session_id == session_id).order_by(Asset.created_at))
+                ).scalars().all()
+            assets_ctx = [
+                {"asset_label": a.asset_label, "kind": a.kind, "prompt": a.prompt, "source_tool": a.source_tool}
+                for a in asset_rows
+            ]
+            async with SessionLocal() as db:
+                from app.models import ReferenceDoc
+
+                doc_rows = (
+                    await db.execute(
+                        select(ReferenceDoc).where(ReferenceDoc.session_id == session_id).order_by(ReferenceDoc.created_at)
+                    )
+                ).scalars().all()
+            docs_ctx = [{"filename": d.filename, "text": d.extracted_text} for d in doc_rows]
+            plan = await make_plan(brief, job_input.get("messages_snapshot"), assets_ctx, docs_ctx)
 
         if plan.mode == "direct":
             await emit(job_id, "text", {"content": plan.reply or "好的。"})

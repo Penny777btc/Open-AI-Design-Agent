@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,6 +67,31 @@ from app.services.rate_limit import rate_limit
 @router.post("/sessions/{session_id}/chat", dependencies=[Depends(rate_limit("chat", 20, 60))])
 async def chat(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     return await _enqueue(db, user, session_id, "chat", await request.json())
+
+
+@router.post("/sessions/{session_id}/set-template", dependencies=[Depends(rate_limit("chat", 20, 60))])
+async def set_template(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    """套图：选一批产品图 + 一个模板，AI 按统一排版/字体/风格批量生成新图。
+
+    走正常审批流（计划卡显示 N 张 + 总积分 → 用户批准 → 执行），计划由固定模板
+    构造而非 AI 规划器，保证每张注入同一约束、产出一致。
+    """
+    from app.agents.set_templates import SET_TEMPLATES
+
+    body = await request.json()
+    template = body.get("template")
+    labels = body.get("asset_labels") or []
+    if template not in SET_TEMPLATES:
+        raise HTTPException(status_code=422, detail="未知套图模板")
+    if not labels:
+        raise HTTPException(status_code=422, detail="请先选择图片")
+    tpl_label = SET_TEMPLATES[template]["label"]
+    return await _enqueue(db, user, session_id, "set_template", {
+        "message": f"🎨 套图：{tpl_label}（{len(labels)} 张）",
+        "template": template,
+        "asset_labels": labels,
+        "client_request_id": body.get("client_request_id"),
+    })
 
 
 @router.post("/sessions/{session_id}/region-edit", dependencies=[Depends(rate_limit("chat", 20, 60))])
