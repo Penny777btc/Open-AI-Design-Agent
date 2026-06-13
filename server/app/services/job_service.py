@@ -125,11 +125,28 @@ async def _run_job(job_id: str) -> None:
         await _set_status(job_id, "planning")
         brief = job_input.get("message") or ""  # 末尾总结的语言检测用；set_template 也需有值
 
-        # 套图：跳过 AI 规划器，按固定模板直接构造批量 edit_image 计划（每张注入同一约束）
+        # 套图：跳过 AI 规划器，按固定模板直接构造批量 edit_image 计划（每张注入同一约束），
+        # 并用 LLM 根据产品说明 + 文档为每张图生成真实文案（标题/卖点）叠到图层上。
         if job.kind == "set_template":
-            from app.agents.set_templates import build_set_plan
+            from app.agents.set_templates import build_set_plan, generate_set_content
 
-            plan = build_set_plan(job_input.get("template"), job_input.get("asset_labels", []))
+            tpl_key = job_input.get("template")
+            labels = job_input.get("asset_labels", [])
+            async with SessionLocal() as db:
+                rows = (await db.execute(
+                    select(Asset).where(Asset.session_id == session_id, Asset.asset_label.in_(labels))
+                )).scalars().all()
+                cap = {a.asset_label: (a.prompt or "") for a in rows}
+                from app.models import ReferenceDoc
+
+                doc = (await db.execute(
+                    select(ReferenceDoc).where(ReferenceDoc.session_id == session_id).order_by(ReferenceDoc.created_at.desc())
+                )).scalars().first()
+            items = [{"label": l, "caption": cap.get(l, "")} for l in labels]
+            content = await generate_set_content(tpl_key, items, doc.extracted_text if doc else "", lang=job_input.get("lang", "zh"))
+            plan = build_set_plan(tpl_key, labels)
+            for node in plan.nodes:
+                node.args["slot_content"] = content.get(node.args.get("source_asset"))
         else:
             brief = job_input.get("message") or _skill_brief(job_input)
             async with SessionLocal() as db:
@@ -399,6 +416,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         asset_payload["set_template"] = node.args["set_template"]
         asset_payload["canvas_x"] = canvas_x
         asset_payload["canvas_y"] = canvas_y
+        if node.args.get("slot_content"):
+            asset_payload["set_content"] = node.args["slot_content"]  # 真实文案（标题/卖点）
     await emit(job_id, "tool_result", {
         "name": node.tool,
         "result": result,

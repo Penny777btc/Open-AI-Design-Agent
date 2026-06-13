@@ -60,20 +60,76 @@ const SET_TEMPLATES = {
 const _SETPT = { fontStyle: "bold", fill: "#1a1a1a", fontFamily: "Inter, sans-serif" };
 const SET_TEMPLATE_SLOTS = {
   ecom: [
-    { text: "产品标题", relX: 0, relY: 0.055, relW: 1, align: "center", relSize: 0.06, style: { ..._SETPT } },
-    { text: "副标题 · 一句卖点", relX: 0, relY: 0.135, relW: 1, align: "center", relSize: 0.032, style: { fontStyle: "normal", fill: "#666666", fontFamily: "Inter, sans-serif" } },
-    { text: "• 卖点一", relX: 0.06, relY: 0.74, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
-    { text: "• 卖点二", relX: 0.06, relY: 0.80, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
-    { text: "• 卖点三", relX: 0.06, relY: 0.86, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
+    { key: "title", text: "产品标题", relX: 0, relY: 0.055, relW: 1, align: "center", relSize: 0.06, style: { ..._SETPT } },
+    { key: "subtitle", text: "副标题 · 一句卖点", relX: 0, relY: 0.135, relW: 1, align: "center", relSize: 0.032, style: { fontStyle: "normal", fill: "#666666", fontFamily: "Inter, sans-serif" } },
+    { key: "point0", text: "• 卖点一", relX: 0.06, relY: 0.74, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
+    { key: "point1", text: "• 卖点二", relX: 0.06, relY: 0.80, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
+    { key: "point2", text: "• 卖点三", relX: 0.06, relY: 0.86, relW: 0.55, align: "left", relSize: 0.03, style: { ..._SETPT } },
   ],
   rednote: [
-    { text: "大标题", relX: 0, relY: 0.08, relW: 1, align: "center", relSize: 0.075, style: { ..._SETPT, fill: "#222222" } },
-    { text: "副标题说明", relX: 0, relY: 0.18, relW: 1, align: "center", relSize: 0.035, style: { fontStyle: "normal", fill: "#666666", fontFamily: "Inter, sans-serif" } },
+    { key: "title", text: "大标题", relX: 0, relY: 0.08, relW: 1, align: "center", relSize: 0.075, style: { ..._SETPT, fill: "#222222" } },
+    { key: "subtitle", text: "副标题说明", relX: 0, relY: 0.18, relW: 1, align: "center", relSize: 0.035, style: { fontStyle: "normal", fill: "#666666", fontFamily: "Inter, sans-serif" } },
   ],
   minimal: [
-    { text: "标题", relX: 0.07, relY: 0.82, relW: 0.86, align: "left", relSize: 0.05, style: { ..._SETPT } },
+    { key: "title", text: "标题", relX: 0.07, relY: 0.82, relW: 0.86, align: "left", relSize: 0.05, style: { ..._SETPT } },
   ],
 };
+
+// ── Google Fonts：文字图层可换任意免费字体 ──────────────────────────
+// 精选一批（含中文显示字体 + 拉丁展示字体）；按需动态加载，避免一次性拉全。
+const GOOGLE_FONTS = [
+  { label: "Inter（默认）", family: "Inter, sans-serif" },
+  { label: "思源黑体", family: "Noto Sans SC" },
+  { label: "思源宋体", family: "Noto Serif SC" },
+  { label: "站酷小薇", family: "ZCOOL XiaoWei" },
+  { label: "站酷黄油体", family: "ZCOOL QingKe HuangYou" },
+  { label: "马善政毛笔", family: "Ma Shan Zheng" },
+  { label: "龙藏手写", family: "Long Cang" },
+  { label: "Playfair Display", family: "Playfair Display" },
+  { label: "Montserrat", family: "Montserrat" },
+  { label: "Oswald", family: "Oswald" },
+  { label: "Bebas Neue", family: "Bebas Neue" },
+  { label: "Lobster", family: "Lobster" },
+];
+
+const _loadedFonts = new Set();
+// 动态加载一个 Google Font 并等到可用，再让 Konva 重绘（否则会先用回退字体渲染）
+function loadGoogleFont(family) {
+  if (typeof document === "undefined" || !family || family.includes("Inter") || family.includes("sans-serif")) {
+    return Promise.resolve();
+  }
+  if (!_loadedFonts.has(family)) {
+    _loadedFonts.add(family);
+    const id = "gf-" + family.replace(/\s+/g, "-");
+    if (!document.getElementById(id)) {
+      const link = document.createElement("link");
+      link.id = id;
+      link.rel = "stylesheet";
+      link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:wght@400;700&display=swap`;
+      document.head.appendChild(link);
+    }
+  }
+  if (document.fonts?.load) {
+    return Promise.all([
+      document.fonts.load(`700 24px "${family}"`),
+      document.fonts.load(`400 24px "${family}"`),
+    ]).then(() => document.fonts.ready).catch(() => {});
+  }
+  return new Promise((r) => setTimeout(r, 600));
+}
+
+// 把后端生成的真实文案 {title, subtitle, points:[...]} 映射到槽位 key
+function slotText(slot, content) {
+  if (!content) return slot.text;
+  if (slot.key === "title") return content.title || slot.text;
+  if (slot.key === "subtitle") return content.subtitle || slot.text;
+  const m = /^point(\d+)$/.exec(slot.key || "");
+  if (m) {
+    const p = (content.points || [])[Number(m[1])];
+    return p ? `• ${p}` : slot.text;
+  }
+  return slot.text;
+}
 
 const MenuButton = ({ label, shortcut, onClick, theme }) => (
   <button
@@ -1136,7 +1192,7 @@ const CanvasArea = forwardRef(
       setContextMenu(null);
     };
 
-    const addImage = (src, x, y, width, height, onLoaded, assetLabel, setTemplate) => {
+    const addImage = (src, x, y, width, height, onLoaded, assetLabel, setTemplate, setContent) => {
       if (!src) return;
       const stage = stageRef.current;
       if (!stage) {
@@ -1194,7 +1250,7 @@ const CanvasArea = forwardRef(
           const stamp = Date.now();
           const slotTexts = slots.map((slot, i) => ({
             id: `txt-${stamp}-${(assetLabel || id).slice(-6)}-${i}`,
-            text: slot.text,
+            text: slotText(slot, setContent),  // 真实文案（取自 PDF/产品信息），无则回退占位
             x: targetX + slot.relX * dw,
             y: targetY + slot.relY * dh,
             width: slot.relW ? slot.relW * dw : undefined,
@@ -2368,6 +2424,25 @@ const CanvasArea = forwardRef(
           const hasShadow = (sel.shadowBlur || 0) > 0;
           return (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-bg-card border border-divider rounded shadow-2xl px-2 py-1.5">
+              {/* 字体（Google Fonts，按需加载） */}
+              <select
+                value={GOOGLE_FONTS.find((f) => f.family === sel.fontFamily)?.family || "Inter, sans-serif"}
+                onChange={async (e) => {
+                  const fam = e.target.value;
+                  updateSelectedText({ fontFamily: fam });
+                  await loadGoogleFont(fam);
+                  // Konva 会先用回退字体画一遍；字体就绪后必须强制重画几次才稳（单次 batchDraw 常拿不到刚加载的字体）
+                  const redraw = () => stageRef.current?.draw();
+                  redraw();
+                  setTimeout(redraw, 150);
+                  setTimeout(redraw, 500);
+                }}
+                className="h-6 max-w-[88px] bg-bg-page border border-divider rounded text-[11px] text-primary-text px-1 focus:outline-none cursor-pointer"
+                title="字体（Google Fonts 免费字体）"
+              >
+                {GOOGLE_FONTS.map((f) => <option key={f.family} value={f.family}>{f.label}</option>)}
+              </select>
+              <div className="w-px h-5 bg-divider mx-0.5" />
               {/* 字号 */}
               <button onClick={() => updateSelectedText({ fontSize: Math.max(8, (sel.fontSize || 24) - 4) })} className="w-6 h-6 rounded hover:bg-bg-page text-secondary-text hover:text-primary-text text-sm">A−</button>
               <span className="text-[10px] text-secondary-text font-mono w-6 text-center tabular-nums">{Math.round(sel.fontSize || 24)}</span>

@@ -54,6 +54,60 @@ SET_TEMPLATES = {
 }
 
 
+# 每个模板要几条文案槽位（与前端 SET_TEMPLATE_SLOTS 的 key 对应）
+SET_CONTENT_SPEC = {
+    "ecom": {"title": True, "subtitle": True, "points": 3},
+    "rednote": {"title": True, "subtitle": True, "points": 0},
+    "minimal": {"title": True, "subtitle": False, "points": 0},
+}
+
+
+async def generate_set_content(template_key: str, items: list[dict], doc_text: str, lang: str = "zh") -> dict:
+    """用 LLM 为每张产品图生成真实套图文案（取自产品说明 + 文档），而非占位符。
+
+    items: [{"label": "asset_3", "caption": "SANITY 5 Reserva Chardonnay 2020 白葡萄酒"}]
+    返回 {label: {"title": str, "subtitle": str, "points": [str, ...]}}；失败时返回 {} （前端回退占位符）。
+    """
+    spec = SET_CONTENT_SPEC.get(template_key, {})
+    if not items:
+        return {}
+    from app.providers import get_llm
+
+    lang_word = "中文" if lang != "en" else "English"
+    need = ["title（产品标题，简短）"]
+    if spec.get("subtitle"):
+        need.append("subtitle（一句核心卖点/副标题）")
+    if spec.get("points"):
+        need.append(f"points（{spec['points']} 条卖点小标题，每条很短，如规格/产地/年份/口感）")
+    schema = '{"<label>": {"title": "...", "subtitle": "...", "points": ["...", "..."]}}'
+    products = "\n".join(f'- {it["label"]}: {it.get("caption", "")}' for it in items)
+    prompt = (
+        f"为一组电商套图生成文案。每个产品需要：{('；'.join(need))}。\n"
+        f"用{lang_word}，文案要精炼、真实、可直接用，**优先取自下方参考资料里的事实**（产地/年份/规格/口感/卖点），不要编造。\n\n"
+        f"产品列表：\n{products}\n\n"
+        f"参考资料（产品手册）：\n{(doc_text or '（无）')[:5000]}\n\n"
+        f"只输出一个 JSON，按产品 label 为 key：{schema}。没有 subtitle/points 的模板就省略对应字段。"
+    )
+    try:
+        raw = await get_llm().complete([{"role": "user", "content": prompt}], json_only=True)
+        import json
+        import re
+
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group(0)) if m else {}
+        out = {}
+        for it in items:
+            c = data.get(it["label"]) or {}
+            out[it["label"]] = {
+                "title": str(c.get("title", "") or it.get("caption", ""))[:60],
+                "subtitle": str(c.get("subtitle", ""))[:80],
+                "points": [str(p)[:40] for p in (c.get("points") or [])][: spec.get("points", 0)],
+            }
+        return out
+    except Exception:
+        return {}
+
+
 def build_set_plan(template_key: str, asset_labels: list[str]) -> Plan:
     """每张选中图建一个 edit_image 节点，注入同一「干净无字底图」约束，并带上模板 key。"""
     tpl = SET_TEMPLATES.get(template_key)
