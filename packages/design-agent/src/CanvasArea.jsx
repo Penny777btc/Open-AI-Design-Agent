@@ -1034,16 +1034,16 @@ const CanvasArea = forwardRef(
       im.onerror = () => rej(new Error("img load failed"));
       im.src = src;
     });
-    // 把一段文字按其样式画到独立画布（给 PSD 文字层提供正确外观）
-    const _renderText = (n) => {
-      const fs = Math.round(n.fontSize || 24);
+    // 把一段文字按其样式画到独立画布（给 PSD 文字层提供正确外观）。scale=导出放大倍数。
+    const _renderText = (n, scale = 1) => {
+      const fs = Math.round((n.fontSize || 24) * scale);
       const bold = (n.fontStyle || "").includes("bold");
       const font = `${bold ? "bold " : ""}${fs}px ${n.fontFamily || "sans-serif"}`;
       const meas = document.createElement("canvas").getContext("2d");
       meas.font = font;
       const lines = String(n.text || "").split("\n");
-      const sw = n.strokeWidth || 0;
-      const pad = Math.ceil(fs * 0.5) + sw * 2 + (n.shadowBlur || 0);
+      const sw = (n.strokeWidth || 0) * scale;
+      const pad = Math.ceil(fs * 0.5) + sw * 2 + (n.shadowBlur || 0) * scale;
       const lineH = Math.ceil(fs * 1.25);
       const textW = Math.max(1, ...lines.map((l) => Math.ceil(meas.measureText(l).width)));
       const c = document.createElement("canvas");
@@ -1058,7 +1058,7 @@ const CanvasArea = forwardRef(
         if (n.shadowColor && n.shadowBlur) {
           ctx.save();
           ctx.shadowColor = n.shadowColor;
-          ctx.shadowBlur = n.shadowBlur;
+          ctx.shadowBlur = (n.shadowBlur || 0) * scale;
           ctx.fillStyle = n.fill || "#000";
           ctx.fillText(line, pad, y);
           ctx.restore();
@@ -1088,30 +1088,40 @@ const CanvasArea = forwardRef(
         const cy = t.y + (t.fontSize || 24) / 2;
         return cx >= minX && cx <= maxX && cy >= minY && cy <= maxY;
       });
-      const W = Math.round(maxX - minX);
-      const H = Math.round(maxY - minY);
-      if (W <= 0 || H <= 0) { toast.error("导出区域无效"); return; }
+      if (maxX - minX <= 0 || maxY - minY <= 0) { toast.error("导出区域无效"); return; }
       setExportingPsd(true);
       try {
         const { writePsd } = await import("ag-psd");
+        // 先把图片都加载出来，按「原生分辨率」导出（画布上显示的是缩小版，直接导出会糊且尺寸过小）。
+        // scale = 把分辨率最高的那张图还原到原生尺寸的倍数，全图按它放大 → 清晰、尺寸够用。
+        const imgMap = new Map();
+        let scale = 1;
+        for (const n of imgs) {
+          const img = await _loadImg(n.src);
+          imgMap.set(n.id, img);
+          if (n.width) scale = Math.max(scale, (img.naturalWidth || n.width) / n.width);
+        }
+        scale = Math.min(Math.max(scale, 1), 8); // 封顶 8 倍，防尺寸失控
+        const W = Math.round((maxX - minX) * scale);
+        const H = Math.round((maxY - minY) * scale);
         const nodes = [
           ...imgs.map((n) => ({ ...n, _kind: "img" })),
           ...txts.map((n) => ({ ...n, _kind: "txt" })),
         ].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)); // 图层从下到上
         const children = [];
         for (const n of nodes) {
-          const left = Math.round(n.x - minX);
-          const top = Math.round(n.y - minY);
+          const left = Math.round((n.x - minX) * scale);
+          const top = Math.round((n.y - minY) * scale);
           if (n._kind === "img") {
-            const img = await _loadImg(n.src);
-            const w = Math.round(n.width || img.naturalWidth);
-            const h = Math.round(n.height || img.naturalHeight);
+            const img = imgMap.get(n.id);
+            const w = Math.max(1, Math.round((n.width || img.naturalWidth) * scale));
+            const h = Math.max(1, Math.round((n.height || img.naturalHeight) * scale));
             const cv = document.createElement("canvas");
             cv.width = w; cv.height = h;
-            cv.getContext("2d").drawImage(img, 0, 0, w, h);
+            cv.getContext("2d").drawImage(img, 0, 0, w, h); // 从原生大图绘制 → 清晰
             children.push({ name: n.assetLabel ? `图片 · ${n.assetLabel}` : "背景图片", left, top, canvas: cv });
           } else {
-            const { canvas: tcv, pad } = _renderText(n);
+            const { canvas: tcv, pad } = _renderText(n, scale);
             const tx = left - pad, ty = top - pad;
             children.push({
               name: `文字 · ${String(n.text || "").replace(/\n/g, " ").slice(0, 14)}`,
@@ -1121,7 +1131,7 @@ const CanvasArea = forwardRef(
                 transform: [1, 0, 0, 1, left, top],
                 style: {
                   font: { name: (n.fontFamily || "sans-serif").split(",")[0].replace(/['"]/g, "").trim() },
-                  fontSize: Math.round(n.fontSize || 24),
+                  fontSize: Math.round((n.fontSize || 24) * scale),
                   fillColor: _hexToRgb(n.fill),
                 },
                 paragraphStyle: { justification: n.align === "center" ? "center" : n.align === "right" ? "right" : "left" },
