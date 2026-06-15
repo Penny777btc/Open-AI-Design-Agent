@@ -256,6 +256,20 @@ async def _execute_plan(
     results: dict[str, bool] = {}
     planner = PlacementPlanner(canvas_nodes, viewport)
 
+    # 预载编辑源图：套图/主图六联/详情页里 6-7 个角色节点共用同一张产品图，
+    # 只读一次进缓存，省掉每节点重复的 DB 查询 + 磁盘/HTTP 读取（批量提速关键）。
+    source_cache: dict[str, bytes] = {}
+    unique_sources = {
+        n.args.get("source_asset")
+        for n in plan.nodes
+        if n.tool == "edit_image" and n.args.get("source_asset")
+    }
+    for label in unique_sources:
+        try:
+            source_cache[label] = await _load_asset_bytes(session_id, label)
+        except Exception:
+            pass  # 取不到的留到节点里再报错/退款
+
     async def refund_node(node, reason: str) -> None:
         async with SessionLocal() as db:
             await credit_service.apply(
@@ -279,7 +293,7 @@ async def _execute_plan(
                 est = 3
             await emit(job_id, "tool_call", {"name": node.tool, "args": node.args, "est_seconds": est})
             try:
-                results[node.id] = await _generate_node(job_id, session_id, user_id, node, planner)
+                results[node.id] = await _generate_node(job_id, session_id, user_id, node, planner, source_cache)
             except Exception as exc:
                 logger.exception("node %s failed", node.id)
                 await emit(job_id, "error", {"message": f"{node.label}: 生成失败（{str(exc)[:160]}），该节点积分已退还"})
@@ -351,21 +365,31 @@ async def _video_node(job_id: str, session_id: str, user_id: str, node, planner:
     return True
 
 
-async def _generate_node(job_id: str, session_id: str, user_id: str, node, planner: PlacementPlanner) -> bool:
+async def _generate_node(job_id: str, session_id: str, user_id: str, node, planner: PlacementPlanner,
+                         source_cache: dict | None = None) -> bool:
     if node.tool == "generate_video":
         return await _video_node(job_id, session_id, user_id, node, planner)
     provider = get_image_provider()
     prompt = node.args.get("prompt") or node.label
+
+    # 源图与蒙版在重试循环外只读一次（命中 plan 级缓存则零 I/O；也避免重试时重复读盘）
+    source = mask = None
+    if node.tool == "edit_image":
+        source_label = node.args.get("source_asset", "")
+        if source_cache is not None and source_label in source_cache:
+            source = source_cache[source_label]
+        else:
+            source = await _load_asset_bytes(session_id, source_label)
+            if source_cache is not None:
+                source_cache[source_label] = source
+        if mask_key := node.args.get("mask_key"):
+            mask = (settings.storage_dir / mask_key).read_bytes()
+
     image = None
     last_exc = None
     for _ in range(2):  # 节点级重试
         try:
             if node.tool == "edit_image":
-                source_label = node.args.get("source_asset", "")
-                source = await _load_asset_bytes(session_id, source_label)
-                mask = None
-                if mask_key := node.args.get("mask_key"):
-                    mask = (settings.storage_dir / mask_key).read_bytes()
                 image = await provider.edit(prompt, source, node.args.get("aspect_ratio", "1:1"), mask=mask)
             else:
                 image = await provider.generate(prompt, node.args.get("aspect_ratio", "1:1"))

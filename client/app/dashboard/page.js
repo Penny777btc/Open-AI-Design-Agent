@@ -100,17 +100,9 @@ export default function AssistantDashboard() {
 
   const fetchSessions = async () => {
     try {
+      // 缩略图已随列表一次性返回（thumbnails 字段），无需再为每个会话单独拉 assets（消除 N+1）
       const { data } = await axios.get(`${API}/sessions`);
-      // Fetch assets for each session to show thumbnails
-      const sessionsWithAssets = await Promise.all(data.map(async (s) => {
-        try {
-          const { data: assets } = await axios.get(`${API}/sessions/${s.id}/assets`);
-          return { ...s, assets: assets.slice(0, 4) }; // Keep first 4 for thumbnail grid
-        } catch {
-          return { ...s, assets: [] };
-        }
-      }));
-      setSessions(sessionsWithAssets);
+      setSessions(data.map((s) => ({ ...s, assets: s.thumbnails || [] })));
     } catch (err) {
       console.error("Failed to fetch sessions:", err);
     } finally {
@@ -590,7 +582,7 @@ export default function AssistantDashboard() {
                       session.assets.map((asset, i) => (
                         <div key={i} className={`relative overflow-hidden ${session.assets.length === 1 ? 'col-span-2 row-span-2' : session.assets.length === 2 ? 'row-span-2' : ''}`}>
                           {asset.kind === "image" ? (
-                            <img src={asset.url} alt="" className="w-full h-full object-cover" />
+                            <img src={asset.url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                           ) : (
                             <div className="w-full h-full bg-black/5 flex items-center justify-center"><FiImage className="text-secondary-text/20" size={32} /></div>
                           )}

@@ -16,6 +16,29 @@ from app.providers.base import GeneratedImage, GeneratedVideo
 _TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 _MAGIC = {b"\x89PNG": "image/png", b"\xff\xd8\xff": "image/jpeg", b"RIFF": "image/webp"}
 
+# 复用的图片 HTTP 客户端：开启 keep-alive 连接池，避免每张图都重做 TCP+TLS 握手。
+# 批量套图（6-7 张并发 + 多波）下，省掉每次新建连接的几百毫秒~1 秒握手开销。
+_IMG_TIMEOUT = httpx.Timeout(300.0, connect=10.0)
+_image_client: httpx.AsyncClient | None = None
+
+
+def _img_client() -> httpx.AsyncClient:
+    global _image_client
+    if _image_client is None or _image_client.is_closed:
+        _image_client = httpx.AsyncClient(
+            timeout=_IMG_TIMEOUT,
+            follow_redirects=True,
+            limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
+        )
+    return _image_client
+
+
+def _png_dims(data: bytes) -> tuple[int, int] | None:
+    """从 PNG 头直接读尺寸（前 24 字节），避免对每张图做整图 PIL 解码。"""
+    if len(data) >= 24 and data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR":
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    return None
+
 
 async def _post_retry(client: httpx.AsyncClient, url: str, *, attempts: int = 3, **kwargs):
     """图片接口 POST：对 429/5xx 与网络错做指数退避重试。
@@ -176,15 +199,13 @@ class GptImageProvider:
             "size": self._SIZES.get(aspect_ratio, "1024x1024"),
         }
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+        client = _img_client()  # 复用连接池
+        resp = await _post_retry(client, f"{self.base_url}/v1/images/generations", json=payload, headers=headers)
+        if resp.status_code == 400 and payload["size"] != "1024x1024":
+            payload["size"] = "1024x1024"  # 尺寸不被支持时回退方图
             resp = await _post_retry(client, f"{self.base_url}/v1/images/generations", json=payload, headers=headers)
-            if resp.status_code == 400 and payload["size"] != "1024x1024":
-                payload["size"] = "1024x1024"  # 尺寸不被支持时回退方图
-                resp = await _post_retry(client, f"{self.base_url}/v1/images/generations", json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-
-        return self._to_generated(data)
+        resp.raise_for_status()
+        return self._to_generated(resp.json())
 
     async def edit(
         self, prompt: str, image: bytes, aspect_ratio: str = "1:1", mask: bytes | None = None
@@ -196,11 +217,11 @@ class GptImageProvider:
         if mask:
             files["mask"] = ("mask.png", mask, "image/png")
         form = {"model": self.model, "prompt": prompt}
-        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
-            resp = await _post_retry(
-                client, f"{self.base_url}/v1/images/edits", data=form, files=files, headers=headers
-            )
-            resp.raise_for_status()
+        client = _img_client()  # 复用连接池
+        resp = await _post_retry(
+            client, f"{self.base_url}/v1/images/edits", data=form, files=files, headers=headers
+        )
+        resp.raise_for_status()
         return self._to_generated(resp.json())
 
     def _to_generated(self, data: dict) -> GeneratedImage:
@@ -212,6 +233,9 @@ class GptImageProvider:
         else:
             raise RuntimeError(f"images API 无图片字段: {json.dumps(data)[:200]}")
 
+        dims = _png_dims(raw)  # PNG 直接读头，省去整图解码
+        if dims is not None:
+            return GeneratedImage(data=raw, mime="image/png", width=dims[0], height=dims[1], model=self.model)
         from io import BytesIO
 
         from PIL import Image

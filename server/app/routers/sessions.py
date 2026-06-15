@@ -30,9 +30,30 @@ async def list_sessions(
             .limit(limit)
         )
     ).all()
+
+    # 缩略图随列表一次性带回（消除前端「每个会话再发一次 assets 请求」的 N+1 瀑布）。
+    # 单条查询取这批会话的图片资产，按会话分组、每组保留前 4 张。
+    session_ids = [s.id for s, _ in rows]
+    thumbs: dict[str, list[dict]] = {sid: [] for sid in session_ids}
+    if session_ids:
+        asset_rows = (
+            await db.execute(
+                select(Asset.session_id, Asset.url, Asset.kind)
+                .where(Asset.session_id.in_(session_ids), Asset.kind == "image")
+                .order_by(Asset.created_at)
+            )
+        ).all()
+        for sid, url, kind in asset_rows:
+            bucket = thumbs.get(sid)
+            if bucket is not None and len(bucket) < 4:
+                bucket.append({"url": url, "kind": kind})
+
     # 响应仍是纯数组，不包 envelope，前端直接 .map 不受影响
     return [
-        {"id": s.id, "name": s.name, "asset_count": count, "timestamp": s.created_at.isoformat()}
+        {
+            "id": s.id, "name": s.name, "asset_count": count,
+            "timestamp": s.created_at.isoformat(), "thumbnails": thumbs.get(s.id, []),
+        }
         for s, count in rows
     ]
 
