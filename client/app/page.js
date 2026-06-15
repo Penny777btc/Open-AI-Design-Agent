@@ -102,12 +102,43 @@ const MARQUEE_B = [
 
 function useReveal() {
   useEffect(() => {
-    const obs = new IntersectionObserver(
-      (entries) => entries.forEach((e) => e.isIntersecting && e.target.classList.add("reveal-visible")),
-      { threshold: 0.12 }
-    );
-    document.querySelectorAll(".reveal").forEach((el) => obs.observe(el));
-    return () => obs.disconnect();
+    const els = Array.from(document.querySelectorAll(".reveal"));
+    if (!els.length) return;
+    const reveal = (el) => el.classList.add("reveal-visible");
+
+    // 手动可视判断：兜底 IntersectionObserver（某些环境视口高度异常时 IO 不触发，
+    // 会导致 .reveal 永远停在 opacity:0 → 首页整片黑屏）。
+    const vh = () => window.innerHeight || document.documentElement.clientHeight || 800;
+    const check = () => {
+      let pending = false;
+      for (const el of els) {
+        if (el.classList.contains("reveal-visible")) continue;
+        if (el.getBoundingClientRect().top < vh() * 0.92) reveal(el);
+        else pending = true;
+      }
+      return pending;
+    };
+
+    let io;
+    if (typeof IntersectionObserver !== "undefined") {
+      io = new IntersectionObserver(
+        (entries) => entries.forEach((e) => e.isIntersecting && reveal(e.target)),
+        { threshold: 0, rootMargin: "0px 0px -8% 0px" }
+      );
+      els.forEach((el) => io.observe(el));
+    }
+    check(); // 首屏立即显示已在视口内的
+    window.addEventListener("scroll", check, { passive: true });
+    window.addEventListener("resize", check, { passive: true });
+    // 最终兜底：1.5s 后强制显示全部，杜绝任何情况下的永久隐形
+    const fallback = setTimeout(() => els.forEach(reveal), 1500);
+
+    return () => {
+      io && io.disconnect();
+      window.removeEventListener("scroll", check);
+      window.removeEventListener("resize", check);
+      clearTimeout(fallback);
+    };
   }, []);
 }
 
