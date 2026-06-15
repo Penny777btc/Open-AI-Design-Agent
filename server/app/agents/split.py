@@ -8,6 +8,34 @@
 
 from app.agents.planner import Plan, PlanNode
 
+_rembg_session = None
+
+
+def cutout_subject(src: bytes) -> bytes:
+    """本地抠主体 → 透明 PNG。
+
+    用 isnet-general-use 模型（比默认 u2net 对产品更利落）+ mask 后处理，
+    再把 alpha 抬升「二值化」：玻璃瓶身这类半透明主体不再发虚/透明，主体变实心，
+    边缘保留一点过渡做抗锯齿。这是上次主体「透明模糊重影」问题的修复。
+    """
+    global _rembg_session
+    import io
+
+    import numpy as np
+    from PIL import Image
+    from rembg import new_session, remove
+
+    if _rembg_session is None:
+        _rembg_session = new_session("isnet-general-use")
+    png = remove(src, session=_rembg_session, post_process_mask=True)
+    im = Image.open(io.BytesIO(png)).convert("RGBA")
+    arr = np.array(im)
+    a = arr[:, :, 3].astype("float32")
+    arr[:, :, 3] = np.clip((a - 25) * 4, 0, 255).astype("uint8")  # 抬升 alpha → 主体实心
+    out = io.BytesIO()
+    Image.fromarray(arr).save(out, "PNG")
+    return out.getvalue()
+
 SPLIT_ROLES = [
     {
         "key": "bg", "label": "背景层",

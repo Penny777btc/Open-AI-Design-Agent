@@ -392,14 +392,14 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
 
     image = None
     if node.tool == "edit_image" and node.args.get("split_role") == "subject":
-        # AI 拆图·主体层：本地 rembg 抠图 → 保留产品原像素 + 透明 PNG（比 AI 重绘更忠实，也不耗中转额度）
+        # AI 拆图·主体层：本地抠图 → 保留产品原像素 + 透明 PNG（比 AI 重绘更忠实，也不耗中转额度）
+        from app.agents.split import cutout_subject
         from app.providers.base import GeneratedImage
         from app.providers.openai_compat import _png_dims
-        from rembg import remove
 
-        out = await asyncio.get_running_loop().run_in_executor(None, remove, source)
+        out = await asyncio.get_running_loop().run_in_executor(None, cutout_subject, source)
         dims = _png_dims(out) or (0, 0)
-        image = GeneratedImage(data=out, mime="image/png", width=dims[0], height=dims[1], model="rembg-u2net")
+        image = GeneratedImage(data=out, mime="image/png", width=dims[0], height=dims[1], model="rembg-isnet")
     else:
         last_exc = None
         for _ in range(2):  # 节点级重试
