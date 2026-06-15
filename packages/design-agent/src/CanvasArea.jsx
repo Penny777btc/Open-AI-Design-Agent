@@ -1018,6 +1018,133 @@ const CanvasArea = forwardRef(
       }
     };
 
+    // 导出分层 PSD：画布上的每张图片=一个栅格图层，每段文字=一个（PS 可编辑的）文字图层。
+    // 导出范围：多选的图片优先；否则当前选中的图；否则全部图。文字层取落在包围盒内的。
+    const [exportingPsd, setExportingPsd] = useState(false);
+    const _hexToRgb = (hex) => {
+      let h = (hex || "#000000").replace("#", "");
+      if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+      const n = parseInt(h, 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    };
+    const _loadImg = (src) => new Promise((res, rej) => {
+      const im = new Image();
+      im.crossOrigin = "anonymous";
+      im.onload = () => res(im);
+      im.onerror = () => rej(new Error("img load failed"));
+      im.src = src;
+    });
+    // 把一段文字按其样式画到独立画布（给 PSD 文字层提供正确外观）
+    const _renderText = (n) => {
+      const fs = Math.round(n.fontSize || 24);
+      const bold = (n.fontStyle || "").includes("bold");
+      const font = `${bold ? "bold " : ""}${fs}px ${n.fontFamily || "sans-serif"}`;
+      const meas = document.createElement("canvas").getContext("2d");
+      meas.font = font;
+      const lines = String(n.text || "").split("\n");
+      const sw = n.strokeWidth || 0;
+      const pad = Math.ceil(fs * 0.5) + sw * 2 + (n.shadowBlur || 0);
+      const lineH = Math.ceil(fs * 1.25);
+      const textW = Math.max(1, ...lines.map((l) => Math.ceil(meas.measureText(l).width)));
+      const c = document.createElement("canvas");
+      c.width = textW + pad * 2;
+      c.height = lineH * lines.length + pad * 2;
+      const ctx = c.getContext("2d");
+      ctx.font = font;
+      ctx.textBaseline = "top";
+      ctx.textAlign = "left";
+      lines.forEach((line, i) => {
+        const y = pad + i * lineH;
+        if (n.shadowColor && n.shadowBlur) {
+          ctx.save();
+          ctx.shadowColor = n.shadowColor;
+          ctx.shadowBlur = n.shadowBlur;
+          ctx.fillStyle = n.fill || "#000";
+          ctx.fillText(line, pad, y);
+          ctx.restore();
+        }
+        if (n.stroke && sw) {
+          ctx.lineJoin = "round";
+          ctx.strokeStyle = n.stroke;
+          ctx.lineWidth = sw;
+          ctx.strokeText(line, pad, y);
+        }
+        ctx.fillStyle = n.fill || "#000";
+        ctx.fillText(line, pad, y);
+      });
+      return { canvas: c, pad };
+    };
+    const exportPSD = async () => {
+      let imgs = images.filter((i) => setSel.has(i.id));
+      if (imgs.length === 0 && selectedId?.startsWith("img")) imgs = images.filter((i) => i.id === selectedId);
+      if (imgs.length === 0) imgs = images;
+      if (imgs.length === 0) { toast.error("画布上没有图片可导出"); return; }
+      const minX = Math.min(...imgs.map((n) => n.x));
+      const minY = Math.min(...imgs.map((n) => n.y));
+      const maxX = Math.max(...imgs.map((n) => n.x + (n.width || 200)));
+      const maxY = Math.max(...imgs.map((n) => n.y + (n.height || 200)));
+      const txts = texts.filter((t) => {
+        const cx = t.x + (t.width || 100) / 2;
+        const cy = t.y + (t.fontSize || 24) / 2;
+        return cx >= minX && cx <= maxX && cy >= minY && cy <= maxY;
+      });
+      const W = Math.round(maxX - minX);
+      const H = Math.round(maxY - minY);
+      if (W <= 0 || H <= 0) { toast.error("导出区域无效"); return; }
+      setExportingPsd(true);
+      try {
+        const { writePsd } = await import("ag-psd");
+        const nodes = [
+          ...imgs.map((n) => ({ ...n, _kind: "img" })),
+          ...txts.map((n) => ({ ...n, _kind: "txt" })),
+        ].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)); // 图层从下到上
+        const children = [];
+        for (const n of nodes) {
+          const left = Math.round(n.x - minX);
+          const top = Math.round(n.y - minY);
+          if (n._kind === "img") {
+            const img = await _loadImg(n.src);
+            const w = Math.round(n.width || img.naturalWidth);
+            const h = Math.round(n.height || img.naturalHeight);
+            const cv = document.createElement("canvas");
+            cv.width = w; cv.height = h;
+            cv.getContext("2d").drawImage(img, 0, 0, w, h);
+            children.push({ name: n.assetLabel ? `图片 · ${n.assetLabel}` : "背景图片", left, top, canvas: cv });
+          } else {
+            const { canvas: tcv, pad } = _renderText(n);
+            const tx = left - pad, ty = top - pad;
+            children.push({
+              name: `文字 · ${String(n.text || "").replace(/\n/g, " ").slice(0, 14)}`,
+              left: tx, top: ty, canvas: tcv,
+              text: {
+                text: String(n.text || ""),
+                transform: [1, 0, 0, 1, left, top],
+                style: {
+                  font: { name: (n.fontFamily || "sans-serif").split(",")[0].replace(/['"]/g, "").trim() },
+                  fontSize: Math.round(n.fontSize || 24),
+                  fillColor: _hexToRgb(n.fill),
+                },
+                paragraphStyle: { justification: n.align === "center" ? "center" : n.align === "right" ? "right" : "left" },
+              },
+            });
+          }
+        }
+        const buffer = writePsd({ width: W, height: H, children }, { generateThumbnail: true });
+        const blob = new Blob([buffer], { type: "image/vnd.adobe.photoshop" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `picsmith_分层_${W}x${H}.psd`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        toast.success(`已导出分层 PSD（${children.length} 层：${imgs.length} 图 + ${txts.length} 文字）`);
+      } catch (e) {
+        console.error(e);
+        toast.error("PSD 导出失败：" + (e.message || "").slice(0, 60));
+      } finally {
+        setExportingPsd(false);
+      }
+    };
+
     // 方向键微移：选中（单个或多选）的节点整体平移。Shift = 10px，否则 1px。
     const nudgeSelected = (dx, dy) => {
       if (setSel.size > 0) {
@@ -2689,6 +2816,12 @@ const CanvasArea = forwardRef(
               className="px-3 py-1.5 rounded-full text-[11px] font-bold text-primary-text hover:bg-bg-page disabled:opacity-40"
               title="把选中的图按上下顺序拼成一张详情页长图导出"
             >{stitching ? "拼接中…" : "🧩 拼长图"}</button>
+            <button
+              onClick={exportPSD}
+              disabled={exportingPsd}
+              className="px-3 py-1.5 rounded-full text-[11px] font-bold text-primary-text hover:bg-bg-page disabled:opacity-40"
+              title="导出分层 PSD：每张图一层、每段文字一层（PS/Photopea 可继续编辑）"
+            >{exportingPsd ? "导出中…" : "🗂 导出 PSD"}</button>
             <button
               onClick={deleteMultiSelected}
               className="px-3 py-1.5 rounded-full text-[11px] font-bold text-red-400 hover:bg-red-500/15"

@@ -12,5 +12,8 @@
     "build:app": "npm run build -w client",
     "build:lib": "npm run build -w packages/design-agent",
     "install:all": "npm install"
+  },
+  "dependencies": {
+    "ag-psd": "^30.1.1"
   }
 }
