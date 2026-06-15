@@ -7,7 +7,7 @@ import axios from "axios";
 import toast from "react-hot-toast";
 import { PicsmithMark } from "@/components/Logo";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const API = process.env.NEXT_PUBLIC_API_BASE || "";
 
 function ResetFlow() {
   const router = useRouter();

@@ -10,7 +10,7 @@ import { useApi } from "@/context/ApiContext";
 import { useLang } from "@/context/LanguageContext";
 import { COPY, SUPPORT_EMAIL } from "@/lib/copy";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const API = process.env.NEXT_PUBLIC_API_BASE || "";
 
 const inputCls = "w-full px-4 py-2.5 bg-white/[0.02] border border-white/10 rounded-sm text-white placeholder-gray-600 focus:outline-none focus:border-white/30 transition-all font-mono text-sm";
 const btnCls = "px-5 py-2.5 bg-white text-black rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all disabled:opacity-50";

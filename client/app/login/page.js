@@ -11,7 +11,7 @@ import { useApi } from "@/context/ApiContext";
 import { useLang } from "@/context/LanguageContext";
 import { COPY } from "@/lib/copy";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const API = process.env.NEXT_PUBLIC_API_BASE || "";
 
 function LoginForm() {
   const router = useRouter();

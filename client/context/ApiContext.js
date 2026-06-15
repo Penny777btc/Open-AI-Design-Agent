@@ -4,7 +4,7 @@ import axios from "axios";
 
 const ApiContext = createContext();
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const BASE_URL = process.env.NEXT_PUBLIC_API_BASE || "";
 
 // 全局鉴权：所有 axios 请求自动带 token；401 统一踢回登录页
 let interceptorsInstalled = false;

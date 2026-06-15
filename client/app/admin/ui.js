@@ -5,7 +5,7 @@ import { createContext, useCallback, useContext, useRef, useState } from "react"
 import axios from "axios";
 import toast from "react-hot-toast";
 
-export const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+export const API = process.env.NEXT_PUBLIC_API_BASE || "";
 export const ADMIN = `${API}/api/v1/admin`;
 
 // 共享 axios 实例（ApiContext 已全局安装拦截器：自动注入 token + 401 跳登录）。

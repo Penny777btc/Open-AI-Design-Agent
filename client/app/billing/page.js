@@ -10,7 +10,7 @@ import { useLang } from "@/context/LanguageContext";
 import { COPY } from "@/lib/copy";
 import SiteFooter from "@/components/SiteFooter";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const API = process.env.NEXT_PUBLIC_API_BASE || "";
 
 export default function BillingPage() {
   const { userData, fetchUserData } = useApi();

@@ -13,7 +13,10 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite+aiosqlite:///{BASE_DIR / 'dev.db'}"
     storage_dir: Path = BASE_DIR / "storage"
     public_base_url: str = "http://127.0.0.1:8000"
-    cors_origins: list[str] = ["http://localhost:3100", "http://localhost:3000"]
+    cors_origins: list[str] = [
+        "http://localhost:3100", "http://localhost:3000",
+        "http://127.0.0.1:3100", "http://127.0.0.1:3000",
+    ]
 
     # mock: 占位图 + 规则规划器（无外部依赖）；sub2api: 走自有中转站
     provider_mode: str = "mock"
