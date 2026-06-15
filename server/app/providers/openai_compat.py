@@ -208,15 +208,19 @@ class GptImageProvider:
         return self._to_generated(resp.json())
 
     async def edit(
-        self, prompt: str, image: bytes, aspect_ratio: str = "1:1", mask: bytes | None = None
+        self, prompt: str, image: bytes, aspect_ratio: str = "1:1", mask: bytes | None = None,
+        transparent: bool = False,
     ) -> GeneratedImage:
         """图生图/改图：/v1/images/edits（multipart）。
-        mask: RGBA PNG，透明区域 = 重绘范围（局部编辑，实测站点透传可用）。"""
+        mask: RGBA PNG，透明区域 = 重绘范围（局部编辑，实测站点透传可用）。
+        transparent: 请求透明背景（gpt-image 的 background=transparent）→ 抠主体出 PNG 带 alpha。"""
         headers = {"Authorization": f"Bearer {self.api_key}"}
         files = {"image": ("source.png", image, "image/png")}
         if mask:
             files["mask"] = ("mask.png", mask, "image/png")
         form = {"model": self.model, "prompt": prompt}
+        if transparent:
+            form["background"] = "transparent"
         client = _img_client()  # 复用连接池
         resp = await _post_retry(
             client, f"{self.base_url}/v1/images/edits", data=form, files=files, headers=headers

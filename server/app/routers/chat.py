@@ -101,6 +101,20 @@ async def set_template(session_id: str, request: Request, db: AsyncSession = Dep
     })
 
 
+@router.post("/sessions/{session_id}/split-image", dependencies=[Depends(rate_limit("chat", 20, 60))])
+async def split_image(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    """AI 拆图：选中一张 AI 图，拆成『背景层 + 主体层(透明)』，叠回原位 → 可分层导出。"""
+    body = await request.json()
+    source = body.get("source_asset")
+    if not source:
+        raise HTTPException(status_code=422, detail="请先选择要拆分的图片")
+    return await _enqueue(db, user, session_id, "split_image", {
+        "message": f"✂️ AI 拆图：{source} → 背景层 + 主体层",
+        "source_asset": source,
+        "client_request_id": body.get("client_request_id"),
+    })
+
+
 @router.post("/sessions/{session_id}/region-edit", dependencies=[Depends(rate_limit("chat", 20, 60))])
 async def region_edit(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     """画布局部编辑：用户已显式圈选区域并确认消耗，跳过计划审批直接执行。"""

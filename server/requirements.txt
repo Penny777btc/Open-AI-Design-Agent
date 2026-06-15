@@ -12,3 +12,4 @@ pyjwt
 email-validator
 pypdf
 python-docx
+rembg  # AI 拆图主体层：本地背景去除(透明)

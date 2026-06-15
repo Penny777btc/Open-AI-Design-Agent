@@ -896,6 +896,8 @@ const CanvasArea = forwardRef(
       onRegionEdit = null,
       // 套图：选中一批产品图 + 模板后回调 { assetLabels, template, templateLabel } → 后端批量 AI 生成
       onSetTemplate = null,
+      // AI 拆图：选中一张 AI 图回调 { assetLabel } → 后端拆成 背景层 + 主体层(透明)
+      onSplitImage = null,
     },
     ref,
   ) => {
@@ -2840,6 +2842,17 @@ const CanvasArea = forwardRef(
               className="px-3 py-1.5 rounded-full text-[11px] font-bold text-primary-text hover:bg-bg-page disabled:opacity-40"
               title="导出分层 PSD：每张图一层、每段文字一层（PS/Photopea 可继续编辑）"
             >{exportingPsd ? "导出中…" : "🗂 导出 PSD"}</button>
+            {onSplitImage && (() => {
+              const srcImg = images.find((i) => (selectedId?.startsWith("img") ? i.id === selectedId : setSel.has(i.id)) && i.assetLabel);
+              return (
+                <button
+                  onClick={() => srcImg && onSplitImage({ assetLabel: srcImg.assetLabel })}
+                  disabled={!srcImg}
+                  className="px-3 py-1.5 rounded-full text-[11px] font-bold text-primary-text hover:bg-bg-page disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="AI 拆图：把这张 AI 图拆成 背景层 + 主体层(透明)，可分别移动/导出分层"
+                >✂️ AI 拆分</button>
+              );
+            })()}
             <button
               onClick={handleDelete}
               className="px-3 py-1.5 rounded-full text-[11px] font-bold text-red-400 hover:bg-red-500/15"

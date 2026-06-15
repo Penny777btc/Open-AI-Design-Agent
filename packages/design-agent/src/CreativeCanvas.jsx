@@ -587,6 +587,59 @@ export default function CreativeCanvas({
     }
   };
 
+  const handleSplitImage = async ({ assetLabel }) => {
+    if (busy || sendingRef.current) {
+      toast.error(t("another_task_running"));
+      return;
+    }
+    sendingRef.current = true;
+    setBusy(true);
+    const userMsg = {
+      role: "user",
+      content: `✂️ AI 拆图：${assetLabel} → 背景层 + 主体层`,
+      timestamp: new Date().toISOString(),
+    };
+    let aIdx = -1;
+    setMessages(prev => {
+      aIdx = prev.length + 1;
+      return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
+    });
+    try {
+      const activeSessionId = await ensureSession();
+      const { data } = await axios.post(
+        `${API}/sessions/${activeSessionId}/split-image`,
+        {
+          source_asset: assetLabel,
+          client_request_id:
+            (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+        },
+        { headers: getHeaders() }
+      );
+      sendingRef.current = false;
+      await resumePolling(data.job_id, aIdx);
+    } catch (err) {
+      sendingRef.current = false;
+      setBusy(false);
+      if (err.response?.status === 402) {
+        toast((tt) => (
+          <span className="flex items-center gap-3 text-[12px]">
+            {err.response?.data?.detail || t("insufficient_credits")}
+            <a href="/billing" className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider shrink-0" onClick={() => toast.dismiss(tt.id)}>
+              {t("top_up")}
+            </a>
+          </span>
+        ), { duration: 8000 });
+      } else {
+        toast.error(err.response?.data?.detail || "AI 拆图失败");
+      }
+      setMessages(prev => {
+        const arr = [...prev];
+        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: "❌ AI 拆图失败" };
+        return arr;
+      });
+    }
+  };
+
   const handleRegionEdit = async ({ assetLabel, prompt, maskDataUrl }) => {
     if (busy || sendingRef.current) {
       toast.error(t("another_task_running"));
@@ -1530,6 +1583,7 @@ export default function CreativeCanvas({
               onZoomChange={setZoomLevel}
               onRegionEdit={handleRegionEdit}
               onSetTemplate={handleSetTemplate}
+              onSplitImage={handleSplitImage}
             />
 
             {/* Floating Toolbar */}

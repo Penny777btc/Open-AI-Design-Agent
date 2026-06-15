@@ -160,6 +160,11 @@ async def _run_job(job_id: str) -> None:
             else:
                 content = await generate_set_content(tpl_key, items, doc_text, lang=lang)
                 plan = build_set_plan(tpl_key, labels, content_map=content, lang=lang, mode=job_input.get("set_mode", "ai"))
+        elif job.kind == "split_image":
+            # AI 拆图：把一张图拆成 背景层 + 主体层(透明)，叠回源图位置
+            from app.agents.split import build_split_plan
+
+            plan = build_split_plan(job_input.get("source_asset"))
         else:
             brief = job_input.get("message") or _skill_brief(job_input)
             async with SessionLocal() as db:
@@ -386,20 +391,30 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             mask = (settings.storage_dir / mask_key).read_bytes()
 
     image = None
-    last_exc = None
-    for _ in range(2):  # 节点级重试
-        try:
-            if node.tool == "edit_image":
-                image = await provider.edit(prompt, source, node.args.get("aspect_ratio", "1:1"), mask=mask)
-            else:
-                image = await provider.generate(prompt, node.args.get("aspect_ratio", "1:1"))
-            break
-        except ValueError:
-            raise  # 资产不存在没必要重试
-        except Exception as exc:
-            last_exc = exc
-    if image is None:
-        raise last_exc
+    if node.tool == "edit_image" and node.args.get("split_role") == "subject":
+        # AI 拆图·主体层：本地 rembg 抠图 → 保留产品原像素 + 透明 PNG（比 AI 重绘更忠实，也不耗中转额度）
+        from app.providers.base import GeneratedImage
+        from app.providers.openai_compat import _png_dims
+        from rembg import remove
+
+        out = await asyncio.get_running_loop().run_in_executor(None, remove, source)
+        dims = _png_dims(out) or (0, 0)
+        image = GeneratedImage(data=out, mime="image/png", width=dims[0], height=dims[1], model="rembg-u2net")
+    else:
+        last_exc = None
+        for _ in range(2):  # 节点级重试
+            try:
+                if node.tool == "edit_image":
+                    image = await provider.edit(prompt, source, node.args.get("aspect_ratio", "1:1"), mask=mask)
+                else:
+                    image = await provider.generate(prompt, node.args.get("aspect_ratio", "1:1"))
+                break
+            except ValueError:
+                raise  # 资产不存在没必要重试
+            except Exception as exc:
+                last_exc = exc
+        if image is None:
+            raise last_exc
 
     ext = image.mime.split("/")[-1]
     key = f"assets/{session_id}/{job_id}_{node.id}.{ext}"
@@ -425,9 +440,14 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                 )
             ).scalars().first()
             if source and source.canvas_x is not None:
-                src_w, _ = display_size(source.width, source.height)
-                canvas_x = source.canvas_x + src_w + 32
-                canvas_y = source.canvas_y
+                if node.id.startswith("split_"):
+                    # AI 拆图：背景层/主体层叠回源图「同一位置」（重叠 → 还原原图，但已分层）
+                    canvas_x = source.canvas_x
+                    canvas_y = source.canvas_y
+                else:
+                    src_w, _ = display_size(source.width, source.height)
+                    canvas_x = source.canvas_x + src_w + 32
+                    canvas_y = source.canvas_y
         if canvas_x is None:
             canvas_x, canvas_y = planner.next(image.width, image.height)
 
@@ -440,18 +460,21 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         # 计费：审批时已整单预扣（reserve），节点成功无需再记账；失败由 refund_node 退还
         await db.commit()
 
+    # 套图(set_*) 与 AI 拆图(split_*) 都用 arrange 落到指定坐标，不走「放在源图旁」逻辑
+    placed = node.id.startswith("set_") or node.id.startswith("split_")
     result = {"ok": True, "model": image.model}
-    # 套图结果不走「放在源图旁」的前端逻辑，改用 arrange 落到网格位（见下）
-    if node.tool == "edit_image" and not node.id.startswith("set_"):
+    if node.tool == "edit_image" and not placed:
         result["source_asset_id"] = node.args.get("source_asset")
     asset_payload = {
         "asset_label": label, "url": url, "kind": "image",
         "model": image.model, "prompt": prompt, "source_tool": node.tool,
     }
-    # 套图落位坐标（一组图整齐排布）。可编辑版还带模板 key + 文案 → 前端叠可编辑文字层
-    if node.args.get("set_member") or node.args.get("set_template"):
+    # 套图/拆图落位坐标。可编辑版套图还带模板 key + 文案 → 前端叠可编辑文字层
+    if node.args.get("set_member") or node.args.get("set_template") or placed:
         asset_payload["canvas_x"] = canvas_x
         asset_payload["canvas_y"] = canvas_y
+    if node.args.get("split_role"):
+        asset_payload["split_role"] = node.args["split_role"]
     if node.args.get("set_template"):
         asset_payload["set_template"] = node.args["set_template"]
         if node.args.get("slot_content"):
@@ -461,8 +484,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         "result": result,
         "asset": asset_payload,
     })
-    # 普通编辑结果由前端 placeNextToSource 摆放；生成结果与套图（set_*）用 arrange 落到网格位
-    if (node.tool != "edit_image" or node.id.startswith("set_")) and canvas_x is not None:
+    # 普通编辑结果由前端 placeNextToSource 摆放；生成结果与套图/拆图用 arrange 落到指定坐标
+    if (node.tool != "edit_image" or placed) and canvas_x is not None:
         await emit(job_id, "canvas_op", {
             "op": "arrange",
             "args": {"moves": [{"asset_id": label, "x": canvas_x, "y": canvas_y}]},
