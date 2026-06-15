@@ -59,11 +59,17 @@ body {
   to { background-position: 60px 60px; }
 }
 
-/* 滚动入场（IntersectionObserver 加 .reveal-visible） */
+/* 滚动入场（IntersectionObserver 加 .reveal-visible）。
+   默认「可见」——只有 JS 真正运行时 useReveal 才会加 .reveal-armed 进入隐藏态、
+   再滚动渐显。若 JS 未加载（被拦/报错），内容保持可见，杜绝整片黑屏。 */
 .reveal {
+  opacity: 1;
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+
+.reveal-armed {
   opacity: 0;
   transform: translateY(24px);
-  transition: opacity 0.7s ease, transform 0.7s ease;
 }
 
 .reveal-visible {

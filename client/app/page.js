@@ -104,6 +104,8 @@ function useReveal() {
   useEffect(() => {
     const els = Array.from(document.querySelectorAll(".reveal"));
     if (!els.length) return;
+    // JS 已运行 → 进入隐藏态准备渐显（JS 没运行时不会执行到这，内容保持默认可见）
+    els.forEach((el) => el.classList.add("reveal-armed"));
     const reveal = (el) => el.classList.add("reveal-visible");
 
     // 手动可视判断：兜底 IntersectionObserver（某些环境视口高度异常时 IO 不触发，
