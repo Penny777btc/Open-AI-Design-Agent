@@ -2802,19 +2802,19 @@ const CanvasArea = forwardRef(
           </div>
         )}
 
-        {/* 多选浮动操作条：框选/勾选出 N 张图后出现 */}
-        {!maskMode && !showSetPanel && setSel.size > 0 && (
+        {/* 浮动操作条：框选多张 或 单击选中一张图片 都出现（单张也能套图/导出/删除）*/}
+        {!maskMode && !showSetPanel && (setSel.size > 0 || selectedId?.startsWith("img")) && (
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-bg-card border border-divider rounded-full shadow-2xl px-3 py-2">
-            <span className="text-[11px] font-bold text-primary-text px-2">已选 {setSel.size} 张</span>
+            <span className="text-[11px] font-bold text-primary-text px-2">已选 {setSel.size > 0 ? setSel.size : 1} 张</span>
             <button
-              onClick={() => setShowSetPanel(true)}
+              onClick={() => { if (setSel.size === 0 && selectedId?.startsWith("img")) setSetSel(new Set([selectedId])); setShowSetPanel(true); }}
               className="px-3 py-1.5 bg-primary text-black rounded-full text-[11px] font-bold hover:opacity-90"
             >▦ 套图生成</button>
             <button
               onClick={exportLongImage}
-              disabled={stitching}
-              className="px-3 py-1.5 rounded-full text-[11px] font-bold text-primary-text hover:bg-bg-page disabled:opacity-40"
-              title="把选中的图按上下顺序拼成一张详情页长图导出"
+              disabled={stitching || setSel.size < 2}
+              className="px-3 py-1.5 rounded-full text-[11px] font-bold text-primary-text hover:bg-bg-page disabled:opacity-40 disabled:cursor-not-allowed"
+              title="把选中的图按上下顺序拼成一张详情页长图导出（需选 ≥2 张）"
             >{stitching ? "拼接中…" : "🧩 拼长图"}</button>
             <button
               onClick={exportPSD}
@@ -2823,11 +2823,11 @@ const CanvasArea = forwardRef(
               title="导出分层 PSD：每张图一层、每段文字一层（PS/Photopea 可继续编辑）"
             >{exportingPsd ? "导出中…" : "🗂 导出 PSD"}</button>
             <button
-              onClick={deleteMultiSelected}
+              onClick={handleDelete}
               className="px-3 py-1.5 rounded-full text-[11px] font-bold text-red-400 hover:bg-red-500/15"
             >删除</button>
             <button
-              onClick={() => setSetSel(new Set())}
+              onClick={() => { setSetSel(new Set()); setSelectedId(null); }}
               className="px-3 py-1.5 rounded-full text-[11px] text-secondary-text hover:text-primary-text"
             >清空</button>
           </div>
