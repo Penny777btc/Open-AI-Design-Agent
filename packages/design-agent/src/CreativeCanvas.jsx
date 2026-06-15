@@ -325,6 +325,8 @@ export default function CreativeCanvas({
         c.moveNode(args.asset_id, args.x, args.y);
       } else if (op === "arrange" && typeof c.arrangeNodes === "function") {
         c.arrangeNodes(args.moves || []);
+      } else if (op === "add_texts" && typeof c.addTextLayers === "function") {
+        c.addTextLayers(args.ref, args.texts || []);
       }
       return;
     }

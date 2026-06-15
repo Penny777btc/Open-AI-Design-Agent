@@ -374,6 +374,21 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                          source_cache: dict | None = None) -> bool:
     if node.tool == "generate_video":
         return await _video_node(job_id, session_id, user_id, node, planner)
+
+    # AI 拆图·文字层：对源图做 OCR，识别叠加文字 → 发相对坐标给前端重建为可编辑文字节点（不产图层资产）
+    if node.tool == "extract_text":
+        from app.agents.split import detect_text_blocks
+
+        src_label = node.args.get("source_asset", "")
+        src = source_cache.get(src_label) if source_cache else None
+        if src is None:
+            src = await _load_asset_bytes(session_id, src_label)
+        blocks = await detect_text_blocks(src)
+        if blocks:
+            await emit(job_id, "canvas_op", {"op": "add_texts", "args": {"ref": src_label, "texts": blocks}})
+        await emit(job_id, "tool_result", {"name": node.tool, "result": {"ok": True, "text_blocks": len(blocks)}, "asset": None})
+        return True
+
     provider = get_image_provider()
     prompt = node.args.get("prompt") or node.label
 

@@ -1815,6 +1815,29 @@ const CanvasArea = forwardRef(
       setShowTextMenu(false);
     };
 
+    // AI 拆图·文字层：后端 OCR 出的文字块(相对坐标) → 在参考图上重建为可编辑文字节点。
+    const addTextLayers = (ref, blocks) => {
+      const base = images.find((i) => i.assetLabel === ref) || images[images.length - 1];
+      if (!base || !blocks?.length) return;
+      const bx = base.x, by = base.y, bw = base.width || 200, bh = base.height || 200;
+      const stamp = Date.now();
+      const nodes = blocks.map((b, i) => ({
+        id: `txt-${stamp}-${i}`,
+        text: b.text || "",
+        x: bx + (b.relX || 0) * bw,
+        y: by + (b.relY || 0) * bh,
+        width: Math.max(20, (b.relW || 0.3) * bw),
+        fontSize: Math.max(8, Math.round((b.relH || 0.04) * bh * 0.82)),
+        fill: b.color || "#222222",
+        align: b.align || "left",
+        fontFamily: "Noto Sans SC, Inter, sans-serif",
+        draggable: true,
+        rotation: 0,
+      }));
+      setTexts((prev) => [...prev, ...nodes]);
+      toast.success(`已拆出 ${nodes.length} 个可编辑文字层`);
+    };
+
     // 样式面板：改当前选中文字的属性
     const updateSelectedText = (attrs) => {
       if (!selectedId?.startsWith("txt")) return;
@@ -1941,6 +1964,7 @@ const CanvasArea = forwardRef(
         // switched to non-destructive side-by-side placement.
         replaceAt: placeNextToSource,
         arrangeNodes,
+        addTextLayers,
         fitToContent,
         zoomIn: () => updateZoom(Math.min(5, zoom + 0.1)),
         zoomOut: () => updateZoom(Math.max(0.1, zoom - 0.1)),

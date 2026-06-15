@@ -41,10 +41,11 @@ SPLIT_ROLES = [
         "key": "bg", "label": "背景层",
         "transparent": False,
         "prompt": (
-            "Remove the MAIN SUBJECT / product from this image COMPLETELY, and realistically inpaint and "
-            "extend the background so the scene looks natural and complete as if the product was never there. "
-            "Keep the exact same background style, colors, lighting, perspective and composition. Output ONLY "
-            "the clean background scene — no product, no floating shadow of the product."
+            "Remove the MAIN SUBJECT / product from this image COMPLETELY, AND remove ALL overlaid marketing "
+            "text / titles / captions / icon-text rows. Realistically inpaint and extend the background so the "
+            "scene looks natural and complete as if the product and text were never there. Keep the exact same "
+            "background style, colors, lighting, perspective and composition. Output ONLY the clean background "
+            "scene — no product, no text, no floating shadow."
         ),
     },
     {
@@ -60,25 +61,89 @@ SPLIT_ROLES = [
 
 
 def build_split_plan(source_label: str) -> Plan:
-    """从一张源图构造「背景层 + 主体层」的拆分计划（两个 edit_image 节点）。"""
+    """构造「背景层 + 主体层 + 文字层」的拆分计划。
+
+    split_1 背景层(edit_image, 去主体+去文字)、split_2 主体层(rembg 抠图)、
+    split_3 文字层(OCR 识别叠加文字 → 前端重建为可编辑文字节点)。
+    """
     if not source_label:
         raise ValueError("未选择要拆分的图片")
-    nodes = []
-    for i, role in enumerate(SPLIT_ROLES):
-        # 主体层依赖背景层先完成 → 背景先落画布(在下)、主体后落(在上)，叠放顺序正确
-        depends = ["split_1"] if role["key"] == "subject" else []
-        nodes.append(PlanNode(
-            id=f"split_{i + 1}", tool="edit_image",
-            label=f"AI 拆分 · {role['label']}",
-            args={
-                "prompt": role["prompt"],
-                "source_asset": source_label,
-                "split_role": role["key"],
-                "transparent": role["transparent"],
-            },
-            depends=depends,
-        ))
+    nodes = [
+        PlanNode(
+            id="split_1", tool="edit_image", label="AI 拆分 · 背景层",
+            args={"prompt": SPLIT_ROLES[0]["prompt"], "source_asset": source_label, "split_role": "bg"},
+            depends=[],
+        ),
+        PlanNode(
+            id="split_2", tool="edit_image", label="AI 拆分 · 主体层",
+            args={"prompt": SPLIT_ROLES[1]["prompt"], "source_asset": source_label, "split_role": "subject"},
+            depends=["split_1"],  # 背景先落(在下)、主体后落(在上)
+        ),
+        PlanNode(
+            id="split_3", tool="extract_text", label="AI 拆分 · 文字层",
+            args={"source_asset": source_label, "split_role": "text"},
+            depends=["split_2"],  # 文字最后落 → 叠在最上层
+        ),
+    ]
     return Plan(
-        mode="plan", title="AI 拆分（背景层 + 主体层）", nodes=nodes,
-        notes=["把选中的 AI 图拆成『背景层』+『主体层(透明)』，叠回原位 → 可分别移动、可导出分层 PSD"],
+        mode="plan", title="AI 拆分（背景层 + 主体层 + 文字层）", nodes=nodes,
+        notes=["把选中的 AI 图拆成『背景层』+『主体层(透明)』+『可编辑文字层』，叠回原位 → 可分别编辑、可导出分层 PSD"],
     )
+
+
+async def detect_text_blocks(image: bytes, lang: str = "zh") -> list[dict]:
+    """OCR：识别图中「叠加的营销文字」（不含印在产品标签上的字），返回相对坐标的文字块。
+
+    返回 [{text, relX, relY, relW, relH, color, align}]，坐标/尺寸均为相对图片的 0~1 比例。
+    """
+    import base64
+    import io
+    import json
+    import re
+
+    import httpx
+    from PIL import Image
+
+    from app.config import settings
+
+    if not settings.gemini_api_key:
+        return []
+    try:
+        im = Image.open(io.BytesIO(image)).convert("RGB")
+        im.thumbnail((1024, 1024))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=85)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        prompt = (
+            "识别这张电商设计图里**叠加在画面上的营销文字**（标题/卖点/说明/图标旁文字），"
+            "**不要**识别印在产品本身标签/包装上的文字。每块文字返回：text(原文)、"
+            "box([ymin,xmin,ymax,xmax] 归一化到 0-1000)、color(文字颜色十六进制)、align(left/center/right)。"
+            '只输出 JSON：{"blocks":[{"text":"..","box":[..],"color":"#..","align":".."}]}'
+        )
+        parts = [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": b64}}]
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post(
+                f"{settings.sub2api_base_url.rstrip('/')}/v1beta/models/gemini-2.5-flash:generateContent",
+                headers={"x-goog-api-key": settings.gemini_api_key},
+                json={"contents": [{"role": "user", "parts": parts}]},
+            )
+            resp.raise_for_status()
+            text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        blocks = json.loads(m.group(0)).get("blocks", []) if m else []
+        out = []
+        for b in blocks:
+            box = b.get("box") or []
+            t = str(b.get("text", "")).strip()
+            if not t or len(box) != 4:
+                continue
+            ymin, xmin, ymax, xmax = [max(0, min(1000, float(v))) / 1000 for v in box]
+            if xmax <= xmin or ymax <= ymin:
+                continue
+            out.append({
+                "text": t, "relX": xmin, "relY": ymin, "relW": xmax - xmin, "relH": ymax - ymin,
+                "color": str(b.get("color", "#222222"))[:9], "align": b.get("align", "left"),
+            })
+        return out
+    except Exception:
+        return []
