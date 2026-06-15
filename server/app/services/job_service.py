@@ -157,6 +157,12 @@ async def _run_job(job_id: str) -> None:
 
                 detail_content = await generate_detail_content(items[0], doc_text, lang=lang) if items else {}
                 plan = build_detail_set_plan(labels[0], content_map=detail_content, lang=lang)
+            elif job_input.get("set_mode") == "layered":
+                # 分层版：背景层(生成) + 产品层(抠图) + 可编辑文字层
+                from app.agents.set_templates import build_layered_plan
+
+                content = await generate_set_content(tpl_key, items, doc_text, lang=lang)
+                plan = build_layered_plan(tpl_key, labels[0], content_map=content, lang=lang)
             else:
                 content = await generate_set_content(tpl_key, items, doc_text, lang=lang)
                 plan = build_set_plan(tpl_key, labels, content_map=content, lang=lang, mode=job_input.get("set_mode", "ai"))
@@ -259,6 +265,7 @@ async def _execute_plan(
     semaphore = asyncio.Semaphore(settings.executor_concurrency)
     done_nodes: set[str] = set()
     results: dict[str, bool] = {}
+    node_outputs: dict[str, dict] = {}  # 节点产出落位（供 overlay_on 跨节点叠放，如分层版产品叠到背景上）
     planner = PlacementPlanner(canvas_nodes, viewport)
 
     # 预载编辑源图：套图/主图六联/详情页里 6-7 个角色节点共用同一张产品图，
@@ -298,7 +305,7 @@ async def _execute_plan(
                 est = 3
             await emit(job_id, "tool_call", {"name": node.tool, "args": node.args, "est_seconds": est})
             try:
-                results[node.id] = await _generate_node(job_id, session_id, user_id, node, planner, source_cache)
+                results[node.id] = await _generate_node(job_id, session_id, user_id, node, planner, source_cache, node_outputs)
             except Exception as exc:
                 logger.exception("node %s failed", node.id)
                 await emit(job_id, "error", {"message": f"{node.label}: 生成失败（{str(exc)[:160]}），该节点积分已退还"})
@@ -371,7 +378,7 @@ async def _video_node(job_id: str, session_id: str, user_id: str, node, planner:
 
 
 async def _generate_node(job_id: str, session_id: str, user_id: str, node, planner: PlacementPlanner,
-                         source_cache: dict | None = None) -> bool:
+                         source_cache: dict | None = None, node_outputs: dict | None = None) -> bool:
     if node.tool == "generate_video":
         return await _video_node(job_id, session_id, user_id, node, planner)
 
@@ -445,7 +452,15 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         # 摆放：普通编辑结果放源图右侧；套图（set_*）是一组成套结果，走行排布成整齐网格
         # 而不是散落在各自源图旁边（否则交错在原图中间显得很乱）。
         canvas_x = canvas_y = None
-        if node.tool == "edit_image" and not node.id.startswith("set_"):
+        # 分层版：产品层「居中叠」到背景层上（overlay_on 指向先完成的背景节点）
+        if node.args.get("overlay_on") and node_outputs:
+            ref = node_outputs.get(node.args["overlay_on"])
+            if ref:
+                bg_dw, bg_dh = display_size(ref["width"], ref["height"])
+                pr_dw, pr_dh = display_size(image.width, image.height)
+                canvas_x = ref["canvas_x"] + (bg_dw - pr_dw) / 2
+                canvas_y = ref["canvas_y"] + (bg_dh - pr_dh) / 2
+        if canvas_x is None and node.tool == "edit_image" and not node.id.startswith("set_"):
             source = (
                 await db.execute(
                     select(Asset).where(
@@ -465,6 +480,9 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                     canvas_y = source.canvas_y
         if canvas_x is None:
             canvas_x, canvas_y = planner.next(image.width, image.height)
+        if node_outputs is not None:
+            node_outputs[node.id] = {"canvas_x": canvas_x, "canvas_y": canvas_y,
+                                     "width": image.width, "height": image.height, "label": label}
 
         db.add(Asset(
             session_id=session_id, user_id=user_id, asset_label=label, url=url, storage_key=key,
@@ -475,8 +493,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         # 计费：审批时已整单预扣（reserve），节点成功无需再记账；失败由 refund_node 退还
         await db.commit()
 
-    # 套图(set_*) 与 AI 拆图(split_*) 都用 arrange 落到指定坐标，不走「放在源图旁」逻辑
-    placed = node.id.startswith("set_") or node.id.startswith("split_")
+    # 套图(set_*)、AI 拆图(split_*)、分层版(lay_*) 都用 arrange 落到指定坐标，不走「放在源图旁」逻辑
+    placed = node.id.startswith("set_") or node.id.startswith("split_") or node.id.startswith("lay_")
     result = {"ok": True, "model": image.model}
     if node.tool == "edit_image" and not placed:
         result["source_asset_id"] = node.args.get("source_asset")

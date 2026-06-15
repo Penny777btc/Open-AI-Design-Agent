@@ -96,7 +96,7 @@ async def set_template(session_id: str, request: Request, db: AsyncSession = Dep
         "message": message,
         "template": template,
         "asset_labels": labels,
-        "set_mode": "editable" if body.get("mode") == "editable" else "ai",
+        "set_mode": body.get("mode") if body.get("mode") in ("editable", "layered") else "ai",
         "client_request_id": body.get("client_request_id"),
     })
 

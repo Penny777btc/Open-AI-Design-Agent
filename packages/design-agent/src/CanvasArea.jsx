@@ -2918,6 +2918,7 @@ const CanvasArea = forwardRef(
               <div className="px-5 pt-3 flex items-center gap-2">
                 {[
                   { k: "ai", label: "AI 融合版", hint: "设计最融合 · 文字不可编辑" },
+                  { k: "layered", label: "分层版", hint: "背景/产品/文字 三层原生分开 · 最干净可编辑" },
                   { k: "editable", label: "可编辑版", hint: "干净底图+可编辑文字层 · 可改可换字体" },
                 ].map((m) => (
                   <button

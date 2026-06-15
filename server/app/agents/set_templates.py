@@ -171,6 +171,63 @@ def build_set_plan(template_key: str, asset_labels: list[str], content_map: dict
 
 
 # ============================================================================
+# 分层生成：从生成时就分图层（背景层 AI 生成 + 产品层原图抠图 + 文字层可编辑），
+# 而不是先烤成一张再事后抠。图层天生干净、文字精确可编辑、产品清晰。
+# ============================================================================
+
+# 背景层提示：只出有设计感的纯背景场景，无产品、无文字，中心留出产品摆放区。
+_LAYERED_BG = {
+    "ecom": (
+        "Create ONLY a premium e-commerce BACKGROUND scene — NO product, NO text. A clean light-gray studio "
+        "gradient with a soft arch, refined and minimal. Leave the CENTER clear with a subtle round podium and a "
+        "soft contact-shadow area where a bottle will be placed later. Top ~25% and lower-left kept clean and empty "
+        "for text. Square 1:1, soft professional studio lighting."
+    ),
+    "rednote": (
+        "Create ONLY a bright Xiaohongshu lifestyle BACKGROUND — NO product, NO text. Clean airy scene, leave the "
+        "lower-center clear for a product placed later, upper area kept empty for a title. Vertical 3:4, soft "
+        "natural lighting."
+    ),
+    "minimal": (
+        "Create ONLY a minimal editorial BACKGROUND — NO product, NO text. Pure off-white seamless backdrop with "
+        "generous negative space, a subtle surface/shadow in the center for a product placed later. Square 1:1, "
+        "even soft lighting."
+    ),
+}
+
+
+def build_layered_plan(template_key: str, source_label: str, content_map: dict | None = None,
+                       lang: str = "zh") -> Plan:
+    """从单个产品图构造「分层版」设计：背景层(生成) + 产品层(抠图) + 可编辑文字层(叠层)。"""
+    tpl = SET_TEMPLATES.get(template_key)
+    if tpl is None or not source_label:
+        raise ValueError("未知模板或未选择产品图")
+    content = (content_map or {}).get(source_label) if content_map else None
+    nodes = [
+        # 背景层：AI 生成纯场景；带 set_template + 文案 → 前端叠可编辑文字层（复用可编辑套图机制）
+        PlanNode(
+            id="lay_1", tool="generate_image", label="分层 · 背景层",
+            args={
+                "prompt": _LAYERED_BG.get(template_key, _LAYERED_BG["ecom"]),
+                "aspect_ratio": tpl["aspect_ratio"],
+                "set_template": template_key, "slot_content": content,
+            },
+            depends=[],
+        ),
+        # 产品层：对原始产品图抠图（清晰），叠在背景层上（同位置同尺寸）
+        PlanNode(
+            id="lay_2", tool="edit_image", label="分层 · 产品层",
+            args={"source_asset": source_label, "split_role": "subject", "overlay_on": "lay_1"},
+            depends=["lay_1"],
+        ),
+    ]
+    return Plan(
+        mode="plan", title=f"分层版 · {tpl['label']}（背景层 + 产品层 + 文字层）", nodes=nodes,
+        notes=["从生成就分层：AI 背景层 + 原图抠图产品层 + 可编辑文字层，三层干净可编辑、可导出分层 PSD"],
+    )
+
+
+# ============================================================================
 # 电商主图六联：从「单个产品」生成 6 张角色分工的电商主图（对标真实交付物）
 # 与套图不同——套图是「N 张同款式」，主图六联是「1 个产品 × 6 个固定职责」。
 # 风格：明亮通透、柔和拱门背景、金色点缀、粗体/衬线中文标题、图标卖点项、1:1。
