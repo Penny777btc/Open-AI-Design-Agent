@@ -1129,7 +1129,15 @@ const CanvasArea = forwardRef(
             });
           }
         }
-        const buffer = writePsd({ width: W, height: H, children }, { generateThumbnail: true });
+        // 合并预览图（composite）：预览/部分软件只显示这张拼合图，缺了就整片黑。
+        // 按图层顺序把每层画布叠到一张总画布，作为 PSD 顶层合成图。
+        const flat = document.createElement("canvas");
+        flat.width = W; flat.height = H;
+        const fctx = flat.getContext("2d");
+        for (const ch of children) {
+          if (ch.canvas) fctx.drawImage(ch.canvas, ch.left || 0, ch.top || 0);
+        }
+        const buffer = writePsd({ width: W, height: H, children, canvas: flat }, { generateThumbnail: true });
         const blob = new Blob([buffer], { type: "image/vnd.adobe.photoshop" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
