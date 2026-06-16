@@ -163,7 +163,7 @@ function ScrollProgress() {
   return <div className="scroll-progress" style={{ width: `${w}%` }} />;
 }
 
-function CountUp({ to, duration = 1200 }) {
+function CountUp({ to, duration = 700 }) {
   const ref = useRef(null);
   const [val, setVal] = useState(0);
   useEffect(() => {
@@ -222,7 +222,7 @@ function PlanDemo() {
     return () => clearInterval(timer);
   }, [t.steps.length]);
   return (
-    <div className="bg-bg-card border border-white/10 rounded-sm p-6 shadow-[0_0_50px_rgba(0,0,0,0.5)] spotlight" onMouseMove={spotlightMove}>
+    <div className="bg-bg-card border border-white/10 rounded-sm p-6 shadow-pop spotlight" onMouseMove={spotlightMove}>
       <div className="flex items-center justify-between mb-5">
         <span className="micro-label">{t.header}</span>
         <span className="text-[10px] font-mono text-gray-500">{t.meta}</span>
@@ -231,13 +231,13 @@ function PlanDemo() {
         {t.steps.map((s, i) => {
           const state = i < step ? "done" : i === step ? "active" : "pending";
           return (
-            <div key={s.label} className={`flex items-center gap-3 px-3 py-2.5 rounded-sm border transition-all duration-500 ${
-              state === "active" ? "border-white/30 bg-white/[0.04]" : "border-white/[0.06]"
+            <div key={s.label} className={`flex items-center gap-3 px-3 py-2.5 rounded-sm border transition-all duration-300 ease-[var(--ease-standard)] ${
+              state === "active" ? "border-white/30 bg-white/[0.04]" : "border-white/[0.08]"
             }`}>
-              <span className={`w-1.5 h-1.5 rounded-full transition-colors duration-500 ${
+              <span className={`w-1.5 h-1.5 rounded-full transition-colors duration-500 ease-[var(--ease-standard)] ${
                 state === "done" ? "bg-white" : state === "active" ? "bg-white animate-pulse" : "bg-gray-700"
               }`} />
-              <span className={`text-[13px] font-semibold transition-colors duration-500 ${state === "pending" ? "text-gray-600" : "text-white"}`}>
+              <span className={`text-[13px] font-semibold transition-colors duration-500 ease-[var(--ease-standard)] ${state === "pending" ? "text-gray-600" : "text-white"}`}>
                 {state === "done" ? "✓ " : ""}{s.label}
               </span>
               <span className="text-[11px] text-gray-500 ml-auto">{s.detail}</span>
@@ -246,7 +246,7 @@ function PlanDemo() {
         })}
       </div>
       <div className="flex gap-2 mt-5">
-        <div className={`flex-1 py-2 rounded-sm text-[11px] font-bold text-center uppercase tracking-wider transition-all duration-500 ${
+        <div className={`flex-1 py-2 rounded-sm text-[11px] font-bold text-center uppercase tracking-wider transition-all duration-300 ease-[var(--ease-standard)] ${
           step >= 3 ? "bg-white text-black" : "border border-white/10 text-gray-500"
         }`}>
           {step >= t.steps.length ? t.executing : t.approve}
@@ -268,7 +268,7 @@ function BeforeAfter({ before, after, beforeLabel, afterLabel }) {
   return (
     <div
       ref={ref}
-      className="relative rounded-sm border border-white/10 overflow-hidden select-none cursor-ew-resize shadow-[0_20px_40px_-10px_rgba(0,0,0,0.7)]"
+      className="relative rounded-sm border border-white/10 overflow-hidden select-none cursor-ew-resize shadow-float"
       onPointerMove={(e) => e.buttons === 1 && onMove(e.clientX)}
       onPointerDown={(e) => onMove(e.clientX)}
     >
@@ -300,7 +300,7 @@ function CaseCard({ item, index }) {
   };
   return (
     <figure
-      className="group relative mb-4 break-inside-avoid rounded-md overflow-hidden border border-white/[0.07] hover:border-white/25 transition-all duration-500 word-swap"
+      className="group relative mb-4 break-inside-avoid rounded-md overflow-hidden border border-white/[0.08] hover:border-white/25 transition-all duration-300 ease-[var(--ease-standard)] word-swap"
       style={{ animationDelay: `${Math.min(index * 0.04, 0.4)}s` }}
     >
       <img src={`/showcase/${item.f}`} alt={label} loading="lazy"
@@ -380,7 +380,7 @@ export default function Landing() {
       <ScrollProgress />
 
       {/* Nav */}
-      <header className="fixed top-0 left-0 right-0 z-[100] flex items-center justify-between px-6 sm:px-10 py-4 bg-[#09090b]/90 backdrop-blur-xl border-b border-white/[0.06]">
+      <header className="fixed top-0 left-0 right-0 z-[100] flex items-center justify-between px-6 sm:px-10 py-4 bg-[#09090b]/90 backdrop-blur-xl border-b border-white/[0.08]">
         <span className="flex items-center gap-2.5">
           <PicsmithMark size={22} className="text-white" />
           <span className="font-display text-xl font-extrabold tracking-tighter brand-gradient-text">Picsmith</span>
@@ -424,7 +424,7 @@ export default function Landing() {
         <div className="marquee mt-14 hero-in hero-in-5">
           <div className="marquee-track">
             {[...MARQUEE_A, ...MARQUEE_A].map((f, i) => (
-              <div key={i} className="h-44 rounded-sm border border-white/10 overflow-hidden shadow-[0_20px_40px_-10px_rgba(0,0,0,0.7)] hover:border-white/30 transition-all shrink-0">
+              <div key={i} className="h-44 rounded-sm border border-white/10 overflow-hidden shadow-float hover:border-white/30 transition-all shrink-0">
                 <img src={`/showcase/${f}`} alt="Picsmith showcase" className="h-full w-auto object-cover" loading="lazy" />
               </div>
             ))}
@@ -433,7 +433,7 @@ export default function Landing() {
         <div className="marquee mt-4 hero-in hero-in-5">
           <div className="marquee-track marquee-track-reverse">
             {[...MARQUEE_B, ...MARQUEE_B].map((f, i) => (
-              <div key={i} className="h-44 rounded-sm border border-white/10 overflow-hidden shadow-[0_20px_40px_-10px_rgba(0,0,0,0.7)] hover:border-white/30 transition-all shrink-0">
+              <div key={i} className="h-44 rounded-sm border border-white/10 overflow-hidden shadow-float hover:border-white/30 transition-all shrink-0">
                 <img src={`/showcase/${f}`} alt="Picsmith showcase" className="h-full w-auto object-cover" loading="lazy" />
               </div>
             ))}
@@ -443,7 +443,7 @@ export default function Landing() {
       </section>
 
       {/* Agent 流程演示 */}
-      <section id="how" className="py-24 px-6 border-t border-white/[0.06]">
+      <section id="how" className="py-16 sm:py-20 lg:py-24 px-6 border-t border-white/[0.08]">
         <div className="max-w-5xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
           <div className="flex flex-col gap-5 reveal">
             <div className="micro-label">{t.how.kicker}</div>
@@ -460,7 +460,7 @@ export default function Landing() {
       </section>
 
       {/* 案例库：统一大墙 */}
-      <section id="cases" className="py-24 border-t border-white/[0.06]">
+      <section id="cases" className="py-16 sm:py-20 lg:py-24 border-t border-white/[0.08]">
         <div className="text-center flex flex-col gap-4 reveal px-6">
           <div className="micro-label">{t.cases.kicker}</div>
           <h2 className="font-display text-3xl sm:text-5xl font-extrabold tracking-tight">
@@ -479,7 +479,7 @@ export default function Landing() {
       </section>
 
       {/* 改图对比 */}
-      <section className="py-24 px-6 border-t border-white/[0.06]">
+      <section className="py-16 sm:py-20 lg:py-24 px-6 border-t border-white/[0.08]">
         <div className="max-w-5xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
           <div className="flex flex-col gap-5 reveal order-2 lg:order-1">
             <div className="micro-label">{t.edit.kicker}</div>
@@ -497,7 +497,7 @@ export default function Landing() {
       </section>
 
       {/* 功能矩阵 */}
-      <section className="py-24 px-6 border-t border-white/[0.06]">
+      <section className="py-16 sm:py-20 lg:py-24 px-6 border-t border-white/[0.08]">
         <div className="max-w-5xl mx-auto flex flex-col gap-12">
           <div className="text-center flex flex-col gap-4 reveal">
             <div className="micro-label">{t.features.kicker}</div>
@@ -506,7 +506,7 @@ export default function Landing() {
           <div className="grid sm:grid-cols-2 gap-6">
             {t.features.list.map((f, i) => (
               <div key={f.tag} onMouseMove={spotlightMove}
-                className={`spotlight reveal reveal-d${i % 2 ? 1 : 0} bg-bg-card border border-white/[0.08] rounded-sm p-7 hover:border-white/20 hover:-translate-y-1 transition-all duration-500 shadow-[0_0_50px_rgba(0,0,0,0.5)]`}>
+                className={`spotlight reveal reveal-d${i % 2 ? 1 : 0} bg-bg-card border border-white/[0.08] rounded-sm p-7 hover:border-white/20 hover:-translate-y-1 transition-all duration-300 ease-[var(--ease-standard)] shadow-pop`}>
                 <div className="micro-label mb-4">// {f.tag}</div>
                 <h3 className="text-lg font-bold text-white mb-2">{f.title}</h3>
                 <p className="text-[13px] text-secondary-text leading-relaxed">{f.desc}</p>
@@ -517,7 +517,7 @@ export default function Landing() {
       </section>
 
       {/* 定价（与计费页一致：免费 + 三档积分包） */}
-      <section id="pricing" className="py-24 px-6 border-t border-white/[0.06]">
+      <section id="pricing" className="py-16 sm:py-20 lg:py-24 px-6 border-t border-white/[0.08]">
         <div className="max-w-5xl mx-auto flex flex-col gap-12">
           <div className="text-center flex flex-col gap-4 reveal">
             <div className="micro-label">{t.pricing.kicker}</div>
@@ -545,7 +545,7 @@ export default function Landing() {
       </section>
 
       {/* FAQ */}
-      <section id="faq" className="py-24 px-6 border-t border-white/[0.06]">
+      <section id="faq" className="py-16 sm:py-20 lg:py-24 px-6 border-t border-white/[0.08]">
         <div className="max-w-3xl mx-auto flex flex-col gap-10">
           <div className="text-center flex flex-col gap-4 reveal">
             <div className="micro-label">{t.faq.kicker}</div>
@@ -556,7 +556,7 @@ export default function Landing() {
               <details key={q} className={`reveal reveal-d${i % 3} bg-bg-card border border-white/[0.08] rounded-sm px-6 py-4 group`}>
                 <summary className="text-[14px] font-semibold text-white cursor-pointer list-none flex justify-between items-center">
                   {q}
-                  <span className="text-gray-600 group-open:rotate-45 transition-transform">+</span>
+                  <span className="text-secondary-text group-open:rotate-45 transition-transform">+</span>
                 </summary>
                 <p className="text-[13px] text-secondary-text leading-relaxed mt-3">{a}</p>
               </details>
@@ -566,7 +566,7 @@ export default function Landing() {
       </section>
 
       {/* 底部 CTA */}
-      <section className="py-28 px-6 border-t border-white/[0.06] grid-bg-animated">
+      <section className="py-20 sm:py-24 lg:py-28 px-6 border-t border-white/[0.08] grid-bg-animated">
         <div className="max-w-3xl mx-auto text-center flex flex-col items-center gap-6 reveal">
           <PicsmithMark size={44} className="text-white" />
           <h2 className="font-display text-3xl sm:text-5xl font-extrabold tracking-tight">

@@ -20,6 +20,7 @@ import {
   Arc,
 } from "react-konva";
 import toast from "react-hot-toast";
+import { FiType, FiGrid, FiAlignJustify, FiLayers, FiScissors, FiTrash2 } from "react-icons/fi";
 import { t } from "./i18n";
 
 // 电商文字预设：AI 出背景，文字做成可编辑矢量图层叠加，导出精确不糊（扩散模型渲染文字必错）。
@@ -2811,21 +2812,21 @@ const CanvasArea = forwardRef(
           <div className="absolute top-4 left-4 z-20">
             <button
               onClick={() => setShowTextMenu((v) => !v)}
-              className="px-3 py-2 bg-bg-card border border-divider rounded text-[11px] font-bold text-primary-text shadow-lg hover:border-primary transition-all flex items-center gap-1.5"
+              className="px-3.5 py-2.5 bg-bg-card border border-divider rounded-lg text-[12px] font-medium text-primary-text shadow-float hover:border-primary/60 transition-colors flex items-center gap-2"
               title="在图上叠加文字（导出精确不糊）"
             >
-              <span className="font-bold">T</span> 添加文字
+              <FiType size={14} /> 添加文字
             </button>
             {showTextMenu && (
-              <div className="absolute top-full left-0 mt-1 w-32 bg-bg-card border border-divider rounded shadow-2xl overflow-hidden">
+              <div className="absolute top-full left-0 mt-1.5 w-36 bg-bg-card border border-divider rounded-xl shadow-pop overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150 ease-[var(--ease-out)]">
                 {Object.entries(TEXT_PRESETS).map(([key, p]) => (
                   <button
                     key={key}
                     onClick={() => addPresetText(key)}
-                    className="w-full text-left px-3 py-2 text-[12px] text-primary-text hover:bg-bg-page transition-colors flex items-center justify-between"
+                    className="w-full text-left px-3.5 py-2.5 text-[12px] text-primary-text hover:bg-bg-page transition-colors flex items-center justify-between"
                   >
                     <span>{p.label}</span>
-                    <span className="text-secondary-text text-[10px] truncate ml-2 max-w-[60px]">{p.text}</span>
+                    <span className="text-secondary-strong text-[10px] truncate ml-2 max-w-[60px]">{p.text}</span>
                   </button>
                 ))}
               </div>
@@ -2833,13 +2834,13 @@ const CanvasArea = forwardRef(
             {/* 套图：选多张图，套同一固定排版+固定字体的模板 */}
             <button
               onClick={() => { setShowSetPanel(true); setShowTextMenu(false); }}
-              className="mt-2 px-3 py-2 bg-bg-card border border-divider rounded text-[11px] font-bold text-primary-text shadow-lg hover:border-primary transition-all flex items-center gap-1.5 w-full"
+              className="mt-2 px-3.5 py-2.5 bg-bg-card border border-divider rounded-lg text-[12px] font-medium text-primary-text shadow-float hover:border-primary/60 transition-colors flex items-center gap-2 w-full"
               title="选多张图，套用统一的固定排版模板"
             >
-              <span className="font-bold">▦</span> 套图模板
+              <FiGrid size={14} /> 套图模板
             </button>
             {/* 操作提示（自然交互，无需按钮）：拖拽=框选，空格+拖拽=平移 */}
-            <div className="mt-2 px-2.5 py-1.5 rounded bg-bg-card/70 border border-divider/60 text-[10px] text-secondary-text leading-relaxed select-none">
+            <div className="mt-2 px-3 py-2 rounded-lg bg-bg-card/70 border border-divider/60 text-[11px] text-secondary-strong leading-relaxed select-none">
               <div><span className="text-primary-text font-semibold">拖拽</span> 框选 · <span className="text-primary-text font-semibold">Shift+拖</span> 加选 · <span className="text-primary-text font-semibold">空格+拖</span> 平移</div>
               <div><span className="text-primary-text font-semibold">滚轮</span> 平移 · <span className="text-primary-text font-semibold">⌘+滚轮</span> 缩放 · <span className="text-primary-text font-semibold">方向键</span> 微移</div>
             </div>
@@ -2848,50 +2849,51 @@ const CanvasArea = forwardRef(
 
         {/* 浮动操作条：框选多张 或 单击选中一张图片 都出现（单张也能套图/导出/删除）*/}
         {!maskMode && !showSetPanel && (setSel.size > 0 || selectedId?.startsWith("img")) && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-bg-card border border-divider rounded-full shadow-2xl px-3 py-2">
-            <span className="text-[11px] font-bold text-primary-text px-2">已选 {setSel.size > 0 ? setSel.size : 1} 张</span>
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-bg-card/95 backdrop-blur border border-divider rounded-2xl shadow-pop px-2.5 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200 ease-[var(--ease-out)]">
+            <span className="text-[12px] font-semibold text-primary-text px-2">已选 {setSel.size > 0 ? setSel.size : 1} 张</span>
             <button
               onClick={() => { if (setSel.size === 0 && selectedId?.startsWith("img")) setSetSel(new Set([selectedId])); setShowSetPanel(true); }}
-              className="px-3 py-1.5 bg-primary text-black rounded-full text-[11px] font-bold hover:opacity-90"
-            >▦ 套图生成</button>
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-primary text-black rounded-xl text-[12px] font-semibold hover:opacity-90 transition-opacity"
+            ><FiGrid size={13} /> 套图生成</button>
             <button
               onClick={exportLongImage}
               disabled={stitching || setSel.size < 2}
-              className="px-3 py-1.5 rounded-full text-[11px] font-bold text-primary-text hover:bg-bg-page disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-primary-text hover:bg-bg-page disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               title="把选中的图按上下顺序拼成一张详情页长图导出（需选 ≥2 张）"
-            >{stitching ? "拼接中…" : "🧩 拼长图"}</button>
+            ><FiAlignJustify size={13} /> {stitching ? "拼接中…" : "拼长图"}</button>
             <button
               onClick={exportPSD}
               disabled={exportingPsd}
-              className="px-3 py-1.5 rounded-full text-[11px] font-bold text-primary-text hover:bg-bg-page disabled:opacity-40"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-primary-text hover:bg-bg-page disabled:opacity-50 transition-colors"
               title="导出分层 PSD：每张图一层、每段文字一层（PS/Photopea 可继续编辑）"
-            >{exportingPsd ? "导出中…" : "🗂 导出 PSD"}</button>
+            ><FiLayers size={13} /> {exportingPsd ? "导出中…" : "导出 PSD"}</button>
             {onSplitImage && (() => {
               const srcImg = images.find((i) => (selectedId?.startsWith("img") ? i.id === selectedId : setSel.has(i.id)) && i.assetLabel);
               return (
                 <button
                   onClick={() => srcImg && onSplitImage({ assetLabel: srcImg.assetLabel })}
                   disabled={!srcImg}
-                  className="px-3 py-1.5 rounded-full text-[11px] font-bold text-primary-text hover:bg-bg-page disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-primary-text hover:bg-bg-page disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   title="AI 拆图：把这张 AI 图拆成 背景层 + 主体层(透明)，可分别移动/导出分层"
-                >✂️ AI 拆分</button>
+                ><FiScissors size={13} /> AI 拆分</button>
               );
             })()}
+            <div className="w-px h-5 bg-divider mx-0.5" />
             <button
               onClick={handleDelete}
-              className="px-3 py-1.5 rounded-full text-[11px] font-bold text-red-400 hover:bg-red-500/15"
-            >删除</button>
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-red-400 hover:bg-red-500/15 transition-colors"
+            ><FiTrash2 size={13} /> 删除</button>
             <button
               onClick={() => { setSetSel(new Set()); setSelectedId(null); }}
-              className="px-3 py-1.5 rounded-full text-[11px] text-secondary-text hover:text-primary-text"
+              className="px-3 py-2 rounded-xl text-[12px] text-secondary-text hover:text-primary-text hover:bg-bg-page transition-colors"
             >清空</button>
           </div>
         )}
 
         {/* 套图面板：勾选图片 + 选模板 + 应用 */}
         {showSetPanel && (
-          <div className="absolute inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6" onClick={() => setShowSetPanel(false)}>
-            <div className="bg-bg-card border border-divider rounded-lg shadow-2xl w-[min(680px,92%)] max-h-[86%] flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="absolute inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-200" onClick={() => setShowSetPanel(false)}>
+            <div className="bg-bg-card border border-divider rounded-2xl shadow-pop w-[min(680px,92%)] max-h-[86%] flex flex-col animate-in fade-in zoom-in-95 duration-200 ease-[var(--ease-out)]" onClick={(e) => e.stopPropagation()}>
               <div className="px-5 py-3 border-b border-divider flex items-center justify-between">
                 <div className="flex flex-col">
                   <div className="text-[13px] font-bold text-primary-text">套图 · AI 统一风格生成</div>

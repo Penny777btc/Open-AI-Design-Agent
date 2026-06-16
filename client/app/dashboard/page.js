@@ -315,7 +315,7 @@ export default function AssistantDashboard() {
             <span>// SOCIAL</span>
           </div>
           <div className="w-full max-w-3xl relative">
-            <div className="bg-bg-card border border-divider rounded-md shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-1 focus-within:shadow-[0_8px_40px_rgb(0,0,0,0.08)] transition-all">
+            <div className="bg-bg-card border border-divider rounded-md shadow-float p-2 focus-within:shadow-pop transition-all ease-[var(--ease-standard)]">
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -341,10 +341,10 @@ export default function AssistantDashboard() {
                 }}
                 onKeyDown={handleKey}
                 placeholder={placeholderText}
-                className="w-full bg-transparent border-none focus:ring-0 text-lg p-4 h-24 resize-none placeholder:text-secondary-text/50 outline-none scrollbar-subtle"
+                className="w-full bg-transparent border-none focus:ring-0 text-lg p-4 h-24 resize-none placeholder:text-secondary-text/70 outline-none scrollbar-subtle"
               />
               <div className="flex items-center justify-between px-2 pb-2">
-                <div className="flex items-center gap-1 relative">
+                <div className="flex items-center gap-2 relative">
                   <input 
                     type="file" 
                     ref={fileInputRef} 
@@ -359,7 +359,7 @@ export default function AssistantDashboard() {
                     {uploading ? (
                       <div className="w-12 h-12 rounded border border-divider border-dashed flex flex-col items-center justify-center bg-bg-page/50">
                         <span className="border-2 border-t-transparent border-primary rounded-full w-7 h-7 animate-spin absolute"></span>
-                        <span className="text-[10px] font-bold text-secondary-text z-10">{uploadProgress}%</span>
+                        <span className="text-[10px] font-bold text-secondary-strong z-10">{uploadProgress}%</span>
                       </div>
                     ) : (
                       <FiPlus size={20} />
@@ -379,14 +379,14 @@ export default function AssistantDashboard() {
                       {attachments.map((att, i) => (
                         <div 
                           key={i} 
-                          className="relative group flex items-center gap-2 px-2 py-1 bg-bg-page border border-divider rounded cursor-help hover:border-primary/50 transition-all"
+                          className="relative group flex items-center gap-2 px-2 py-1 bg-bg-page border border-divider rounded cursor-help hover:border-primary/50 transition-all ease-[var(--ease-standard)]"
                           onMouseEnter={() => setHoveredAsset(att)}
                           onMouseLeave={() => setHoveredAsset(null)}
                         >
                           <div className="w-5 h-5 rounded overflow-hidden">
                             {att.kind === "image" ? <img src={att.url} className="w-full h-full object-cover" /> : <FiTerminal size={10} />}
                           </div>
-                          <span className="text-[10px] font-bold text-secondary-text">{`asset_${i+1}`}</span>
+                          <span className="text-[10px] font-bold text-secondary-strong">{`asset_${i+1}`}</span>
                         </div>
                       ))}
                       
@@ -398,7 +398,7 @@ export default function AssistantDashboard() {
                         return (
                           <div 
                             key={match}
-                            className="relative group flex items-center gap-2 px-2 py-1 bg-primary/5 border border-primary/20 rounded-lg cursor-help hover:border-primary/50 transition-all"
+                            className="relative group flex items-center gap-2 px-2 py-1 bg-primary/5 border border-primary/20 rounded-lg cursor-help hover:border-primary/50 transition-all ease-[var(--ease-standard)]"
                             onMouseEnter={() => setHoveredAsset(asset)}
                             onMouseLeave={() => setHoveredAsset(null)}
                           >
@@ -413,14 +413,14 @@ export default function AssistantDashboard() {
                       {uploading && (
                         <div className="flex items-center gap-2 px-2 py-1 bg-bg-page border border-divider border-dashed rounded-lg">
                           <div className="w-3 h-3 border-2 border-t-transparent border-primary rounded-full animate-spin" />
-                          <span className="text-[10px] font-bold text-secondary-text">{uploadProgress}%</span>
+                          <span className="text-[10px] font-bold text-secondary-strong">{uploadProgress}%</span>
                         </div>
                       )}
                     </div>
                   )}
 
                   {hoveredAsset && (
-                    <div className="absolute bottom-full left-0 mb-10 w-72 aspect-square bg-bg-card border border-divider rounded-md shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] overflow-hidden z-[110] animate-in fade-in zoom-in-95 duration-200 pointer-events-none">
+                    <div className="absolute bottom-full left-0 mb-10 w-72 aspect-square bg-bg-card border border-divider rounded-md shadow-pop overflow-hidden z-[110] animate-in fade-in zoom-in-95 duration-200 pointer-events-none">
                       {hoveredAsset.kind === "image" ? (
                         <img src={hoveredAsset.url} className="w-full h-full object-cover" />
                       ) : hoveredAsset.kind === "video" ? (
@@ -437,7 +437,7 @@ export default function AssistantDashboard() {
                   {showMentionPopup && (
                     <div className="absolute bottom-full left-0 mb-2 flex items-end gap-3 z-50">
                       <div className="w-64 bg-bg-card border border-divider rounded shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
-                        <div className="p-2 border-b border-divider/30 text-[10px] font-bold text-secondary-text uppercase tracking-widest bg-bg-page/50">
+                        <div className="p-2 border-b border-divider/30 text-[10px] font-bold text-secondary-strong uppercase tracking-widest bg-bg-page/50">
                           Mentions
                         </div>
                         <div className="max-h-60 overflow-y-auto scrollbar-subtle py-1">
@@ -462,12 +462,12 @@ export default function AssistantDashboard() {
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-2">
                   <div className="relative">
                     {showSkillsMenu && (
                       <div className="fixed inset-0 z-50 bg-bg-page/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
                         <div className="fixed inset-0" onClick={() => setShowSkillsMenu(false)} />
-                        <div className="relative w-full max-w-2xl bg-bg-card border border-divider rounded-md shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="relative w-full max-w-2xl bg-bg-card border border-divider rounded-md shadow-pop overflow-hidden animate-in zoom-in-95 duration-200">
                           <div className="px-4 py-3 border-b border-divider flex items-center justify-between bg-bg-page/30">
                             <div className="flex items-center gap-4">
                               <div className="w-12 h-12 rounded bg-primary/10 flex items-center justify-center text-primary shadow-inner border border-primary/20">
@@ -480,7 +480,7 @@ export default function AssistantDashboard() {
                             </div>
                             <button 
                               onClick={() => setShowSkillsMenu(false)}
-                              className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-bg-page border border-divider rounded text-xs font-bold text-secondary-text hover:text-primary hover:border-primary/30 transition-all"
+                              className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-bg-page border border-divider rounded text-xs font-bold text-secondary-text hover:text-primary hover:border-primary/30 transition-all ease-[var(--ease-standard)]"
                             >
                               <CgTerminal size={14} />
                               Dismiss
@@ -491,23 +491,23 @@ export default function AssistantDashboard() {
                               <button
                                 key={s.name}
                                 onClick={() => { setActiveSkill(s); setShowSkillsMenu(false); }}
-                                className={`group relative flex flex-col gap-2 p-4 rounded transition-all text-left border ${activeSkill?.name === s.name ? "bg-primary/5 border-primary/30 ring-1 ring-primary/20" : "bg-bg-page/50 border-divider/50 hover:border-primary/30 hover:bg-bg-page hover:shadow-md"}`}
+                                className={`group relative flex flex-col gap-2 p-4 rounded transition-all ease-[var(--ease-standard)] text-left border ${activeSkill?.name === s.name ? "bg-primary/5 border-primary/30 ring-1 ring-primary/20" : "bg-bg-page/50 border-divider/50 hover:border-primary/30 hover:bg-bg-page hover:shadow-md"}`}
                               >
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center gap-3">
-                                    <div className={`w-8 h-8 rounded flex items-center justify-center transition-all ${activeSkill?.name === s.name ? "bg-primary text-black scale-110 shadow-lg shadow-primary/20" : "bg-bg-card text-primary border border-divider group-hover:scale-110"}`}>
+                                    <div className={`w-8 h-8 rounded flex items-center justify-center transition-all ease-[var(--ease-standard)] ${activeSkill?.name === s.name ? "bg-primary text-black scale-110 shadow-lg shadow-primary/20" : "bg-bg-card text-primary border border-divider group-hover:scale-110"}`}>
                                       <RiSparklingLine size={16} />
                                     </div>
                                     <div className="font-bold text-sm tracking-tight capitalize group-hover:text-primary transition-colors">{s.name.replace(/-/g, ' ')}</div>
                                   </div>
                                   {activeSkill?.name === s.name && <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />}
                                 </div>
-                                <div className="text-[11px] text-secondary-text line-clamp-2 leading-relaxed opacity-80 h-8">{s.description || "Expert agent workflow for high-quality generation."}</div>
+                                <div className="text-[11px] text-secondary-strong line-clamp-2 leading-relaxed opacity-80 h-8">{s.description || "Expert agent workflow for high-quality generation."}</div>
                               </button>
                             ))}
                           </div>
                           <div className="px-4 py-2 bg-bg-page/50 border-t border-divider flex items-center justify-between">
-                            <div className="flex items-center gap-2 text-[10px] font-bold text-secondary-text uppercase tracking-widest opacity-60">
+                            <div className="flex items-center gap-2 text-[10px] font-bold text-secondary-strong uppercase tracking-widest opacity-60">
                               <RiRobot2Line size={14} />
                               Design Protocol v1.2
                             </div>
@@ -548,7 +548,7 @@ export default function AssistantDashboard() {
                     disabled={!input.trim() && attachments.length === 0}
                     aria-label="Send"
                     title="Send"
-                    className={`p-2 rounded-full transition-all ${input.trim() || attachments.length > 0 ? "bg-primary text-black shadow-lg shadow-primary/20 hover:scale-105" : "bg-bg-page text-secondary-text/30"}`}
+                    className={`p-2 rounded-full transition-all ease-[var(--ease-standard)] ${input.trim() || attachments.length > 0 ? "bg-primary text-black shadow-lg shadow-primary/20 hover:scale-105" : "bg-bg-page text-secondary-text/30"}`}
                   >
                     <FiSend size={18} />
                   </button>
@@ -562,9 +562,9 @@ export default function AssistantDashboard() {
               {/* New Project Card */}
               <button 
                 onClick={() => router.push("/canvas")}
-                className="group aspect-[16/10] bg-bg-card border-2 border-dashed border-divider rounded-md flex flex-col items-center justify-center gap-3 hover:border-primary hover:bg-primary/5 transition-all"
+                className="group aspect-[16/10] bg-bg-card border-2 border-dashed border-divider rounded-lg flex flex-col items-center justify-center gap-3 hover:border-primary hover:bg-primary/5 transition-all ease-[var(--ease-standard)]"
               >
-                <div className="w-10 h-10 rounded-full bg-bg-page border border-divider flex items-center justify-center text-secondary-text group-hover:text-primary group-hover:border-primary group-hover:scale-110 transition-all">
+                <div className="w-10 h-10 rounded-full bg-bg-page border border-divider flex items-center justify-center text-secondary-text group-hover:text-primary group-hover:border-primary group-hover:scale-110 transition-all ease-[var(--ease-standard)]">
                   <FiPlus size={24} />
                 </div>
                 <span className="text-xs font-bold text-secondary-text group-hover:text-primary">New Project</span>
@@ -575,7 +575,7 @@ export default function AssistantDashboard() {
                 <div 
                   key={session.id}
                   onClick={() => router.push(`/canvas?session=${session.id}`)}
-                  className="group relative aspect-[16/10] bg-bg-card border border-divider rounded overflow-hidden cursor-pointer hover:shadow-xl hover:border-primary/50 transition-all"
+                  className="group relative aspect-[16/10] bg-bg-card border border-divider rounded-lg overflow-hidden cursor-pointer hover:shadow-float hover:border-primary/50 transition-all ease-[var(--ease-standard)]"
                 >
                   <div className="h-full w-full grid grid-cols-2 grid-rows-2 gap-0.5 bg-divider/20">
                     {session.assets && session.assets.length > 0 ? (
@@ -600,7 +600,7 @@ export default function AssistantDashboard() {
 
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteSession(session.id, session.name); }}
-                    className="absolute top-2 right-2 z-10 p-1.5 rounded bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-all"
+                    className="absolute top-2 right-2 z-10 p-1.5 rounded bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-all ease-[var(--ease-standard)]"
                     title="Delete chat"
                   >
                     <FiTrash2 size={14} />
