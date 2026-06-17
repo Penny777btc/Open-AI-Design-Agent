@@ -10,6 +10,7 @@
   --color-secondary-text: var(--text-secondary);
   --color-secondary-strong: var(--text-secondary-strong);  /* 小字号专用：对比度更高 */
   --color-divider: var(--border-subtle);
+  --color-success: #6ee7a8;  /* 注册为主题色 → 生成 text-success/bg-success/border-success（含透明度修饰） */
   /* 圆角阶梯：从 2px 锐角整体软化一档（卡片不再像刀片），保留三档清晰层级 */
   --radius-sm: 0.25rem;   /* 4px  小元素/标签 */
   --radius-md: 0.375rem;  /* 6px  按钮 */

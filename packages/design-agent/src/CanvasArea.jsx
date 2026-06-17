@@ -2959,27 +2959,39 @@ const CanvasArea = forwardRef(
                   </button>
                 ))}
               </div>
-              {/* 模式切换：AI 融合 vs 可编辑（主图六联固定 AI 融合，不显示） */}
-              {!SET_TEMPLATES[setTpl]?.single && (
-              <div className="px-5 pt-3 flex items-center gap-2">
-                {[
-                  { k: "ai", label: "AI 融合版", hint: "设计最融合 · 文字不可编辑" },
-                  { k: "layered", label: "分层版", hint: "背景/产品/文字 三层原生分开 · 最干净可编辑" },
-                  { k: "editable", label: "可编辑版", hint: "干净底图+可编辑文字层 · 可改可换字体" },
-                ].map((m) => (
-                  <button
-                    key={m.k}
-                    onClick={() => setSetGenMode(m.k)}
-                    className={`flex-1 px-3 py-2 rounded text-left border transition-all ${setGenMode === m.k ? "bg-primary/10 border-primary text-primary-text" : "bg-bg-page border-divider text-secondary-text hover:text-primary-text"}`}
-                  >
-                    <div className="text-[12px] font-bold flex items-center gap-1.5">
-                      <span className={`w-3 h-3 rounded-full border ${setGenMode === m.k ? "border-primary bg-primary" : "border-secondary-text"}`} />
-                      {m.label}
-                    </div>
-                    <div className="text-[10px] text-secondary-text mt-0.5 ml-[18px]">{m.hint}</div>
-                  </button>
-                ))}
-              </div>
+              {/* 出图方式：单模板固定其性质（直出/分层）→ 给一句明确说明；多图套图 → 三模式可选，各带「好看/可编辑」标签 */}
+              {SET_TEMPLATES[setTpl]?.single ? (
+                <div className="px-5 pt-3">
+                  <div className={`text-[11px] leading-relaxed px-3 py-2 rounded-lg border ${setTpl === "composite4" ? "border-success/40 bg-success/5" : "border-primary/40 bg-primary/5"} text-primary-text`}>
+                    {setTpl === "composite4"
+                      ? "🧩 原生分层（可编辑优先）：背景 / 装饰 / 主体 / 文案 四层分开，可改文字、换产品、导出分层 PSD —— 融合度略逊直出。"
+                      : "🎨 AI 直出（好看优先）：一次渲染成整张设计图，光影融为一体、最好看 —— 但文字烤进画面、不可二次编辑。"}
+                  </div>
+                </div>
+              ) : (
+                <div className="px-5 pt-3">
+                  <div className="text-[10px] text-secondary-text mb-1.5">出图方式（按需求选）：</div>
+                  <div className="flex items-center gap-2">
+                    {[
+                      { k: "ai", label: "AI 融合版", tag: "好看优先", hint: "一次渲染成整图 · 最融合 · 文字烤死不可编辑" },
+                      { k: "layered", label: "分层版", tag: "可编辑优先", hint: "背景/产品/文字 三层原生分开 · 可改可导 PSD" },
+                      { k: "editable", label: "可编辑版", tag: "可编辑优先", hint: "干净底图 + 可编辑文字层 · 可改可换字体" },
+                    ].map((m) => (
+                      <button
+                        key={m.k}
+                        onClick={() => setSetGenMode(m.k)}
+                        className={`flex-1 px-3 py-2 rounded text-left border transition-all ${setGenMode === m.k ? "bg-primary/10 border-primary text-primary-text" : "bg-bg-page border-divider text-secondary-text hover:text-primary-text"}`}
+                      >
+                        <div className="text-[12px] font-bold flex items-center gap-1.5">
+                          <span className={`w-3 h-3 rounded-full border ${setGenMode === m.k ? "border-primary bg-primary" : "border-secondary-text"}`} />
+                          {m.label}
+                          <span className={`ml-auto text-[9px] px-1.5 py-0.5 rounded-full ${m.tag === "好看优先" ? "bg-primary/15 text-primary" : "bg-success/15 text-success"}`}>{m.tag}</span>
+                        </div>
+                        <div className="text-[10px] text-secondary-text mt-0.5 ml-[18px]">{m.hint}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
               {/* 图片勾选 */}
               <div className="px-5 py-4 flex-1 overflow-y-auto scrollbar-subtle">
