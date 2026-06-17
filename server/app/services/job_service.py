@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -157,27 +158,6 @@ async def _run_job(job_id: str) -> None:
 
                 detail_content = await generate_detail_content(items[0], doc_text, lang=lang) if items else {}
                 plan = build_detail_set_plan(labels[0], content_map=detail_content, lang=lang)
-            elif tpl_key == "composite4":
-                # 四层合成主图：背景 + 装饰元素(独立分层) + 主体(物理落地+接触阴影) + 文案(参数规范)
-                from app.agents.composite import build_composite4_plan, generate_composite_spec
-
-                src_bytes = None
-                try:
-                    src_bytes = await _load_asset_bytes(session_id, labels[0])
-                except Exception:
-                    pass
-                spec = await generate_composite_spec(
-                    items[0] if items else {}, doc_text,
-                    n=int(job_input.get("element_count") or 3), lang=lang, source_image=src_bytes,
-                ) if items else {}
-                if spec:
-                    plan = build_composite4_plan(labels[0], spec, lang=lang)
-                else:
-                    # 规范生成失败 → 降级回成熟的分层模式，永远有产出
-                    from app.agents.set_templates import build_layered_plan
-
-                    content = await generate_set_content("ecom", items, doc_text, lang=lang)
-                    plan = build_layered_plan("ecom", labels[0], content_map=content, lang=lang)
             elif job_input.get("set_mode") == "layered":
                 # 分层版：背景层(生成) + 产品层(抠图) + 可编辑文字层
                 from app.agents.set_templates import build_layered_plan
@@ -188,10 +168,15 @@ async def _run_job(job_id: str) -> None:
                 content = await generate_set_content(tpl_key, items, doc_text, lang=lang)
                 plan = build_set_plan(tpl_key, labels, content_map=content, lang=lang, mode=job_input.get("set_mode", "ai"))
         elif job.kind == "split_image":
-            # AI 拆图：把一张图拆成 背景层 + 主体层(透明)，叠回源图位置
-            from app.agents.split import build_split_plan
+            # 智能四层拆解：识别在 plan 构造期同步完成（DAG/节点数在审批前定型）→ 背景/装饰/主体/文字
+            from app.agents.split import build_smart_split_plan
 
-            plan = build_split_plan(job_input.get("source_asset"))
+            src_label = job_input.get("source_asset")
+            try:
+                src_bytes = await _load_asset_bytes(session_id, src_label)
+            except Exception:
+                src_bytes = None
+            plan = await build_smart_split_plan(session_id, src_label, src_bytes)
         else:
             brief = job_input.get("message") or _skill_brief(job_input)
             async with SessionLocal() as db:
@@ -295,7 +280,7 @@ async def _execute_plan(
     unique_sources = {
         n.args.get("source_asset")
         for n in plan.nodes
-        if n.tool == "edit_image" and n.args.get("source_asset")
+        if n.tool in ("edit_image", "cutout_layer") and n.args.get("source_asset")
     }
     for label in unique_sources:
         try:
@@ -337,6 +322,38 @@ async def _execute_plan(
     await asyncio.gather(*(run_node(node) for node in plan.nodes))
     ok = sum(1 for v in results.values() if v)
     return ok, len(results) - ok
+
+
+def _decode_frame(src: bytes) -> tuple[int, int]:
+    """源图真实解码像素尺寸（背景回帧 / cutout 整帧尺寸用）。"""
+    from app.providers.openai_compat import _png_dims
+
+    dims = _png_dims(src)
+    if dims is not None:
+        return dims
+    from io import BytesIO
+
+    from PIL import Image
+
+    with Image.open(BytesIO(src)) as im:
+        return im.size
+
+
+def _resize_to_frame(edit_png: bytes, frame_w: int, frame_h: int) -> bytes:
+    """【强制修复①】把 provider.edit 输出（gpt-image 固定档位，如 1024²）强制回到源帧 W×H。
+
+    宽高比相同 → 直接 resize；不同 → cover（铺满）+ 中心裁切，保持铺满不变形。
+    所有经 provider.edit 产出、要叠回画布的层（背景层）都必须过此步，否则层间错位、PSD 不对齐。
+    异常 → 返回原图（退化但不崩，§7.1 降级 5），调用方据原始尺寸成层。
+    """
+    if frame_w < 1 or frame_h < 1:
+        return edit_png
+    try:
+        from app.agents.split import resize_cover
+
+        return resize_cover(edit_png, frame_w, frame_h)
+    except Exception:
+        return edit_png
 
 
 async def _load_asset_bytes(session_id: str, asset_label: str) -> bytes:
@@ -403,17 +420,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
     if node.tool == "generate_video":
         return await _video_node(job_id, session_id, user_id, node, planner)
 
-    # 四层合成·文案层：AI 已产出排版规范参数（type_spec），不做 OCR，直接发给前端渲染成可编辑文字
-    if node.tool == "extract_text" and node.args.get("split_role") == "typography":
-        blocks = node.args.get("type_spec") or []
-        ref = (node_outputs or {}).get(node.args.get("overlay_on")) if node_outputs else None
-        ref_label = ref.get("label") if ref else None
-        if ref_label and blocks:
-            await emit(job_id, "canvas_op", {"op": "add_texts", "args": {"ref": ref_label, "texts": blocks}})
-        await emit(job_id, "tool_result", {"name": node.tool, "result": {"ok": True, "text_blocks": len(blocks)}, "asset": None})
-        return True
-
-    # AI 拆图·文字层：对源图做 OCR，识别叠加文字 → 发相对坐标给前端重建为可编辑文字节点（不产图层资产）
+    # 智能拆解·文字层：对源图做 OCR，识别叠加文字 → 持久化为 kind=text_layer Asset（刷新不丢）
+    # + 发相对坐标给前端立即重建为可编辑文字节点
     if node.tool == "extract_text":
         from app.agents.split import detect_text_blocks
 
@@ -424,96 +432,98 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         blocks = await detect_text_blocks(src)
         if blocks:
             await emit(job_id, "canvas_op", {"op": "add_texts", "args": {"ref": src_label, "texts": blocks}})
-        await emit(job_id, "tool_result", {"name": node.tool, "result": {"ok": True, "text_blocks": len(blocks)}, "asset": None})
+            # 持久化：blocks JSON 存进 prompt，锚源图坐标，url 占位空（序列化容忍空 url 的 text_layer）
+            async with _label_lock(session_id), SessionLocal() as db:
+                src_row = (
+                    await db.execute(
+                        select(Asset).where(Asset.session_id == session_id, Asset.asset_label == src_label)
+                    )
+                ).scalars().first()
+                count = (
+                    await db.execute(select(func.count()).select_from(Asset).where(Asset.session_id == session_id))
+                ).scalar_one()
+                tlabel = f"asset_{count + 1}"
+                db.add(Asset(
+                    session_id=session_id, user_id=user_id, asset_label=tlabel, url="", storage_key=None,
+                    kind="text_layer", mime=None, width=None, height=None, model="ocr-text",
+                    prompt=json.dumps(blocks, ensure_ascii=False), source_tool="extract_text", job_id=job_id,
+                    canvas_x=(src_row.canvas_x if src_row else None),
+                    canvas_y=(src_row.canvas_y if src_row else None),
+                    z_index=node.args.get("z_index"),
+                ))
+                await db.commit()
+            # 前端 asset-sync 重建 text_layer 时需要锚到源图：带上 ref（源图 asset_label）
+            await emit(job_id, "tool_result", {
+                "name": node.tool, "result": {"ok": True, "text_blocks": len(blocks)},
+                "asset": {"asset_label": tlabel, "url": "", "kind": "text_layer",
+                          "prompt": json.dumps(blocks, ensure_ascii=False), "ref": src_label,
+                          "z_index": node.args.get("z_index"), "source_tool": "extract_text"},
+            })
+        else:
+            await emit(job_id, "tool_result", {"name": node.tool, "result": {"ok": True, "text_blocks": 0}, "asset": None})
         return True
 
     provider = get_image_provider()
     prompt = node.args.get("prompt") or node.label
 
-    # 源图与蒙版在重试循环外只读一次（命中 plan 级缓存则零 I/O；也避免重试时重复读盘）
-    source = mask = None
-    if node.tool == "edit_image":
-        source_label = node.args.get("source_asset", "")
-        if source_cache is not None and source_label in source_cache:
-            source = source_cache[source_label]
-        else:
-            source = await _load_asset_bytes(session_id, source_label)
-            if source_cache is not None:
-                source_cache[source_label] = source
-        if mask_key := node.args.get("mask_key"):
-            mask = (settings.storage_dir / mask_key).read_bytes()
-
     image = None
     loop = asyncio.get_running_loop()
     split_role = node.args.get("split_role")
-    # 四层合成的目标帧 = 背景层的原生尺寸（所有层做成整帧透明图 → 叠回背景同坐标=完美重叠）
-    frame = (node_outputs or {}).get(node.args.get("overlay_on")) if node_outputs else None
 
-    if node.tool == "generate_image" and split_role == "element":
-        # 第2层装饰元素：灰底生成单个道具 → 本地抠图 → 摆到整帧透明画布（按锚点/scale 定位）
-        from app.agents.composite import compose_layer
-        from app.agents.split import cutout_subject
+    # 智能拆解·装饰元素/主体抠图层（纯本地 rembg，cutout_layer 工具）：
+    # bbox 裁子图内抠图 → 贴回整帧 → 完整性校验 → 按需 AI 补全（补全后必重抠成透明）
+    if node.tool == "cutout_layer":
+        from app.agents.split import (
+            complete_object, cutout_region, cutout_subject_full, dislocation_guard, verify_complete,
+        )
         from app.providers.base import GeneratedImage
         from app.providers.openai_compat import _png_dims
 
-        gen = None
-        last_exc = None
-        for _ in range(2):
-            try:
-                gen = await provider.generate(prompt, node.args.get("aspect_ratio", "1:1"))
-                break
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-        if gen is None:
-            raise last_exc  # 装饰非关键：run_node 捕获 → 退款 + 跳过该层，下游不阻塞
-        cut = await loop.run_in_executor(None, cutout_subject, gen.data)
-        if frame:
-            place = node.args.get("place") or {}
-            data = await loop.run_in_executor(None, lambda: compose_layer(
-                cut, frame["width"], frame["height"], mode=place.get("mode", "anchor"),
-                anchor=place.get("anchor", "center"), scale=float(place.get("scale", 0.25)),
-                horizon=float(node.args.get("horizon", 0.62))))
-            w, h = frame["width"], frame["height"]
-        else:
-            data = cut
-            w, h = _png_dims(cut) or (gen.width, gen.height)
-        image = GeneratedImage(data=data, mime="image/png", width=w, height=h, model="rembg-isnet")
-    elif node.tool == "edit_image" and split_role == "shadow":
-        # 第3层接触阴影：据主体抠图合成落地椭圆（光向反向偏移）→ 独立透明层（可单独调/删，导出独立 PSD 层）
-        from app.agents.composite import make_contact_shadow
-        from app.agents.split import cutout_subject
-        from app.providers.base import GeneratedImage
-        from app.providers.openai_compat import _png_dims
+        src_label = node.args.get("source_asset", "")
+        src = source_cache.get(src_label) if source_cache else None
+        if src is None:
+            src = await _load_asset_bytes(session_id, src_label)
+            if source_cache is not None:
+                source_cache[src_label] = src
+        bbox = node.args.get("bbox") or {}
+        is_subject = split_role == "subject"
+        # 装饰元素用更柔的 alpha 阈值（半透明不毛刺）+ 更激进的碎片清理；主体用硬阈值
+        lift_lo, lift_scale, min_frac = (25, 4, 0.05) if is_subject else (10, 2, 0.15)
 
-        cut = await loop.run_in_executor(None, cutout_subject, source)
-        if frame:
-            data = await loop.run_in_executor(None, lambda: make_contact_shadow(
-                cut, frame["width"], frame["height"],
-                horizon=float(node.args.get("horizon", 0.62)), light=node.args.get("light")))
-            w, h = frame["width"], frame["height"]
+        if is_subject:
+            cut = await loop.run_in_executor(None, lambda: cutout_subject_full(
+                src, bbox, lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac))
         else:
-            data = cut
-            w, h = _png_dims(cut) or (0, 0)
-        image = GeneratedImage(data=data, mime="image/png", width=w, height=h, model="contact-shadow")
-    elif node.tool == "edit_image" and split_role == "subject":
-        # 第3层主体 / AI 拆图主体层：本地抠图保留产品原像素 + 透明 PNG（比 AI 重绘忠实，也不耗中转额度）。
-        # 四层合成（带 place）时再摆到整帧画布并坐到支撑面（grounded）；拆图场景无 place → 维持原行为。
-        from app.agents.split import cutout_subject
-        from app.providers.base import GeneratedImage
-        from app.providers.openai_compat import _png_dims
+            cut = await loop.run_in_executor(None, lambda: cutout_region(
+                src, bbox, lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac))
+            # 错位防护：明显抠空/抠偏的装饰层直接丢弃（不静默产出错位层）
+            if await loop.run_in_executor(None, lambda: dislocation_guard(cut, bbox)):
+                raise RuntimeError(f"装饰元素「{node.args.get('label', '')}」抠图错位/为空，跳过该层")
 
-        out = await loop.run_in_executor(None, cutout_subject, source)
-        if node.args.get("place") and frame:
-            from app.agents.composite import compose_layer
+        # 完整性校验 + 按需补全——**仅对主体**：主体是关键且语义明确，inpaint 补全可靠；
+        # 装饰元素小而语义模糊，补全时 gpt-image 易幻觉成别的东西（实测把"金色餐具"补成小酒瓶），
+        # 得不偿失 → 装饰元素只用干净抠图、宁可略残不冒幻觉风险。
+        if is_subject:
+            incomplete, _missing = await verify_complete(cut, bbox, bool(node.args.get("occluded")))
+            if incomplete:
+                cut = await complete_object(cut, src, bbox, "product",
+                                            lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac)
 
-            out = await loop.run_in_executor(None, lambda: compose_layer(
-                out, frame["width"], frame["height"], mode="grounded",
-                horizon=float(node.args.get("horizon", 0.62))))
-            w, h = frame["width"], frame["height"]
-        else:
-            w, h = _png_dims(out) or (0, 0)
-        image = GeneratedImage(data=out, mime="image/png", width=w, height=h, model="rembg-isnet")
+        w, h = _png_dims(cut) or _decode_frame(src)
+        image = GeneratedImage(data=cut, mime="image/png", width=w, height=h, model="rembg-isnet")
     else:
+        # 源图与蒙版在重试循环外只读一次（命中 plan 级缓存则零 I/O；也避免重试时重复读盘）
+        source = mask = None
+        if node.tool == "edit_image":
+            source_label = node.args.get("source_asset", "")
+            if source_cache is not None and source_label in source_cache:
+                source = source_cache[source_label]
+            else:
+                source = await _load_asset_bytes(session_id, source_label)
+                if source_cache is not None:
+                    source_cache[source_label] = source
+            if mask_key := node.args.get("mask_key"):
+                mask = (settings.storage_dir / mask_key).read_bytes()
         last_exc = None
         for _ in range(2):  # 节点级重试
             try:
@@ -529,10 +539,30 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         if image is None:
             raise last_exc
 
+        # 【强制修复①】智能拆解背景层：provider.edit 输出是 gpt-image 固定档位，
+        # 必须回帧到源图真实尺寸，否则与其它整帧透明层错位、PSD 不对齐。
+        if split_role == "bg":
+            from app.providers.base import GeneratedImage
+            from app.providers.openai_compat import _png_dims
+
+            try:
+                fw, fh = _decode_frame(source)
+                reframed = await loop.run_in_executor(None, lambda: _resize_to_frame(image.data, fw, fh))
+                rw, rh = _png_dims(reframed) or (fw, fh)
+                image = GeneratedImage(data=reframed, mime="image/png", width=rw, height=rh, model=image.model)
+            except Exception:
+                pass  # 回帧异常 → 用 edit 原始尺寸成层（§7.1 降级 5，退化但不崩）
+
     ext = image.mime.split("/")[-1]
     key = f"assets/{session_id}/{job_id}_{node.id}.{ext}"
     storage.save_bytes(key, image.data)
     url = storage.public_url(key)
+
+    # 落位路由按 placed 标志（不再按 tool 名分流）：
+    # set_/split_/lay_ = 成套/拆解/分层产物，用 arrange 落到指定坐标；其余 edit = 放在源图旁
+    placed = node.id.startswith("set_") or node.id.startswith("split_") or node.id.startswith("lay_")
+    # 智能拆解的抠图/背景层都带 source_asset（含 cutout_layer），需要源图坐标做落位
+    has_source = bool(node.args.get("source_asset"))
 
     async with _label_lock(session_id), SessionLocal() as db:
         count = (
@@ -551,7 +581,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                 pr_dw, pr_dh = display_size(image.width, image.height)
                 canvas_x = ref["canvas_x"] + (bg_dw - pr_dw) / 2
                 canvas_y = ref["canvas_y"] + (bg_dh - pr_dh) / 2
-        if canvas_x is None and node.tool == "edit_image" and not node.id.startswith("set_"):
+        if canvas_x is None and has_source and not node.id.startswith("set_"):
             source = (
                 await db.execute(
                     select(Asset).where(
@@ -562,7 +592,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             ).scalars().first()
             if source and source.canvas_x is not None:
                 if node.id.startswith("split_"):
-                    # AI 拆图：背景层/主体层叠回源图「同一位置」（重叠 → 还原原图，但已分层）
+                    # 智能拆解：每层（背景/装饰/主体）叠回源图「同一位置」（重叠 → 还原原图，但已分层）
                     canvas_x = source.canvas_x
                     canvas_y = source.canvas_y
                 else:
@@ -584,8 +614,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         # 计费：审批时已整单预扣（reserve），节点成功无需再记账；失败由 refund_node 退还
         await db.commit()
 
-    # 套图(set_*)、AI 拆图(split_*)、分层版(lay_*) 都用 arrange 落到指定坐标，不走「放在源图旁」逻辑
-    placed = node.id.startswith("set_") or node.id.startswith("split_") or node.id.startswith("lay_")
+    # placed（set_*/split_*/lay_*）都用 arrange 落到指定坐标，不走「放在源图旁」逻辑
     result = {"ok": True, "model": image.model}
     if node.tool == "edit_image" and not placed:
         result["source_asset_id"] = node.args.get("source_asset")

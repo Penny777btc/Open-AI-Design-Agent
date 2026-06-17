@@ -52,7 +52,6 @@ const TEXT_SWATCHES = ["#ffffff", "#000000", "#ffe24d", "#ff3b3b", "#19c37d", "#
 const SET_TEMPLATES = {
   main6: { label: "电商主图六联", desc: "选 1 张产品图 → AI 出 6 张（白底/卖点/风味/工艺/场景/参数）", single: true, count: 6, cta: "生成主图六联" },
   detail7: { label: "电商详情页七段", desc: "选 1 张产品图 → AI 出 7 段暗调详情页（封面/参数/风味/工艺/产区/餐配/规格）", single: true, count: 7, cta: "生成详情页七段" },
-  composite4: { label: "四层合成主图", desc: "选 1 张产品图 → 原生分层合成 1 张（背景/装饰/主体/文案 四层，物理落地+可编辑）", single: true, count: 1, cta: "生成四层合成图" },
   ecom: { label: "电商主图", desc: "白底影棚 · 标题居中 · 三条卖点" },
   rednote: { label: "小红书封面", desc: "生活场景 · 大标题 · 竖版 3:4" },
   minimal: { label: "极简画册", desc: "纯净留白 · 单标题 · 编辑感" },
@@ -2971,10 +2970,8 @@ const CanvasArea = forwardRef(
               {/* 出图方式：单模板固定其性质（直出/分层）→ 给一句明确说明；多图套图 → 三模式可选，各带「好看/可编辑」标签 */}
               {SET_TEMPLATES[setTpl]?.single ? (
                 <div className="px-5 pt-3">
-                  <div className={`text-[11px] leading-relaxed px-3 py-2 rounded-lg border ${setTpl === "composite4" ? "border-success/40 bg-success/5" : "border-primary/40 bg-primary/5"} text-primary-text`}>
-                    {setTpl === "composite4"
-                      ? "🧩 原生分层（可编辑优先）：背景 / 装饰 / 主体 / 文案 四层分开，可改文字、换产品、导出分层 PSD —— 融合度略逊直出。"
-                      : "🎨 AI 直出（好看优先）：一次渲染成整张设计图，光影融为一体、最好看 —— 但文字烤进画面、不可二次编辑。"}
+                  <div className="text-[11px] leading-relaxed px-3 py-2 rounded-lg border border-primary/40 bg-primary/5 text-primary-text">
+                    🎨 AI 直出（好看优先）：一次渲染成整张设计图，光影融为一体、最好看 —— 但文字烤进画面、不可二次编辑。
                   </div>
                 </div>
               ) : (

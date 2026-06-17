@@ -12,6 +12,20 @@ from app.services import job_service
 router = APIRouter()
 
 
+def _write_mask(session_id: str, png: bytes) -> str:
+    """蒙版落盘（透明区域 = 重绘范围），返回 storage key。
+    region_edit 与智能拆解的背景补洞共用此写盘 pattern（masks/{session}/{uuid}.png）。"""
+    import uuid as uuidlib
+
+    from app.services import storage
+
+    if len(png) > 8 * 1024 * 1024:
+        raise ValueError("mask too large")
+    key = f"masks/{session_id}/{uuidlib.uuid4().hex[:12]}.png"
+    storage.save_bytes(key, png)
+    return key
+
+
 async def _enqueue(db: AsyncSession, user, session_id: str, kind: str, payload: dict) -> dict:
     session = await _owned_session(db, user, session_id)
 
@@ -82,14 +96,11 @@ async def set_template(session_id: str, request: Request, db: AsyncSession = Dep
     template = body.get("template")
     labels = body.get("asset_labels") or []
     single_kinds = {"main6": ("电商主图六联", 6), "detail7": ("电商详情页七段", 7)}
-    if template not in single_kinds and template != "composite4" and template not in SET_TEMPLATES:
+    if template not in single_kinds and template not in SET_TEMPLATES:
         raise HTTPException(status_code=422, detail="未知套图模板")
     if not labels:
         raise HTTPException(status_code=422, detail="请先选择图片")
-    if template == "composite4":
-        # 四层合成主图：取第一张产品图，分层合成一张（背景/装饰/主体/文案）
-        message = "🧩 四层合成主图（背景 · 装饰 · 主体 · 文案）"
-    elif template in single_kinds:
+    if template in single_kinds:
         # 电商主图六联 / 详情页七段：取第一张产品图，出固定张数
         name, n = single_kinds[template]
         message = f"🛍 生成{name}（{n} 张）"
@@ -100,7 +111,6 @@ async def set_template(session_id: str, request: Request, db: AsyncSession = Dep
         "template": template,
         "asset_labels": labels,
         "set_mode": body.get("mode") if body.get("mode") in ("editable", "layered") else "ai",
-        "element_count": body.get("element_count"),  # 四层合成：装饰元素数量（默认 3）
         "client_request_id": body.get("client_request_id"),
     })
 
@@ -123,12 +133,11 @@ async def split_image(session_id: str, request: Request, db: AsyncSession = Depe
 async def region_edit(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     """画布局部编辑：用户已显式圈选区域并确认消耗，跳过计划审批直接执行。"""
     import base64
-    import uuid as uuidlib
 
     from fastapi import HTTPException
 
-    from app.config import settings, tool_cost
-    from app.services import credit_service, storage
+    from app.config import tool_cost
+    from app.services import credit_service
 
     payload = await request.json()
     session = await _owned_session(db, user, session_id)
@@ -156,10 +165,7 @@ async def region_edit(session_id: str, request: Request, db: AsyncSession = Depe
     if mask_b64:
         try:
             raw = base64.b64decode(mask_b64.split(",")[-1])
-            if len(raw) > 8 * 1024 * 1024:
-                raise ValueError("mask too large")
-            mask_key = f"masks/{session_id}/{uuidlib.uuid4().hex[:12]}.png"
-            storage.save_bytes(mask_key, raw)
+            mask_key = _write_mask(session_id, raw)
         except Exception:
             raise HTTPException(status_code=422, detail="蒙版数据无效")
 

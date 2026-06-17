@@ -479,6 +479,10 @@ export default function CreativeCanvas({
           place(srcLabel, newUrl, newKind, newLabel);
           syncedUrlsRef.current?.add?.(`${newLabel}-${newUrl}`);
         }
+        // 智能拆解文字层：live 时 add_texts 已重建文字，标记 synced 防 asset-sync 重复 addTextLayers
+        if (newKind === "text_layer" && newLabel) {
+          syncedUrlsRef.current?.add?.(`${newLabel}-${newUrl || ""}`);
+        }
       }
     }
   };
@@ -1145,6 +1149,7 @@ export default function CreativeCanvas({
     const newAssets = assets.filter(a => {
       // 文档提取的产品图只进资产面板（生成时作底图引用），不自动铺上画布
       if (a.source_tool === "doc_extract") return false;
+      // 智能拆解文字层：无 url、用 prompt 里的 blocks JSON 重建可编辑文字（syncKey 用 label 即可）
       const syncKey = `${a.asset_label || "no-label"}-${a.url}`;
       return !syncedUrlsRef.current.has(syncKey);
     });
@@ -1155,9 +1160,25 @@ export default function CreativeCanvas({
       if (canvasRef.current) {
         newAssets.forEach(a => {
           const syncKey = `${a.asset_label || "no-label"}-${a.url}`;
-          if (!a.url || syncedUrlsRef.current.has(syncKey)) return;
+          const isTextLayer = a.kind === "text_layer";
+          // 文字层无 url；其它 kind 缺 url 跳过（沿用原逻辑）
+          if (!isTextLayer && !a.url) return;
+          if (syncedUrlsRef.current.has(syncKey)) return;
           syncedUrlsRef.current.add(syncKey);
-          
+
+          if (isTextLayer) {
+            // 智能拆解文字层：blocks 存在 prompt(JSON)，锚到同坐标的底图（拆解各层叠回源图同位置）
+            let blocks = [];
+            try { blocks = JSON.parse(a.prompt || "[]"); } catch { blocks = []; }
+            if (!blocks.length) return;
+            // 找一张同 canvas 坐标的图片资产做锚（背景/主体层都在源图同位置），否则用最近一张
+            const anchor = assets.find(o => o.kind === "image" && o.url
+              && (o.canvas_x ?? null) === (a.canvas_x ?? null)
+              && (o.canvas_y ?? null) === (a.canvas_y ?? null));
+            canvasRef.current.addTextLayers(anchor?.asset_label ?? null, blocks);
+            return;
+          }
+
           const kind = a.kind || (a.url.match(/\.(mp4|webm|mov)$/i) ? "video" : a.url.match(/\.(mp3|wav|ogg|m4a)$/i) ? "audio" : "image");
           const label = a.asset_label || null;
           // 后端持久化的画布坐标：刷新后恢复布局，避免叠图
@@ -1319,7 +1340,9 @@ export default function CreativeCanvas({
   const handleKey = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } };
   
   const filteredSkills = skills.filter(s => s.name.toLowerCase().includes(mentionQuery.toLowerCase()));
-  const filteredAssets = assets.filter(a => (a.asset_label || "").toLowerCase().includes(mentionQuery.toLowerCase()));
+  // 文字层(text_layer)无 url、不是可引用的媒体资产，从 @ 提及/资产面板里排除
+  const mediaAssets = assets.filter(a => a.kind !== "text_layer");
+  const filteredAssets = mediaAssets.filter(a => (a.asset_label || "").toLowerCase().includes(mentionQuery.toLowerCase()));
 
   if (!mounted) return null;
 
@@ -2099,13 +2122,13 @@ export default function CreativeCanvas({
                       <div className="absolute bottom-full right-0 mb-2 w-72 bg-bg-card border border-divider rounded shadow-2xl z-30 animate-fade-in-up">
                         <div className="p-2 mb-2 border-b border-divider text-[10px] font-bold text-secondary-text flex items-center justify-between">
                           <span>{t("session_assets")}</span>
-                          <span className="opacity-50">{t("items", assets.length)}</span>
+                          <span className="opacity-50">{t("items", mediaAssets.length)}</span>
                         </div>
                         <div className="max-h-80 overflow-y-auto scrollbar-subtle p-2 grid grid-cols-3 gap-2">
-                          {assets.length === 0 ? (
+                          {mediaAssets.length === 0 ? (
                             <div className="col-span-3 py-8 text-center text-secondary-text text-[10px] italic">{t("no_assets_yet")}</div>
                           ) : (
-                            assets.map((asset, i) => (
+                            mediaAssets.map((asset, i) => (
                               <div 
                                 key={i}
                                 onClick={(e) => {

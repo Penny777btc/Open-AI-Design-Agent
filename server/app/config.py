@@ -76,6 +76,8 @@ def tool_cost(tool: str, model: str | None = None, seconds: float | None = None)
 
     if tool == "edit_image":
         return model_catalog.EDIT_CREDITS
+    if tool == "cutout_layer":
+        return 3  # 智能拆解·纯本地 rembg 抠图层（+ 可能 0-1 次 vision 校验）：不走 edit 中转，便宜
     if tool == "extract_text":
         return 3  # AI 拆图文字层：一次 OCR 视觉调用，便宜
     if tool == "generate_video":
