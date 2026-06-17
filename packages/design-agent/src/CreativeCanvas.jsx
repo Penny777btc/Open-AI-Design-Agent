@@ -1688,8 +1688,8 @@ export default function CreativeCanvas({
                     </div>
                     <div className={`max-w-[90%] space-y-2 ${msg.role === "user" ? "text-right" : "text-left"}`}>
                       <div className="relative">
-                        <div className={`px-3 py-2 text-[13px] leading-relaxed break-words relative
-                          ${msg.role === "user" ? "bg-bg-card-hover text-primary-text rounded-md rounded-tr-none shadow-sm border border-divider" : "text-primary-text bg-bg-page rounded-md rounded-tl-none shadow-sm border border-divider"}`}>
+                        <div className={`px-3.5 py-2.5 text-[13px] leading-relaxed break-words relative
+                          ${msg.role === "user" ? "bg-bg-card-hover text-primary-text rounded-2xl rounded-tr-md shadow-soft" : "text-primary-text bg-bg-page rounded-2xl rounded-tl-md shadow-soft border border-divider/60"}`}>
                           
                           {msg.content ? (
                             msg.role === "assistant" ? (
@@ -2160,33 +2160,37 @@ export default function CreativeCanvas({
 
 
 // ── Event pills ────────────────────────────────────────────────────────────────
-const TOOL_ICONS = {
-  generate_image: "🎨", edit_image: "✏️", generate_video: "🎬",
-  image_to_video: "🎥", edit_video: "🎞️", lipsync_video: "💋",
-  concat_videos: "🔗", generate_audio: "🎵", enhance_image: "✨",
-  upload_file: "📤", list_models: "📚", ask_user: "❓",
-  propose_plan: "📋", list_assets: "📁", get_asset: "🔍", remaining_budget: "💰",
+// 用户友好的动作文案（不暴露内部工具名 edit_image / 模型名 GPT-IMAGE-2 等）
+const TOOL_LABELS = {
+  generate_image: "正在绘制画面", edit_image: "正在处理画面", enhance_image: "正在提升画质",
+  generate_video: "正在生成视频", image_to_video: "正在让图片动起来", edit_video: "正在处理视频",
+  lipsync_video: "正在对口型", concat_videos: "正在拼接视频", generate_audio: "正在生成音频",
+  extract_text: "正在识别文字", upload_file: "正在上传", ask_user: "等你确认",
 };
+function friendlyAction(name) { return TOOL_LABELS[name] || "正在处理"; }
+function friendlyDone(name, asset) {
+  if (name === "extract_text") return "文字已识别";
+  if (asset?.kind === "video") return "视频已生成";
+  if (asset?.split_role === "subject") return "主体已抠出";
+  if (asset?.split_role === "bg") return "背景已生成";
+  return "画面已生成";
+}
 
 function EventPill({ event }) {
   if (event.type === "tool_call") return (
-    <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-primary/10 border border-primary text-primary text-[11px] mt-1 shadow-sm">
-      <span>{TOOL_ICONS[event.name] || "🔧"}</span>
-      <span className="font-semibold">{event.name}</span>
-      {event.est_seconds ? (
-        <span className="text-[9px] opacity-60 font-mono">≈{event.est_seconds}s</span>
-      ) : null}
+    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-page/70 text-secondary-strong text-[12px] mt-1.5">
+      <span className="typing-dots text-primary"><span /><span /><span /></span>
+      <span>{friendlyAction(event.name)}…</span>
     </div>
   );
 
   if (event.type === "tool_result") {
     const ok = event.result?.ok !== false;
-    const model = event.result?.model;
     if (event.name === "ask_user" && event.result?.ask_user) {
       const choices = event.result.choices || [];
       return (
-        <div className="px-3 py-2 rounded bg-bg-page border border-primary text-[12px] mt-1 shadow-sm">
-          <div className="font-semibold text-primary mb-1">❓ {event.result.question}</div>
+        <div className="px-3.5 py-2.5 rounded-xl bg-bg-page border border-divider text-[12px] mt-1.5 shadow-soft">
+          <div className="font-semibold text-primary-text mb-1">{event.result.question}</div>
           {choices.length > 0 && (
             <div className="flex flex-col gap-1 mt-1">
               {choices.map((c, i) => (
@@ -2194,31 +2198,24 @@ function EventPill({ event }) {
               ))}
             </div>
           )}
-          <div className="text-[10px] text-secondary-text mt-1.5 italic">{t("reply_to_continue")}</div>
+          <div className="text-[11px] text-secondary-strong mt-1.5">{t("reply_to_continue")}</div>
         </div>
       );
     }
     return (
-      <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[11px] border mt-1 shadow-sm ${
+      <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-[12px] mt-1.5 ${
         ok
-          ? "bg-[var(--color-success-bg)] text-[var(--color-success)] border-[var(--color-success)]"
-          : "bg-[var(--color-error-bg)] text-[var(--color-error)] border-[var(--color-error)]"
+          ? "bg-[var(--color-success-bg)] text-[var(--color-success)]"
+          : "bg-[var(--color-error-bg)] text-[var(--color-error)]"
       }`}>
-        {ok ? <FiCheck size={11} /> : <FiX size={11} />}
+        {ok ? <FiCheck size={13} /> : <FiX size={13} />}
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          <span className="font-semibold">
-            {ok
-              ? (event.asset ? t("generated", event.asset.kind) : t("done"))
-              : t("failed")}
+          <span className="font-medium">
+            {ok ? friendlyDone(event.name, event.asset) : "这一步没成功，已自动跳过"}
           </span>
-          {ok && model && (
-            <span className="text-[9px] font-bold uppercase tracking-tight opacity-80">
-              {model}
-            </span>
-          )}
           {!ok && event.result?.error && (
-            <span className="text-[9px] opacity-70 truncate max-w-[160px]" title={event.result.error}>
-              ↺ {String(event.result.error).replace(/^\w+Error:\s*/i, "").substring(0, 60)}
+            <span className="text-[11px] opacity-70 truncate max-w-[160px]" title={event.result.error}>
+              {String(event.result.error).replace(/^\w+Error:\s*/i, "").substring(0, 60)}
             </span>
           )}
         </div>
@@ -2231,16 +2228,16 @@ function EventPill({ event }) {
     return (
     <div className="flex flex-col gap-2">
       <PlanVisualizer plan={event} />
-      <div className="flex items-center gap-2 px-2 pb-2">
-        <button 
+      <div className="flex items-center gap-2 px-1 pb-1">
+        <button
           onClick={() => event.onAction?.(event.job_id, "approve")}
-          className="flex-1 py-2 rounded bg-primary text-black text-[12px] font-bold hover:brightness-110 transition-all flex items-center justify-center gap-2"
+          className="flex-1 py-2.5 rounded-xl bg-primary text-black text-[13px] font-semibold hover:brightness-110 transition-all flex items-center justify-center gap-2"
         >
-          <FiCheck /> {t("approve_execute")}
+          <FiCheck size={14} /> {t("approve_execute")}
         </button>
         <button
           onClick={() => event.onAction?.(event.job_id, "reject")}
-          className="px-4 py-2 rounded bg-bg-card border border-divider text-secondary-text text-[12px] hover:bg-bg-page transition-all"
+          className="px-4 py-2.5 rounded-xl bg-bg-card border border-divider text-secondary-text text-[13px] hover:bg-bg-page transition-colors"
         >
           {t("cancel")}
         </button>

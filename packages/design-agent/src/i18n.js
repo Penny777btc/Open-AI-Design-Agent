@@ -108,7 +108,7 @@ const dict = {
     unsupported_format: (ext) => `暂不支持「${ext}」格式，请上传图片、视频、音频或 PDF/Word 文档`,
     uploaded_as: (label) => `已上传为 ${label}`,
     upload_failed: "上传失败",
-    still_running_bg: "仍在后台运行 —— 刷新本页可重新连接。",
+    still_running_bg: "还在为你生成中，稍等片刻～（即使刷新或离开也不会丢）",
 
     // ── 画布（CanvasArea）─────────────────────────────────────────
     image: "图片",
@@ -262,7 +262,7 @@ const dict = {
     unsupported_format: (ext) => `"${ext}" files aren't supported — please upload an image, video, audio, or a PDF/Word document`,
     uploaded_as: (label) => `Uploaded as ${label}`,
     upload_failed: "Upload failed",
-    still_running_bg: "Still running in background — refresh this page to reconnect.",
+    still_running_bg: "Still working on it — hang tight (you won't lose it if you refresh or leave)",
 
     // ── Canvas (CanvasArea) ───────────────────────────────────────
     image: "Image",

@@ -25,54 +25,42 @@ export default function PlanVisualizer({ plan, theme = "dark" }) {
   }
 
   return (
-    <div className={`mt-4 mb-4 p-4 rounded border shadow-xl bg-bg-page/50 backdrop-blur-sm ${
-      theme === "dark" ? "border-divider shadow-black/40" : "border-divider shadow-slate-200"
-    }`}>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h3 className="text-[13px] font-bold text-primary flex items-center gap-2 uppercase tracking-widest">
-            <FiZap className="animate-pulse" /> Proposed Execution Plan
+    <div className="mt-3 mb-3 p-4 rounded-xl border border-divider shadow-float bg-bg-page/60 backdrop-blur-sm">
+      <div className="flex items-center justify-between mb-4">
+        <div className="min-w-0">
+          <h3 className="text-[13px] font-semibold text-primary-text flex items-center gap-1.5">
+            <FiZap size={13} className="text-primary" /> 即将为你制作
           </h3>
-          <p className="text-[11px] text-secondary-text mt-1 italic">
-            &ldquo;{plan.title}&rdquo;
-          </p>
+          <p className="text-[12px] text-secondary-strong mt-0.5 truncate">{plan.title}</p>
         </div>
-        <div className="text-right">
-          <div className="text-[12px] font-bold text-primary-text">
-            {plan.total_credits} <span className="text-[10px] text-secondary-text font-normal">credits</span>
+        <div className="text-right shrink-0 ml-3">
+          <div className="text-[13px] font-semibold text-primary-text">
+            {plan.total_credits} <span className="text-[11px] text-secondary-text font-normal">积分</span>
           </div>
-          <div className="text-[10px] text-secondary-text uppercase tracking-tight">
-            {plan.nodes.length} steps
-          </div>
+          <div className="text-[11px] text-secondary-strong">{plan.nodes.length} 步</div>
         </div>
       </div>
 
-      <div className="relative overflow-x-auto scrollbar-hide pb-4">
-        <div className="flex items-start gap-12 min-w-max px-4">
+      <div className="relative overflow-x-auto scrollbar-subtle pb-1">
+        <div className="flex items-stretch gap-8 min-w-max px-1">
           {layers.map((layer, lIdx) => (
-            <div key={lIdx} className="flex flex-col gap-6 justify-center min-h-[200px]">
+            <div key={lIdx} className="flex flex-col gap-3 justify-center">
               {layer.map((node) => (
-                <div 
-                  key={node.id} 
+                <div
+                  key={node.id}
                   id={`plan-node-${node.id}`}
-                  className="w-48 p-3 rounded bg-bg-card border border-divider shadow-sm hover:border-primary/50 transition-all group relative z-10"
+                  className="w-44 p-3 rounded-lg bg-bg-card border border-divider hover:border-primary/40 transition-colors relative z-10"
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] font-bold text-primary opacity-70">#{node.id}</span>
-                    <span className="text-[10px] font-bold text-secondary-text bg-bg-page px-1.5 py-0.5 rounded border border-divider">
-                      {node.est_credits || 0} cr
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-[12px] font-medium text-primary-text leading-snug">
+                      {node.label || "处理中"}
+                    </span>
+                    <span className="text-[10px] font-semibold text-secondary-strong bg-bg-page px-1.5 py-0.5 rounded shrink-0">
+                      {node.est_credits || 0}
                     </span>
                   </div>
-                  <div className="text-[12px] font-bold text-primary-text truncate group-hover:whitespace-normal group-hover:overflow-visible transition-all">
-                    {node.tool.replace(/_/g, " ")}
-                  </div>
-                  <div className="text-[11px] text-secondary-text mt-1.5 leading-tight line-clamp-2 italic">
-                    {node.label || "Processing asset..."}
-                  </div>
-                  
-                  {/* Visual connectors (CSS arrows) */}
                   {lIdx < layers.length - 1 && (
-                    <div className="absolute top-1/2 -right-12 w-12 h-px bg-gradient-to-r from-divider to-transparent" />
+                    <div className="absolute top-1/2 -right-8 w-8 h-px bg-gradient-to-r from-divider to-transparent" />
                   )}
                 </div>
               ))}
@@ -80,12 +68,12 @@ export default function PlanVisualizer({ plan, theme = "dark" }) {
           ))}
         </div>
       </div>
-      
+
       {plan.notes && plan.notes.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-divider">
+        <div className="mt-3 pt-3 border-t border-divider/60">
           {plan.notes.map((note, i) => (
-            <div key={i} className="text-[10px] text-secondary-text flex items-center gap-2">
-              <span className="w-1 h-1 rounded-full bg-primary" /> {note}
+            <div key={i} className="text-[11px] text-secondary-strong flex items-start gap-2 leading-relaxed">
+              <span className="w-1 h-1 rounded-full bg-primary mt-1.5 shrink-0" /> {note}
             </div>
           ))}
         </div>

@@ -89,9 +89,9 @@ async def set_template(session_id: str, request: Request, db: AsyncSession = Dep
     if template in single_kinds:
         # 电商主图六联 / 详情页七段：取第一张产品图，出固定张数
         name, n = single_kinds[template]
-        message = f"🛍 {name}（基于 {labels[0]} 出 {n} 张）"
+        message = f"🛍 生成{name}（{n} 张）"
     else:
-        message = f"🎨 套图：{SET_TEMPLATES[template]['label']}（{len(labels)} 张）"
+        message = f"🎨 套图 · {SET_TEMPLATES[template]['label']}（{len(labels)} 张）"
     return await _enqueue(db, user, session_id, "set_template", {
         "message": message,
         "template": template,
@@ -109,7 +109,7 @@ async def split_image(session_id: str, request: Request, db: AsyncSession = Depe
     if not source:
         raise HTTPException(status_code=422, detail="请先选择要拆分的图片")
     return await _enqueue(db, user, session_id, "split_image", {
-        "message": f"✂️ AI 拆图：{source} → 背景层 + 主体层",
+        "message": "✂️ 拆成可编辑图层（背景 / 主体 / 文字）",
         "source_asset": source,
         "client_request_id": body.get("client_request_id"),
     })
@@ -182,7 +182,7 @@ async def region_edit(session_id: str, request: Request, db: AsyncSession = Depe
     job.credits_reserved = cost
 
     # 用户消息落库（历史可见）
-    message_text = f"🖌 局部编辑 {source_asset}: {prompt}"
+    message_text = f"🖌 局部修改：{prompt}"
     row = await db.get(SessionMessages, session_id)
     user_msg = {"role": "user", "content": message_text, "timestamp": datetime.now(timezone.utc).isoformat()}
     if row is None:

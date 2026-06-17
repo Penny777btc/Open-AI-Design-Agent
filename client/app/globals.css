@@ -40,6 +40,8 @@
   --primary: #fafafa;
   --color-error: #f87171;
   --color-error-bg: rgba(239, 68, 68, 0.1);
+  --color-success: #6ee7a8;
+  --color-success-bg: rgba(52, 211, 153, 0.1);
 }
 
 body {

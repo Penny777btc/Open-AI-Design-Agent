@@ -236,8 +236,8 @@ async def _run_job(job_id: str) -> None:
         # 总结语言跟随用户输入（审计 U3）
         zh = any("一" <= ch <= "鿿" for ch in brief)
         if zh:
-            summary = f"✅ 全部完成：{ok}/{ok + failed} 张已添加到画布" if failed == 0 else (
-                f"⚠️ 完成 {ok}/{ok + failed} 张（{failed} 张失败，积分已退还），已添加到画布"
+            summary = f"✅ 完成啦！{ok} 张已放到画布上" if failed == 0 else (
+                f"⚠️ 完成 {ok} 张，有 {failed} 张没成功（积分已退回），其余已放到画布"
             )
         else:
             summary = f"✅ {ok}/{ok + failed} generated · added to canvas" if failed == 0 else (

@@ -2849,7 +2849,7 @@ const CanvasArea = forwardRef(
 
         {/* 浮动操作条：框选多张 或 单击选中一张图片 都出现（单张也能套图/导出/删除）*/}
         {!maskMode && !showSetPanel && (setSel.size > 0 || selectedId?.startsWith("img")) && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-bg-card/95 backdrop-blur border border-divider rounded-2xl shadow-pop px-2.5 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200 ease-[var(--ease-out)]">
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 whitespace-nowrap bg-bg-card/95 backdrop-blur border border-divider rounded-2xl shadow-pop px-2.5 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200 ease-[var(--ease-out)]">
             <span className="text-[12px] font-semibold text-primary-text px-2">已选 {setSel.size > 0 ? setSel.size : 1} 张</span>
             <button
               onClick={() => { if (setSel.size === 0 && selectedId?.startsWith("img")) setSetSel(new Set([selectedId])); setShowSetPanel(true); }}
