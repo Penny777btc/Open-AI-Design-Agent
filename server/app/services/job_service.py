@@ -429,7 +429,10 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         src = source_cache.get(src_label) if source_cache else None
         if src is None:
             src = await _load_asset_bytes(session_id, src_label)
-        blocks = await detect_text_blocks(src)
+        # plan 期已 OCR（背景 mask 也用了同一批框）→ 直接复用，避免二次识别/坐标漂移
+        blocks = node.args.get("text_blocks")
+        if blocks is None:
+            blocks = await detect_text_blocks(src)
         if blocks:
             await emit(job_id, "canvas_op", {"op": "add_texts", "args": {"ref": src_label, "texts": blocks}})
             # 持久化：blocks JSON 存进 prompt，锚源图坐标，url 占位空（序列化容忍空 url 的 text_layer）
@@ -473,10 +476,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
     # 智能拆解·装饰元素/主体抠图层（纯本地 rembg，cutout_layer 工具）：
     # bbox 裁子图内抠图 → 贴回整帧 → 完整性校验 → 按需 AI 补全（补全后必重抠成透明）
     if node.tool == "cutout_layer":
-        from app.agents.split import (
-            complete_object, cutout_region, cutout_subject_full, dislocation_guard,
-            verify_complete, verify_label_match,
-        )
+        from app.agents.split import cutout_region, cutout_subject_full, dislocation_guard
         from app.providers.base import GeneratedImage
         from app.providers.openai_compat import _png_dims
 
@@ -487,31 +487,32 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             if source_cache is not None:
                 source_cache[src_label] = src
         bbox = node.args.get("bbox") or {}
+        other_boxes = node.args.get("other_boxes") or None  # 邻居框：丢掉串入的相邻对象整块
         is_subject = split_role == "subject"
         # 装饰元素用更柔的 alpha 阈值（半透明不毛刺）+ 更激进的碎片清理；主体用硬阈值
         lift_lo, lift_scale, min_frac = (25, 4, 0.05) if is_subject else (10, 2, 0.15)
 
         if is_subject:
             cut = await loop.run_in_executor(None, lambda: cutout_subject_full(
-                src, bbox, lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac))
+                src, bbox, lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac,
+                other_rel_boxes=other_boxes))
         else:
             cut = await loop.run_in_executor(None, lambda: cutout_region(
-                src, bbox, lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac))
+                src, bbox, lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac,
+                other_rel_boxes=other_boxes))
+            label = node.args.get("label", "")
             # 错位防护：明显抠空/抠偏的装饰层直接丢弃（不静默产出错位层）
             if await loop.run_in_executor(None, lambda: dislocation_guard(cut, bbox)):
-                raise RuntimeError(f"装饰元素「{node.args.get('label', '')}」抠图错位/为空，跳过该层")
+                raise RuntimeError(f"装饰元素「{label}」抠图错位/为空，跳过该层")
+            # 执行期完整性实判（不靠 vision 的 occluded 猜测）：被画框出血 / 被主体遮挡 → 判为
+            # 不完整 → 抛出跳过该层 → 元素自动留在背景里（背景 mask 不含它）。零补全、零幻觉。
+            from app.agents.split import judge_element_complete
 
-        # 完整性校验 + 按需补全（主体 & 每个装饰元素都补——被遮挡/裁切的对象补成完整）。
-        # 元素补全后多做一道「label 复检」：inpaint 偶尔会幻觉成别的东西（曾把"金色餐具"补成小酒瓶），
-        # 复检不通过就丢弃补全、退回原抠图（宁可略残也不要幻觉）。
-        incomplete, _missing = await verify_complete(cut, bbox, bool(node.args.get("occluded")))
-        if incomplete:
-            label = "product" if is_subject else node.args.get("label", "")
-            completed = await complete_object(cut, src, bbox, label,
-                                              lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac)
-            if is_subject or await verify_label_match(completed, label):
-                cut = completed
-            # else：元素补全后已不是它本身 → 保留补全前的 cut
+            subj_out = node_outputs.get("split_subject") if node_outputs else None
+            subj_png = subj_out.get("png") if subj_out else None
+            ok = await loop.run_in_executor(None, lambda: judge_element_complete(cut, subj_png))
+            if not ok:
+                raise RuntimeError(f"装饰元素「{label}」不完整（被遮挡/出血），留在背景层")
 
         w, h = _png_dims(cut) or _decode_frame(src)
         image = GeneratedImage(data=cut, mime="image/png", width=w, height=h, model="rembg-isnet")
@@ -526,7 +527,16 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                 source = await _load_asset_bytes(session_id, source_label)
                 if source_cache is not None:
                     source_cache[source_label] = source
-            if mask_key := node.args.get("mask_key"):
+            if node.args.get("bg_last") and node_outputs is not None:
+                # 背景最后生成：按「真正抠出来的层 alpha 并集 + 文字框」精确挖洞——没抠出来的
+                # 不完整元素不在并集里 → 自动留在背景；衬布/场景永远保留。
+                from app.agents.split import build_bg_hole_mask_from_layers
+
+                layer_pngs = [node_outputs[nid].get("png") for nid in node.args.get("layer_nodes", [])
+                              if nid in node_outputs and node_outputs[nid].get("png")]
+                mask = await loop.run_in_executor(None, lambda: build_bg_hole_mask_from_layers(
+                    source, layer_pngs, node.args.get("text_blocks") or []))
+            elif mask_key := node.args.get("mask_key"):
                 mask = (settings.storage_dir / mask_key).read_bytes()
         last_exc = None
         for _ in range(2):  # 节点级重试
@@ -606,8 +616,12 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         if canvas_x is None:
             canvas_x, canvas_y = planner.next(image.width, image.height)
         if node_outputs is not None:
-            node_outputs[node.id] = {"canvas_x": canvas_x, "canvas_y": canvas_y,
-                                     "width": image.width, "height": image.height, "label": label}
+            entry = {"canvas_x": canvas_x, "canvas_y": canvas_y,
+                     "width": image.width, "height": image.height, "label": label}
+            if node.id.startswith("split_"):  # 智能拆解：缓存抠出 alpha，供主体遮挡实判 + 背景最后挖洞
+                entry["png"] = image.data
+                entry["split_role"] = node.args.get("split_role")
+            node_outputs[node.id] = entry
 
         db.add(Asset(
             session_id=session_id, user_id=user_id, asset_label=label, url=url, storage_key=key,

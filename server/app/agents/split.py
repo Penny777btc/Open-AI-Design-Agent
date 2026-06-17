@@ -66,15 +66,14 @@ SPLIT_ROLES = [
         "key": "bg", "label": "背景层",
         "transparent": False,
         "prompt": (
-            "This image has a transparent HOLE where the MAIN PRODUCT was removed. Inpaint ONLY that hole: "
-            "seamlessly EXTEND the surrounding background SCENE into it — the draped cloth / fabric / silk and its "
-            "folds, the table surface, the backdrop, the ambient light and soft shadows — matching the existing "
-            "texture, color, folds, lighting and perspective, so it looks like the product was simply never placed "
-            "there. Do NOT paint any product, bottle, or new object into the hole — fill it with the natural "
-            "continuation of the cloth / scene only. "
-            "KEEP THE REST OF THE IMAGE EXACTLY AS IT IS — the cloth, fabric, fruit, props, flowers and overall "
-            "scene must stay; do NOT empty or whiten the scene. Output a natural, complete background SCENE with "
-            "the product gone but everything else intact."
+            "This image has transparent HOLES where the foreground product, some props and the overlaid text were "
+            "removed. Inpaint ONLY those holes: seamlessly EXTEND the surrounding background SCENE into them — the "
+            "draped cloth / fabric / silk and its folds, the table surface, the backdrop, the ambient light and "
+            "soft shadows — matching the existing texture, color, folds, lighting and perspective, so it looks like "
+            "those objects were simply never placed there. Do NOT paint any product, new prop, object or text into "
+            "the holes — fill them with the natural continuation of the cloth / scene only. "
+            "KEEP EVERY NON-HOLE PIXEL EXACTLY AS IT IS — the cloth, fabric, and any remaining scene elements must "
+            "stay untouched; do NOT empty or whiten the scene. Output a natural, complete background SCENE."
         ),
     },
     {
@@ -269,12 +268,63 @@ def _alpha_stats(rgba) -> tuple[int, tuple[int, int, int, int] | None]:
     return area, (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
 
 
-def cutout_region(src: bytes, rel_box: dict, *, pad: float = 0.06,
-                  lift_lo: int = 25, lift_scale: int = 4, min_frac: float = 0.05) -> bytes:
-    """按 rel bbox(含 pad) 裁子图 → cutout_subject(lift 参数化) → _clean_fragments
-    → 贴回 W×H 整帧透明画布的原 px 位置。返回整帧 RGBA PNG。
+def _drop_foreign_blobs(cut_png: bytes, ox: int, oy: int,
+                        self_box: tuple, other_boxes: list) -> bytes:
+    """连通块归属裁决：把明显属于「邻居对象」的连通块从本抠图里抹掉（alpha 置 0）。
 
-    多元素分离不串：每个元素独立裁子图 → rembg 只见单对象（物理隔离）→ _clean_fragments 清邻居碎片。
+    每个连通块按质心（全帧坐标 = (ox,oy)+局部）归属：若某邻居框包含该质心、且其框中心比本框中心
+    更近 → 判为邻居、丢弃。保守：只在「邻居明确拥有」时才丢，避免误删本体偏心碎块。
+    解决相邻/重叠对象的串入问题（如酒杯框抓进旁边瓶子、主体抓进盘子边）。
+    """
+    if not other_boxes:
+        return cut_png
+    import numpy as np
+    from PIL import Image
+    from scipy import ndimage
+
+    im = Image.open(io.BytesIO(cut_png)).convert("RGBA")
+    arr = np.array(im)
+    lbl, n = ndimage.label(arr[:, :, 3] > 8)
+    if n <= 1:
+        return cut_png
+
+    def _cx(b):
+        return ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
+
+    def _inside(b, x, y):
+        return b[0] <= x <= b[2] and b[1] <= y <= b[3]
+
+    def _d2(x, y, b):
+        mx, my = _cx(b)
+        return (x - mx) ** 2 + (y - my) ** 2
+
+    changed = False
+    for i in range(1, n + 1):
+        ys, xs = np.where(lbl == i)
+        if len(xs) == 0:
+            continue
+        cx = ox + float(xs.mean())
+        cy = oy + float(ys.mean())
+        in_self = _inside(self_box, cx, cy)
+        d_self = _d2(cx, cy, self_box)
+        if any(_inside(o, cx, cy) and (not in_self or _d2(cx, cy, o) < d_self) for o in other_boxes):
+            arr[ys, xs, 3] = 0  # 邻居明确拥有 → 丢弃该块
+            changed = True
+    if not changed:
+        return cut_png
+    out = io.BytesIO()
+    Image.fromarray(arr, "RGBA").save(out, "PNG")
+    return out.getvalue()
+
+
+def cutout_region(src: bytes, rel_box: dict, *, pad: float = 0.06,
+                  lift_lo: int = 25, lift_scale: int = 4, min_frac: float = 0.05,
+                  other_rel_boxes: list | None = None) -> bytes:
+    """按 rel bbox(含 pad) 裁子图 → cutout_subject(lift 参数化) → _clean_fragments
+    → 邻居块裁决 → 贴回 W×H 整帧透明画布的原 px 位置。返回整帧 RGBA PNG。
+
+    多元素分离不串：每个元素独立裁子图 → rembg 只见单对象（物理隔离）→ _clean_fragments 清邻居碎片
+    → 若给了 other_rel_boxes，再按几何归属丢掉串入的邻居整块（相邻对象 bbox 重叠时关键）。
     """
     from PIL import Image
 
@@ -291,6 +341,10 @@ def cutout_region(src: bytes, rel_box: dict, *, pad: float = 0.06,
     sub.save(sub_buf, "PNG")
     cut = cutout_subject(sub_buf.getvalue(), lift_lo=lift_lo, lift_scale=lift_scale)
     cut = _clean_fragments(cut, min_frac)
+    if other_rel_boxes:  # 邻居块裁决（子图坐标系：原点=裁切框左上 (x0,y0)）
+        self_px = _px_box(rel_box, W, H, 0.0)
+        other_px = [_px_box(b, W, H, 0.0) for b in other_rel_boxes]
+        cut = _drop_foreign_blobs(cut, x0, y0, self_px, other_px)
     cut_im = Image.open(io.BytesIO(cut)).convert("RGBA")
     frame = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     frame.alpha_composite(cut_im, (x0, y0))
@@ -300,7 +354,7 @@ def cutout_region(src: bytes, rel_box: dict, *, pad: float = 0.06,
 
 
 def cutout_subject_full(src: bytes, rel_box: dict, *, lift_lo: int = 25, lift_scale: int = 4,
-                        min_frac: float = 0.05) -> bytes:
+                        min_frac: float = 0.05, other_rel_boxes: list | None = None) -> bytes:
     """主体抠图双路（§4，质量更优）：整图直抠 ∪ 与 subject bbox 求交，
     取落在 bbox 内 alpha 面积更大者；若 bbox 内整图直抠面积不占优，回退 cutout_region。
     返回整帧 W×H 透明 PNG。"""
@@ -338,8 +392,14 @@ def cutout_subject_full(src: bytes, rel_box: dict, *, lift_lo: int = 25, lift_sc
     if full_clipped is not None and a_full >= a_region:
         out = io.BytesIO()
         full_clipped.save(out, "PNG")
-        return out.getvalue()
-    return region
+        result = out.getvalue()
+    else:
+        result = region
+    if other_rel_boxes:  # 邻居块裁决（整帧坐标系，原点 0,0）：丢掉串入的盘子边/邻物
+        self_px = _px_box(rel_box, W, H, 0.0)
+        other_px = [_px_box(b, W, H, 0.0) for b in other_rel_boxes]
+        result = _drop_foreign_blobs(result, 0, 0, self_px, other_px)
+    return result
 
 
 def _blank_frame(W: int, H: int) -> bytes:
@@ -525,6 +585,78 @@ def build_completion_mask(layer_png: bytes, rel_box: dict) -> bytes | None:
     return out.getvalue()
 
 
+def judge_element_complete(cut_png: bytes, subj_png: bytes | None = None, *,
+                           edge_frac: float = 0.08, subj_adj_frac: float = 0.24) -> bool:
+    """执行期实判：这个抠出来的元素「是否完整」（不靠 vision 的 occluded 猜测）。
+
+    两条几何判据（都满足才算完整）：
+    1) 出血裁切：元素轮廓落在图像边缘的比例 > edge_frac → 被画框切掉 → 不完整。
+    2) 主体遮挡：元素轮廓紧贴主体剪影的比例 > subj_adj_frac → 一截藏在主体后面 → 不完整。
+    保守取阈值（宁可多抠成层，也少误判把好元素丢进背景）。返回 True=完整(抠成独立层)。
+    """
+    import numpy as np
+    from PIL import Image
+    from scipy import ndimage
+
+    a = np.array(Image.open(io.BytesIO(cut_png)).convert("RGBA"))[:, :, 3] > 40
+    if int(a.sum()) < 64:
+        return False  # 几乎抠空 → 当不完整，留背景
+    H, W = a.shape
+    boundary = a & ~ndimage.binary_erosion(a)
+    nb = int(boundary.sum())
+    if nb == 0:
+        return True
+
+    # 1) 画框出血
+    edge = np.zeros_like(a)
+    edge[:3, :] = edge[-3:, :] = edge[:, :3] = edge[:, -3:] = True
+    if int((boundary & edge).sum()) / nb > edge_frac:
+        return False
+
+    # 2) 主体遮挡（贴着主体剪影）
+    if subj_png:
+        sa = np.array(Image.open(io.BytesIO(subj_png)).convert("RGBA"))[:, :, 3] > 40
+        if sa.shape != a.shape:
+            sa = np.array(Image.open(io.BytesIO(subj_png)).convert("RGBA").resize((W, H)))[:, :, 3] > 40
+        near = ndimage.binary_dilation(sa, iterations=4) & ~sa  # 主体外缘 4px 环
+        if int((boundary & near).sum()) / nb > subj_adj_frac:
+            return False
+    return True
+
+
+def build_bg_hole_mask_from_layers(src: bytes, layer_pngs: list, text_blocks: list | None = None,
+                                   *, pad: float = 0.012, dilate: int = 4) -> bytes:
+    """背景洞 mask（执行期/背景最后生成）：把「已成功抠出的层」alpha 并集 + 文字框挖成洞。
+
+    用真实抠出的形状（而非 bbox）精确挖洞，外扩 dilate px 吃掉残边；不完整(未抠出)的元素
+    不在 layer_pngs 里 → 不挖 → 自动留在背景。其余像素 255 保留（衬布/场景/残留元素）。
+    """
+    import numpy as np
+    from PIL import Image
+    from scipy import ndimage
+
+    W, H = _decode_size(src)
+    hole = np.zeros((H, W), dtype=bool)
+    for png in layer_pngs:
+        if not png:
+            continue
+        im = Image.open(io.BytesIO(png)).convert("RGBA")
+        if im.size != (W, H):
+            im = im.resize((W, H), Image.LANCZOS)
+        hole |= np.array(im)[:, :, 3] > 40
+    if hole.any() and dilate:
+        hole = ndimage.binary_dilation(hole, iterations=dilate)
+    for b in (text_blocks or []):
+        x0, y0, x1, y1 = _px_box(b, W, H, pad)
+        if x1 > x0 and y1 > y0:
+            hole[y0:y1, x0:x1] = True
+    mask = np.zeros((H, W, 4), dtype=np.uint8)
+    mask[:, :, 3] = np.where(hole, 0, 255).astype(np.uint8)
+    out = io.BytesIO()
+    Image.fromarray(mask, "RGBA").save(out, "PNG")
+    return out.getvalue()
+
+
 _COMPLETE_PROMPT = (
     "Complete this partially occluded/clipped object into a single WHOLE, intact {label}. "
     "Inpaint ONLY the transparent (missing) area so it becomes complete and natural, "
@@ -532,19 +664,18 @@ _COMPLETE_PROMPT = (
 )
 
 
-def build_bg_hole_mask(src: bytes, layout: dict, *, pad: float = 0.03) -> bytes:
-    """背景洞 mask：**只挖主体（产品）**bbox 设透明（要补的洞），其余 255（保留）。
+def build_bg_hole_mask(src: bytes, boxes: list[dict], *, pad: float = 0.03) -> bytes:
+    """背景洞 mask：把传入 boxes（主体 + 完整元素 + 文字）挖空（透明=要补的洞），其余 255（保留）。
 
-    刻意只挖主体：衬布/桌面/水果/道具/氛围都是「背景场景」的一部分，要保留——背景层应是
-    『去掉主产品后的完整自然场景』，而非抠成空白板。装饰元素另有独立图层（叠在场景之上）。
-    按源图真实解码像素 W×H 绘制（mask 同尺寸硬约束），rel-bbox × 真实 W/H 整数化后 clamp。
+    分层规则（用户定义）：背景层 = 场景 + 不完整(被遮挡)的元素。能干净抠出的（主体、完整元素、
+    文字）从背景挖走、由 edit 用周围场景自然补上；抠不干净的（被遮挡元素）不挖、留在背景里。
+    衬布/桌面/氛围本就是场景，永远保留。按源图真实像素 W×H 绘制（mask 同尺寸硬约束）。
     """
     import numpy as np
     from PIL import Image
 
     W, H = _decode_size(src)
     mask_a = np.full((H, W), 255, dtype=np.uint8)
-    boxes = [layout["subject"]]  # 仅主体；元素/衬布留在背景场景里
     for b in boxes:
         x0, y0, x1, y1 = _px_box(b, W, H, pad)
         if x1 > x0 and y1 > y0:
@@ -655,70 +786,76 @@ async def build_smart_split_plan(session_id: str, source_label: str, src_bytes: 
         return build_split_plan(source_label)  # 识别失败 → 三层降级（§7.1 总开关）
 
     elements = layout["elements"]
+    # 执行期实判：plan 期不靠 vision 的 occluded 猜测，先把每个元素都尝试抠；抠出来后按
+    # 「实际是否完整(画框出血/主体遮挡)」决定成层还是留背景。z 序按 in_front 排（执行序≠z序）。
     behind = [e for e in elements if not e["in_front"]]
     front = [e for e in elements if e["in_front"]]
 
-    # 背景洞 mask 在 plan 期预构造（§2.1）：前景并集洞，按真实像素尺寸绘制
-    bg_args = {"prompt": SPLIT_ROLES[0]["prompt"], "source_asset": source_label,
-               "split_role": "bg", "z_index": 0}
+    # 文字框：plan 期 OCR 一次——既用于背景挖掉文字、又复用给文字层（避免二次识别/坐标漂移）
     try:
-        from app.routers.chat import _write_mask
-
-        bg_mask = build_bg_hole_mask(src_bytes, layout)
-        bg_args["mask_key"] = _write_mask(session_id, bg_mask)
+        text_blocks = await detect_text_blocks(src_bytes) if src_bytes else []
     except Exception:
-        pass  # mask 失败 → 背景走无 mask 整图重绘（§7.1 降级 4）
+        text_blocks = []
 
+    # 邻居块裁决用：每个对象抠图时把「其它对象」的框传下去，丢掉串入的邻居整块
+    def _box(e: dict) -> dict:
+        return {k: e[k] for k in ("relX", "relY", "relW", "relH")}
+
+    all_objs = [layout["subject"], *elements]
+    z_subject = 1 + len(behind)                       # behind: z=1..k；主体: k+1；front: k+2..
+    subject_id = "split_subject"
     nodes: list[PlanNode] = []
-    prev: list[str] = []
+    element_ids: list[str] = []
 
-    def _chain(node: PlanNode):
-        nonlocal prev
-        node.depends = list(prev)  # 单链：每个节点只依赖上一个 → 串行 emit → z 序稳定
-        nodes.append(node)
-        prev = [node.id]
-
-    # 1 底 背景（z=0）：edit_image + mask 走通用带 mask 分支，输出经 _resize_to_frame 回帧
-    _chain(PlanNode(id="split_bg", tool="edit_image", label="智能拆解 · 背景层", args=bg_args))
-
-    z = 1
-    # behind 装饰元素（主体之后）
-    for i, el in enumerate(behind):
-        _chain(PlanNode(
-            id=f"split_el{i + 1}", tool="cutout_layer", label=f"智能拆解 · 装饰「{el['label']}」",
-            args={"source_asset": source_label, "split_role": "element", "bbox": el,
-                  "label": el["label"], "occluded": el["occluded"], "z_index": z},
-        ))
-        z += 1
-
-    # 主体（behind 之上、front 之下）
-    _chain(PlanNode(
-        id="split_subject", tool="cutout_layer", label="智能拆解 · 主体层",
+    # 主体最先抠（z=k+1）——元素的「被主体遮挡」实判要用主体 alpha，故主体须先于元素执行
+    nodes.append(PlanNode(
+        id=subject_id, tool="cutout_layer", label="智能拆解 · 主体层", depends=[],
         args={"source_asset": source_label, "split_role": "subject", "bbox": layout["subject"],
-              "occluded": layout["subject"]["occluded"], "z_index": z},
+              "z_index": z_subject, "other_boxes": [_box(o) for o in elements]},
     ))
-    z += 1
 
-    # front 装饰元素（主体之前）
-    for j, el in enumerate(front):
-        _chain(PlanNode(
-            id=f"split_elf{j + 1}", tool="cutout_layer", label=f"智能拆解 · 前景「{el['label']}」",
-            args={"source_asset": source_label, "split_role": "element", "bbox": el,
-                  "label": el["label"], "occluded": el["occluded"], "z_index": z},
+    # 装饰元素：都 depends=[主体]（拿到主体 alpha 后实判完整性）。behind 在主体下、front 在主体上
+    for i, el in enumerate(behind):
+        nid = f"split_el{i + 1}"
+        element_ids.append(nid)
+        nodes.append(PlanNode(
+            id=nid, tool="cutout_layer", label=f"智能拆解 · 装饰「{el['label']}」", depends=[subject_id],
+            args={"source_asset": source_label, "split_role": "element", "bbox": el, "is_element": True,
+                  "label": el["label"], "z_index": i + 1,
+                  "other_boxes": [_box(o) for o in all_objs if o is not el]},
         ))
-        z += 1
+    for j, el in enumerate(front):
+        nid = f"split_elf{j + 1}"
+        element_ids.append(nid)
+        nodes.append(PlanNode(
+            id=nid, tool="cutout_layer", label=f"智能拆解 · 前景「{el['label']}」", depends=[subject_id],
+            args={"source_asset": source_label, "split_role": "element", "bbox": el, "is_element": True,
+                  "label": el["label"], "z_index": z_subject + 1 + j,
+                  "other_boxes": [_box(o) for o in all_objs if o is not el]},
+        ))
 
-    # 末 文字层（z=10000，最上）
-    _chain(PlanNode(
-        id="split_text", tool="extract_text", label="智能拆解 · 文字层",
-        args={"source_asset": source_label, "split_role": "text", "z_index": 10000},
+    # 文字层（z=10000，最上）：独立执行，用 plan 期 OCR 结果
+    nodes.append(PlanNode(
+        id="split_text", tool="extract_text", label="智能拆解 · 文字层", depends=[],
+        args={"source_asset": source_label, "split_role": "text", "z_index": 10000,
+              "text_blocks": text_blocks},
+    ))
+
+    # 背景最后生成（z=0，依赖主体+全部元素）：mask 在执行期按「真正抠出来的层 alpha 并集 + 文字框」
+    # 精确挖洞——没抠出来的(不完整)元素不在并集里 → 自动留在背景。衬布/场景永远保留。
+    nodes.append(PlanNode(
+        id="split_bg", tool="edit_image", label="智能拆解 · 背景层",
+        depends=[subject_id, *element_ids],
+        args={"prompt": SPLIT_ROLES[0]["prompt"], "source_asset": source_label,
+              "split_role": "bg", "z_index": 0, "bg_last": True,
+              "text_blocks": text_blocks, "layer_nodes": [subject_id, *element_ids]},
     ))
 
     return Plan(
         mode="plan", title="智能四层拆解（背景 / 装饰 / 主体 / 文字）", nodes=nodes,
         notes=[
-            "把成品图智能拆成『背景 / 装饰元素 / 主体 / 文字』四类完整图层，叠回原位 → 可分别编辑、可导出分层 PSD",
-            "残缺/被遮挡的对象会自动 AI 补全为完整对象；背景洞自动补绘",
+            "把成品图智能拆成『背景 / 装饰元素 / 主体 / 文字』四类图层，叠回原位 → 可分别编辑、可导出分层 PSD",
+            "完整元素抠成独立层；被遮挡/出血的不完整元素留在背景；背景最后按真实抠出形状精确补绘",
         ],
     )
 
