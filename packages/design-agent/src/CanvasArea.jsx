@@ -1833,12 +1833,21 @@ const CanvasArea = forwardRef(
         const fam = b.fontFamily
           ? `${b.fontFamily}, Noto Sans SC, sans-serif`
           : "Noto Sans SC, Inter, sans-serif";
+        const txt = String(b.text || "");
+        const lineCount = Math.max(1, txt.split("\n").length);
+        const boxW = Math.max(20, (b.relW || 0.3) * bw);
+        // relH 是整块高度；多行块按行数均分，否则每行都用整块高度 → 块涨成数倍、压住下方文案
+        let fontSize = Math.max(8, Math.round(((b.relH || 0.04) * bh * 0.82) / lineCount));
+        // 收缩适配：长标题在窄框里会自动换行、串到下一行压住副标题 → 按最长行字符数估算，
+        // 必要时缩小字号让它在一行放下（CJK 每字≈字号宽，留 4% 余量）
+        const longestLine = Math.max(1, ...txt.split("\n").map((s) => s.length));
+        const fitSize = Math.floor((boxW * 0.96) / longestLine);
+        if (fitSize < fontSize) fontSize = Math.max(8, fitSize);
         const common = {
           x: bx + (b.relX || 0) * bw,
           y: by + (b.relY || 0) * bh,
-          width: Math.max(20, (b.relW || 0.3) * bw),
-          // relH 是整块高度；多行块按行数均分，否则每行都用整块高度 → 块涨成数倍、压住下方文案
-          fontSize: Math.max(8, Math.round(((b.relH || 0.04) * bh * 0.82) / Math.max(1, String(b.text || "").split("\n").length))),
+          width: boxW,
+          fontSize,
           align: b.align || "left",
           fontFamily: fam,
           fontStyle: b.fontStyle || "normal",
