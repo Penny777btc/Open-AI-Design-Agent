@@ -66,15 +66,15 @@ SPLIT_ROLES = [
         "key": "bg", "label": "背景层",
         "transparent": False,
         "prompt": (
-            "Extract a CLEAN, EMPTY BACKGROUND PLATE from this design image. Remove the MAIN PRODUCT, AND remove "
-            "EVERY foreground / decorative object — props, fruit, glassware, bowls, utensils, flowers, garnishes — "
-            "AND ALL overlaid marketing text / titles / captions / icon rows. Realistically inpaint every removed "
-            "area using ONLY the plain background surface (the table / fabric / backdrop / gradient) that sits "
-            "behind it, matching the existing background color, lighting, texture and perspective. "
-            "CRITICAL: do NOT regenerate, invent, or add ANY new objects, products, fruit, props, garnishes, or "
-            "text to fill the gaps — fill them with the EMPTY background ONLY, as if nothing was ever placed there. "
-            "Output ONLY the clean empty background scene — no product, no props, no fruit, no text, no floating "
-            "shadow, no remnants of any removed object."
+            "This image has a transparent HOLE where the MAIN PRODUCT was removed. Inpaint ONLY that hole: "
+            "seamlessly EXTEND the surrounding background SCENE into it — the draped cloth / fabric / silk and its "
+            "folds, the table surface, the backdrop, the ambient light and soft shadows — matching the existing "
+            "texture, color, folds, lighting and perspective, so it looks like the product was simply never placed "
+            "there. Do NOT paint any product, bottle, or new object into the hole — fill it with the natural "
+            "continuation of the cloth / scene only. "
+            "KEEP THE REST OF THE IMAGE EXACTLY AS IT IS — the cloth, fabric, fruit, props, flowers and overall "
+            "scene must stay; do NOT empty or whiten the scene. Output a natural, complete background SCENE with "
+            "the product gone but everything else intact."
         ),
     },
     {
@@ -532,17 +532,19 @@ _COMPLETE_PROMPT = (
 )
 
 
-def build_bg_hole_mask(src: bytes, layout: dict, *, pad: float = 0.02) -> bytes:
-    """背景洞 mask：主体 ∪ 所有元素 ∪ 文字 bbox 的并集设透明（要补的洞），其余 255（保留）。
+def build_bg_hole_mask(src: bytes, layout: dict, *, pad: float = 0.03) -> bytes:
+    """背景洞 mask：**只挖主体（产品）**bbox 设透明（要补的洞），其余 255（保留）。
 
-    按源图真实解码像素 W×H 绘制（§6 mask 同尺寸硬约束），rel-bbox × 真实 W/H 整数化后 clamp。
+    刻意只挖主体：衬布/桌面/水果/道具/氛围都是「背景场景」的一部分，要保留——背景层应是
+    『去掉主产品后的完整自然场景』，而非抠成空白板。装饰元素另有独立图层（叠在场景之上）。
+    按源图真实解码像素 W×H 绘制（mask 同尺寸硬约束），rel-bbox × 真实 W/H 整数化后 clamp。
     """
     import numpy as np
     from PIL import Image
 
     W, H = _decode_size(src)
     mask_a = np.full((H, W), 255, dtype=np.uint8)
-    boxes = [layout["subject"]] + list(layout.get("elements") or [])
+    boxes = [layout["subject"]]  # 仅主体；元素/衬布留在背景场景里
     for b in boxes:
         x0, y0, x1, y1 = _px_box(b, W, H, pad)
         if x1 > x0 and y1 > y0:
