@@ -610,6 +610,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             kind="image", mime=image.mime, width=image.width, height=image.height,
             model=image.model, prompt=prompt, source_tool=node.tool, job_id=job_id,
             canvas_x=canvas_x, canvas_y=canvas_y, z_index=node.args.get("z_index"),
+            split_role=node.args.get("split_role"), split_label=node.args.get("label"),
         ))
         # 计费：审批时已整单预扣（reserve），节点成功无需再记账；失败由 refund_node 退还
         await db.commit()
@@ -628,6 +629,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         asset_payload["canvas_y"] = canvas_y
     if node.args.get("split_role"):
         asset_payload["split_role"] = node.args["split_role"]
+        if node.args.get("label"):
+            asset_payload["split_label"] = node.args["label"]  # 元素人类名 → PSD 语义层名
     if node.args.get("z_index") is not None:
         asset_payload["z_index"] = node.args["z_index"]  # 四层合成：显式 z 序，刷新后仍按层叠正确堆叠
     if node.args.get("set_template"):

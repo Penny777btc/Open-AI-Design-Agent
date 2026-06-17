@@ -1037,56 +1037,85 @@ const CanvasArea = forwardRef(
       im.onerror = () => rej(new Error("img load failed"));
       im.src = src;
     });
-    // 把一段文字按其样式画到独立画布（给 PSD 文字层提供正确外观）。scale=导出放大倍数。
-    const _renderText = (n, scale = 1) => {
+    // 颜色：#RGB/#RRGGBB/#RRGGBBAA → {r,g,b}（忽略 alpha，alpha 由 opacity 表达）
+    const _rgb = (hex) => {
+      let h = (hex || "#000000").replace("#", "");
+      if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+      h = h.slice(0, 6).padEnd(6, "0");
+      const n = parseInt(h, 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    };
+    // 文字栅格外观。fillOnly=true 只画填充——投影/描边交给 PS 图层效果(effects)，不烤死、不双影，pad 也收小。
+    const _renderText = (n, scale = 1, fillOnly = true) => {
       const fs = Math.round((n.fontSize || 24) * scale);
       const bold = (n.fontStyle || "").includes("bold");
       const font = `${bold ? "bold " : ""}${fs}px ${n.fontFamily || "sans-serif"}`;
       const meas = document.createElement("canvas").getContext("2d");
       meas.font = font;
       const lines = String(n.text || "").split("\n");
-      const sw = (n.strokeWidth || 0) * scale;
-      const pad = Math.ceil(fs * 0.5) + sw * 2 + (n.shadowBlur || 0) * scale;
+      const sw = fillOnly ? 0 : (n.strokeWidth || 0) * scale;
+      const pad = Math.ceil(fs * 0.22) + sw * 2 + (fillOnly ? 0 : (n.shadowBlur || 0) * scale);
       const lineH = Math.ceil(fs * 1.25);
       const textW = Math.max(1, ...lines.map((l) => Math.ceil(meas.measureText(l).width)));
       const c = document.createElement("canvas");
       c.width = textW + pad * 2;
       c.height = lineH * lines.length + pad * 2;
       const ctx = c.getContext("2d");
-      ctx.font = font;
-      ctx.textBaseline = "top";
-      ctx.textAlign = "left";
+      ctx.font = font; ctx.textBaseline = "top"; ctx.textAlign = "left";
       lines.forEach((line, i) => {
         const y = pad + i * lineH;
-        if (n.shadowColor && n.shadowBlur) {
-          ctx.save();
-          ctx.shadowColor = n.shadowColor;
-          ctx.shadowBlur = (n.shadowBlur || 0) * scale;
-          ctx.fillStyle = n.fill || "#000";
-          ctx.fillText(line, pad, y);
-          ctx.restore();
+        if (!fillOnly && n.shadowColor && n.shadowBlur) {
+          ctx.save(); ctx.shadowColor = n.shadowColor; ctx.shadowBlur = (n.shadowBlur || 0) * scale;
+          ctx.fillStyle = n.fill || "#000"; ctx.fillText(line, pad, y); ctx.restore();
         }
-        if (n.stroke && sw) {
-          ctx.lineJoin = "round";
-          ctx.strokeStyle = n.stroke;
-          ctx.lineWidth = sw;
-          ctx.strokeText(line, pad, y);
+        if (!fillOnly && n.stroke && sw) {
+          ctx.lineJoin = "round"; ctx.strokeStyle = n.stroke; ctx.lineWidth = sw; ctx.strokeText(line, pad, y);
         }
-        ctx.fillStyle = n.fill || "#000";
-        ctx.fillText(line, pad, y);
+        ctx.fillStyle = n.fill || "#000"; ctx.fillText(line, pad, y);
       });
-      return { canvas: c, pad };
+      return { canvas: c, pad, ascent: Math.round(fs * 0.8) };
     };
+    // 投影/描边 → PS 可编辑图层效果（不再烤死进栅格）。ag-psd 的距离/大小/角度需 {value,units}。
+    const _px = (v) => ({ value: Math.round(v), units: "Pixels" });
+    const _textEffects = (n, scale) => {
+      const eff = {};
+      if (n.shadowColor && (n.shadowBlur || n.shadowOffsetX || n.shadowOffsetY)) {
+        const dx = (n.shadowOffsetX || 0) * scale, dy = (n.shadowOffsetY || 0) * scale;
+        eff.dropShadow = [{
+          enabled: true, present: true, blendMode: "multiply", color: _rgb(n.shadowColor),
+          opacity: n.shadowOpacity ?? 0.5, useGlobalLight: false,
+          angle: { value: Math.round((Math.atan2(-dy, -dx) * 180) / Math.PI), units: "Angle" },
+          distance: _px(Math.hypot(dx, dy)), size: _px((n.shadowBlur || 0) * scale),
+        }];
+      }
+      if (n.stroke && n.strokeWidth) {
+        eff.stroke = [{
+          enabled: true, present: true, size: _px(Math.max(1, n.strokeWidth * scale)),
+          position: "outside", fillType: "color", color: _rgb(n.stroke), opacity: 1, blendMode: "normal",
+        }];
+      }
+      return Object.keys(eff).length ? eff : undefined;
+    };
+    // 语义层名：用拆解角色/人类名，绝不暴露 asset_99 这类内部 id
+    const _imgName = (n) => {
+      if (n.splitRole === "bg") return "背景";
+      if (n.splitRole === "subject") return n.splitLabel ? `主体 · ${n.splitLabel}` : "主体 · 产品";
+      if (n.splitRole === "element") return `元素 · ${n.splitLabel || "未命名"}`;
+      return n.assetLabel ? `图层 · ${n.assetLabel}` : "图层";
+    };
+    const _CAT_NAME = { bg: "背景", element: "装饰元素", subject: "主体", text: "文案", other: "图层" };
     const exportPSD = async () => {
-      let imgs = images.filter((i) => setSel.has(i.id));
-      if (imgs.length === 0 && selectedId?.startsWith("img")) imgs = images.filter((i) => i.id === selectedId);
-      if (imgs.length === 0) imgs = images;
+      // P0-7：导出跳过隐藏层
+      let imgs = images.filter((i) => setSel.has(i.id) && !i.hidden);
+      if (imgs.length === 0 && selectedId?.startsWith("img")) imgs = images.filter((i) => i.id === selectedId && !i.hidden);
+      if (imgs.length === 0) imgs = images.filter((i) => !i.hidden);
       if (imgs.length === 0) { toast.error("画布上没有图片可导出"); return; }
       const minX = Math.min(...imgs.map((n) => n.x));
       const minY = Math.min(...imgs.map((n) => n.y));
       const maxX = Math.max(...imgs.map((n) => n.x + (n.width || 200)));
       const maxY = Math.max(...imgs.map((n) => n.y + (n.height || 200)));
       const txts = texts.filter((t) => {
+        if (t.hidden) return false;
         const cx = t.x + (t.width || 100) / 2;
         const cy = t.y + (t.fontSize || 24) / 2;
         return cx >= minX && cx <= maxX && cy >= minY && cy <= maxY;
@@ -1095,8 +1124,7 @@ const CanvasArea = forwardRef(
       setExportingPsd(true);
       try {
         const { writePsd } = await import("ag-psd");
-        // 先把图片都加载出来，按「原生分辨率」导出（画布上显示的是缩小版，直接导出会糊且尺寸过小）。
-        // scale = 把分辨率最高的那张图还原到原生尺寸的倍数，全图按它放大 → 清晰、尺寸够用。
+        // 按原生分辨率导出（画布是缩小版）。scale = 还原最高分辨率图到原生尺寸的倍数，封顶 8×。
         const imgMap = new Map();
         let scale = 1;
         for (const n of imgs) {
@@ -1104,14 +1132,15 @@ const CanvasArea = forwardRef(
           imgMap.set(n.id, img);
           if (n.width) scale = Math.max(scale, (img.naturalWidth || n.width) / n.width);
         }
-        scale = Math.min(Math.max(scale, 1), 8); // 封顶 8 倍，防尺寸失控
+        scale = Math.min(Math.max(scale, 1), 8);
         const W = Math.round((maxX - minX) * scale);
         const H = Math.round((maxY - minY) * scale);
         const nodes = [
           ...imgs.map((n) => ({ ...n, _kind: "img" })),
           ...txts.map((n) => ({ ...n, _kind: "txt" })),
-        ].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)); // 图层从下到上
-        const children = [];
+        ].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)); // 自底向上
+        // 渲染成扁平层（带分类），再按「连续同类」打包成文件夹 → 不改任何像素叠放
+        const rendered = [];
         for (const n of nodes) {
           const left = Math.round((n.x - minX) * scale);
           const top = Math.round((n.y - minY) * scale);
@@ -1121,43 +1150,64 @@ const CanvasArea = forwardRef(
             const h = Math.max(1, Math.round((n.height || img.naturalHeight) * scale));
             const cv = document.createElement("canvas");
             cv.width = w; cv.height = h;
-            cv.getContext("2d").drawImage(img, 0, 0, w, h); // 从原生大图绘制 → 清晰
-            children.push({ name: n.assetLabel ? `图片 · ${n.assetLabel}` : "背景图片", left, top, canvas: cv });
+            cv.getContext("2d").drawImage(img, 0, 0, w, h);
+            rendered.push({ cat: n.splitRole || "other", layer: { name: _imgName(n), left, top, canvas: cv } });
           } else {
-            const { canvas: tcv, pad } = _renderText(n, scale);
-            const tx = left - pad, ty = top - pad;
-            children.push({
-              name: `文字 · ${String(n.text || "").replace(/\n/g, " ").slice(0, 14)}`,
-              left: tx, top: ty, canvas: tcv,
+            const { canvas: tcv, pad, ascent } = _renderText(n, scale, true);
+            rendered.push({ cat: "text", layer: {
+              name: `文字 · ${String(n.text || "").replace(/\n/g, " ").slice(0, 16)}`,
+              left: left - pad, top: top - pad, canvas: tcv,
+              effects: _textEffects(n, scale),
               text: {
                 text: String(n.text || ""),
-                transform: [1, 0, 0, 1, left, top],
+                // P0-8：基线 = 栅格顶对齐文字 → 可编辑文字与栅格预览精确重合，消除 pad 错位
+                transform: [1, 0, 0, 1, left, top + ascent],
                 style: {
                   font: { name: (n.fontFamily || "sans-serif").split(",")[0].replace(/['"]/g, "").trim() },
                   fontSize: Math.round((n.fontSize || 24) * scale),
-                  fillColor: _hexToRgb(n.fill),
+                  fillColor: _rgb(n.fill), fauxBold: (n.fontStyle || "").includes("bold"),
+                  autoLeading: false, leading: Math.ceil((n.fontSize || 24) * scale * 1.25),
+                  tracking: Math.round(((n.letterSpacing || 0) / (n.fontSize || 24)) * 1000), // 1/1000 em
                 },
                 paragraphStyle: { justification: n.align === "center" ? "center" : n.align === "right" ? "right" : "left" },
               },
-            });
+            } });
           }
         }
-        // 合并预览图（composite）：预览/部分软件只显示这张拼合图，缺了就整片黑。
-        // 按图层顺序把每层画布叠到一张总画布，作为 PSD 顶层合成图。
+        // 合成预览（防全黑）：按扁平叠放绘制
         const flat = document.createElement("canvas");
         flat.width = W; flat.height = H;
         const fctx = flat.getContext("2d");
-        for (const ch of children) {
-          if (ch.canvas) fctx.drawImage(ch.canvas, ch.left || 0, ch.top || 0);
+        for (const r of rendered) if (r.layer.canvas) fctx.drawImage(r.layer.canvas, r.layer.left || 0, r.layer.top || 0);
+        // P0-3：连续同类 → 文件夹（背景 / 装饰元素·后景 / 主体 / 装饰元素·前景 / 文案），默认折叠，不改叠放
+        const groups = [];
+        let subjectSeen = false;
+        for (const r of rendered) {
+          if (r.cat === "subject") subjectSeen = true;
+          const last = groups[groups.length - 1];
+          if (last && last.cat === r.cat) { last.items.push(r.layer); continue; }
+          let name = _CAT_NAME[r.cat] || "图层";
+          if (r.cat === "element") name = subjectSeen ? "装饰元素 · 前景" : "装饰元素 · 后景";
+          groups.push({ cat: r.cat, name, items: [r.layer] });
         }
-        const buffer = writePsd({ width: W, height: H, children, canvas: flat }, { generateThumbnail: true });
+        const used = {};
+        const children = groups.map((g) => {
+          used[g.name] = (used[g.name] || 0) + 1;
+          return { name: used[g.name] > 1 ? `${g.name} ${used[g.name]}` : g.name, opened: false, children: g.items };
+        });
+        const psd = { width: W, height: H, children, canvas: flat };
+        // P0-6：内嵌 sRGB ICC（有 profile 二进制则用；空 = 未标记 sRGB，由 PS 工作区指派——sRGB 工作流下色准一致）
+        const SRGB_ICC = null;
+        if (SRGB_ICC) psd.imageResources = { iccProfile: SRGB_ICC };
+        const buffer = writePsd(psd, { generateThumbnail: true });
         const blob = new Blob([buffer], { type: "image/vnd.adobe.photoshop" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = url; a.download = `picsmith_分层_${W}x${H}.psd`;
+        const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12); // yyyymmddhhmm
+        a.href = url; a.download = `picsmith_分层_${W}x${H}_${ts}.psd`;
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
-        toast.success(`已导出分层 PSD（${children.length} 层：${imgs.length} 图 + ${txts.length} 文字）`);
+        toast.success(`已导出分层 PSD（${rendered.length} 层 / ${children.length} 组）`);
       } catch (e) {
         console.error(e);
         toast.error("PSD 导出失败：" + (e.message || "").slice(0, 60));
@@ -1546,7 +1596,7 @@ const CanvasArea = forwardRef(
       setContextMenu(null);
     };
 
-    const addImage = (src, x, y, width, height, onLoaded, assetLabel, setTemplate, setContent, zIndex) => {
+    const addImage = (src, x, y, width, height, onLoaded, assetLabel, setTemplate, setContent, zIndex, splitRole, splitLabel) => {
       if (!src) return;
       const stage = stageRef.current;
       if (!stage) {
@@ -1595,6 +1645,9 @@ const CanvasArea = forwardRef(
             rotation: 0,
             // 四层合成：显式层叠序，避免图片 onload 异步到达导致的堆叠错乱（背景压住主体等）
             zIndex: zIndex || 0,
+            // 智能拆解语义（供导出 PSD 语义命名/分组）
+            splitRole: splitRole || null,
+            splitLabel: splitLabel || null,
           },
         ]);
         // 套图混合方案：AI 出干净底图后，在图上叠【固定模板文字】（位置/字体/字号锁死、

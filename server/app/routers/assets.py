@@ -21,6 +21,8 @@ def _serialize(asset: Asset) -> dict:
         "canvas_x": asset.canvas_x,
         "canvas_y": asset.canvas_y,
         "z_index": asset.z_index,
+        "split_role": asset.split_role,
+        "split_label": asset.split_label,
     }
 
 

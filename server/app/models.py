@@ -110,6 +110,9 @@ class Asset(Base):
     canvas_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 层叠序（四层合成：背景<装饰<阴影<主体<前景<文案）。空=不参与显式堆叠，按插入序渲染
     z_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 智能拆解的语义角色与人类可读名（供 PSD 语义命名/分组；空=非拆解层）
+    split_role: Mapped[str | None] = mapped_column(String(16), nullable=True)   # bg | element | subject | text
+    split_label: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 如「金色餐叉」
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
