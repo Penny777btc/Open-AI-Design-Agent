@@ -82,11 +82,14 @@ async def set_template(session_id: str, request: Request, db: AsyncSession = Dep
     template = body.get("template")
     labels = body.get("asset_labels") or []
     single_kinds = {"main6": ("电商主图六联", 6), "detail7": ("电商详情页七段", 7)}
-    if template not in single_kinds and template not in SET_TEMPLATES:
+    if template not in single_kinds and template != "composite4" and template not in SET_TEMPLATES:
         raise HTTPException(status_code=422, detail="未知套图模板")
     if not labels:
         raise HTTPException(status_code=422, detail="请先选择图片")
-    if template in single_kinds:
+    if template == "composite4":
+        # 四层合成主图：取第一张产品图，分层合成一张（背景/装饰/主体/文案）
+        message = "🧩 四层合成主图（背景 · 装饰 · 主体 · 文案）"
+    elif template in single_kinds:
         # 电商主图六联 / 详情页七段：取第一张产品图，出固定张数
         name, n = single_kinds[template]
         message = f"🛍 生成{name}（{n} 张）"
@@ -97,6 +100,7 @@ async def set_template(session_id: str, request: Request, db: AsyncSession = Dep
         "template": template,
         "asset_labels": labels,
         "set_mode": body.get("mode") if body.get("mode") in ("editable", "layered") else "ai",
+        "element_count": body.get("element_count"),  # 四层合成：装饰元素数量（默认 3）
         "client_request_id": body.get("client_request_id"),
     })
 

@@ -108,6 +108,8 @@ class Asset(Base):
     # 画布世界坐标（前端 addImage 用；空则前端走默认摆放）
     canvas_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
     canvas_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 层叠序（四层合成：背景<装饰<阴影<主体<前景<文案）。空=不参与显式堆叠，按插入序渲染
+    z_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

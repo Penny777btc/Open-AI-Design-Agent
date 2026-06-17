@@ -1163,7 +1163,7 @@ export default function CreativeCanvas({
           // 后端持久化的画布坐标：刷新后恢复布局，避免叠图
           const px = a.canvas_x ?? undefined;
           const py = a.canvas_y ?? undefined;
-          if (kind === "image") canvasRef.current.addImage(a.url, px, py, undefined, undefined, undefined, label, a.set_template, a.set_content);
+          if (kind === "image") canvasRef.current.addImage(a.url, px, py, undefined, undefined, undefined, label, a.set_template, a.set_content, a.z_index);
           else if (kind === "video") canvasRef.current.addVideo(a.url, px, py, undefined, undefined, undefined, label);
           else if (kind === "audio") canvasRef.current.addAudio(a.url, px, py, undefined, label);
         });

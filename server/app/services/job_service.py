@@ -157,6 +157,27 @@ async def _run_job(job_id: str) -> None:
 
                 detail_content = await generate_detail_content(items[0], doc_text, lang=lang) if items else {}
                 plan = build_detail_set_plan(labels[0], content_map=detail_content, lang=lang)
+            elif tpl_key == "composite4":
+                # 四层合成主图：背景 + 装饰元素(独立分层) + 主体(物理落地+接触阴影) + 文案(参数规范)
+                from app.agents.composite import build_composite4_plan, generate_composite_spec
+
+                src_bytes = None
+                try:
+                    src_bytes = await _load_asset_bytes(session_id, labels[0])
+                except Exception:
+                    pass
+                spec = await generate_composite_spec(
+                    items[0] if items else {}, doc_text,
+                    n=int(job_input.get("element_count") or 3), lang=lang, source_image=src_bytes,
+                ) if items else {}
+                if spec:
+                    plan = build_composite4_plan(labels[0], spec, lang=lang)
+                else:
+                    # 规范生成失败 → 降级回成熟的分层模式，永远有产出
+                    from app.agents.set_templates import build_layered_plan
+
+                    content = await generate_set_content("ecom", items, doc_text, lang=lang)
+                    plan = build_layered_plan("ecom", labels[0], content_map=content, lang=lang)
             elif job_input.get("set_mode") == "layered":
                 # 分层版：背景层(生成) + 产品层(抠图) + 可编辑文字层
                 from app.agents.set_templates import build_layered_plan
@@ -382,6 +403,16 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
     if node.tool == "generate_video":
         return await _video_node(job_id, session_id, user_id, node, planner)
 
+    # 四层合成·文案层：AI 已产出排版规范参数（type_spec），不做 OCR，直接发给前端渲染成可编辑文字
+    if node.tool == "extract_text" and node.args.get("split_role") == "typography":
+        blocks = node.args.get("type_spec") or []
+        ref = (node_outputs or {}).get(node.args.get("overlay_on")) if node_outputs else None
+        ref_label = ref.get("label") if ref else None
+        if ref_label and blocks:
+            await emit(job_id, "canvas_op", {"op": "add_texts", "args": {"ref": ref_label, "texts": blocks}})
+        await emit(job_id, "tool_result", {"name": node.tool, "result": {"ok": True, "text_blocks": len(blocks)}, "asset": None})
+        return True
+
     # AI 拆图·文字层：对源图做 OCR，识别叠加文字 → 发相对坐标给前端重建为可编辑文字节点（不产图层资产）
     if node.tool == "extract_text":
         from app.agents.split import detect_text_blocks
@@ -413,15 +444,75 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             mask = (settings.storage_dir / mask_key).read_bytes()
 
     image = None
-    if node.tool == "edit_image" and node.args.get("split_role") == "subject":
-        # AI 拆图·主体层：本地抠图 → 保留产品原像素 + 透明 PNG（比 AI 重绘更忠实，也不耗中转额度）
+    loop = asyncio.get_running_loop()
+    split_role = node.args.get("split_role")
+    # 四层合成的目标帧 = 背景层的原生尺寸（所有层做成整帧透明图 → 叠回背景同坐标=完美重叠）
+    frame = (node_outputs or {}).get(node.args.get("overlay_on")) if node_outputs else None
+
+    if node.tool == "generate_image" and split_role == "element":
+        # 第2层装饰元素：灰底生成单个道具 → 本地抠图 → 摆到整帧透明画布（按锚点/scale 定位）
+        from app.agents.composite import compose_layer
         from app.agents.split import cutout_subject
         from app.providers.base import GeneratedImage
         from app.providers.openai_compat import _png_dims
 
-        out = await asyncio.get_running_loop().run_in_executor(None, cutout_subject, source)
-        dims = _png_dims(out) or (0, 0)
-        image = GeneratedImage(data=out, mime="image/png", width=dims[0], height=dims[1], model="rembg-isnet")
+        gen = None
+        last_exc = None
+        for _ in range(2):
+            try:
+                gen = await provider.generate(prompt, node.args.get("aspect_ratio", "1:1"))
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+        if gen is None:
+            raise last_exc  # 装饰非关键：run_node 捕获 → 退款 + 跳过该层，下游不阻塞
+        cut = await loop.run_in_executor(None, cutout_subject, gen.data)
+        if frame:
+            place = node.args.get("place") or {}
+            data = await loop.run_in_executor(None, lambda: compose_layer(
+                cut, frame["width"], frame["height"], mode=place.get("mode", "anchor"),
+                anchor=place.get("anchor", "center"), scale=float(place.get("scale", 0.25)),
+                horizon=float(node.args.get("horizon", 0.62))))
+            w, h = frame["width"], frame["height"]
+        else:
+            data = cut
+            w, h = _png_dims(cut) or (gen.width, gen.height)
+        image = GeneratedImage(data=data, mime="image/png", width=w, height=h, model="rembg-isnet")
+    elif node.tool == "edit_image" and split_role == "shadow":
+        # 第3层接触阴影：据主体抠图合成落地椭圆（光向反向偏移）→ 独立透明层（可单独调/删，导出独立 PSD 层）
+        from app.agents.composite import make_contact_shadow
+        from app.agents.split import cutout_subject
+        from app.providers.base import GeneratedImage
+        from app.providers.openai_compat import _png_dims
+
+        cut = await loop.run_in_executor(None, cutout_subject, source)
+        if frame:
+            data = await loop.run_in_executor(None, lambda: make_contact_shadow(
+                cut, frame["width"], frame["height"],
+                horizon=float(node.args.get("horizon", 0.62)), light=node.args.get("light")))
+            w, h = frame["width"], frame["height"]
+        else:
+            data = cut
+            w, h = _png_dims(cut) or (0, 0)
+        image = GeneratedImage(data=data, mime="image/png", width=w, height=h, model="contact-shadow")
+    elif node.tool == "edit_image" and split_role == "subject":
+        # 第3层主体 / AI 拆图主体层：本地抠图保留产品原像素 + 透明 PNG（比 AI 重绘忠实，也不耗中转额度）。
+        # 四层合成（带 place）时再摆到整帧画布并坐到支撑面（grounded）；拆图场景无 place → 维持原行为。
+        from app.agents.split import cutout_subject
+        from app.providers.base import GeneratedImage
+        from app.providers.openai_compat import _png_dims
+
+        out = await loop.run_in_executor(None, cutout_subject, source)
+        if node.args.get("place") and frame:
+            from app.agents.composite import compose_layer
+
+            out = await loop.run_in_executor(None, lambda: compose_layer(
+                out, frame["width"], frame["height"], mode="grounded",
+                horizon=float(node.args.get("horizon", 0.62))))
+            w, h = frame["width"], frame["height"]
+        else:
+            w, h = _png_dims(out) or (0, 0)
+        image = GeneratedImage(data=out, mime="image/png", width=w, height=h, model="rembg-isnet")
     else:
         last_exc = None
         for _ in range(2):  # 节点级重试
@@ -488,7 +579,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             session_id=session_id, user_id=user_id, asset_label=label, url=url, storage_key=key,
             kind="image", mime=image.mime, width=image.width, height=image.height,
             model=image.model, prompt=prompt, source_tool=node.tool, job_id=job_id,
-            canvas_x=canvas_x, canvas_y=canvas_y,
+            canvas_x=canvas_x, canvas_y=canvas_y, z_index=node.args.get("z_index"),
         ))
         # 计费：审批时已整单预扣（reserve），节点成功无需再记账；失败由 refund_node 退还
         await db.commit()
@@ -508,6 +599,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         asset_payload["canvas_y"] = canvas_y
     if node.args.get("split_role"):
         asset_payload["split_role"] = node.args["split_role"]
+    if node.args.get("z_index") is not None:
+        asset_payload["z_index"] = node.args["z_index"]  # 四层合成：显式 z 序，刷新后仍按层叠正确堆叠
     if node.args.get("set_template"):
         asset_payload["set_template"] = node.args["set_template"]
         if node.args.get("slot_content"):

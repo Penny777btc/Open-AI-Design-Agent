@@ -28,6 +28,8 @@ _LIGHTWEIGHT_MIGRATIONS = (
     ("users", "ALTER TABLE users ADD COLUMN disabled_at DATETIME"),
     # 每日文档配额覆盖（管理台可调）
     ("users", "ALTER TABLE users ADD COLUMN doc_daily_limit INTEGER"),
+    # 四层合成：资产层叠序（刷新后仍按层堆叠）
+    ("assets", "ALTER TABLE assets ADD COLUMN z_index INTEGER"),
 )
 
 

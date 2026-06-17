@@ -20,6 +20,7 @@ def _serialize(asset: Asset) -> dict:
         "source_tool": asset.source_tool,
         "canvas_x": asset.canvas_x,
         "canvas_y": asset.canvas_y,
+        "z_index": asset.z_index,
     }
 
 

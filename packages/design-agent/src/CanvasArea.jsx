@@ -52,6 +52,7 @@ const TEXT_SWATCHES = ["#ffffff", "#000000", "#ffe24d", "#ff3b3b", "#19c37d", "#
 const SET_TEMPLATES = {
   main6: { label: "电商主图六联", desc: "选 1 张产品图 → AI 出 6 张（白底/卖点/风味/工艺/场景/参数）", single: true, count: 6, cta: "生成主图六联" },
   detail7: { label: "电商详情页七段", desc: "选 1 张产品图 → AI 出 7 段暗调详情页（封面/参数/风味/工艺/产区/餐配/规格）", single: true, count: 7, cta: "生成详情页七段" },
+  composite4: { label: "四层合成主图", desc: "选 1 张产品图 → 原生分层合成 1 张（背景/装饰/主体/文案 四层，物理落地+可编辑）", single: true, count: 1, cta: "生成四层合成图" },
   ecom: { label: "电商主图", desc: "白底影棚 · 标题居中 · 三条卖点" },
   rednote: { label: "小红书封面", desc: "生活场景 · 大标题 · 竖版 3:4" },
   minimal: { label: "极简画册", desc: "纯净留白 · 单标题 · 编辑感" },
@@ -1546,7 +1547,7 @@ const CanvasArea = forwardRef(
       setContextMenu(null);
     };
 
-    const addImage = (src, x, y, width, height, onLoaded, assetLabel, setTemplate, setContent) => {
+    const addImage = (src, x, y, width, height, onLoaded, assetLabel, setTemplate, setContent, zIndex) => {
       if (!src) return;
       const stage = stageRef.current;
       if (!stage) {
@@ -1593,6 +1594,8 @@ const CanvasArea = forwardRef(
             width: finalWidth / 2 || 200,
             height: finalHeight / 2 || 200,
             rotation: 0,
+            // 四层合成：显式层叠序，避免图片 onload 异步到达导致的堆叠错乱（背景压住主体等）
+            zIndex: zIndex || 0,
           },
         ]);
         // 套图混合方案：AI 出干净底图后，在图上叠【固定模板文字】（位置/字体/字号锁死、
@@ -1822,21 +1825,61 @@ const CanvasArea = forwardRef(
       if (!base || !blocks?.length) return;
       const bx = base.x, by = base.y, bw = base.width || 200, bh = base.height || 200;
       const stamp = Date.now();
-      const nodes = blocks.map((b, i) => ({
-        id: `txt-${stamp}-${i}`,
-        text: b.text || "",
-        x: bx + (b.relX || 0) * bw,
-        y: by + (b.relY || 0) * bh,
-        width: Math.max(20, (b.relW || 0.3) * bw),
-        fontSize: Math.max(8, Math.round((b.relH || 0.04) * bh * 0.82)),
-        fill: b.color || "#222222",
-        align: b.align || "left",
-        fontFamily: "Noto Sans SC, Inter, sans-serif",
-        draggable: true,
-        rotation: 0,
-      }));
+      // 文案永远压在所有图片层之上（四层合成里图片层 zIndex 可达 ~6）
+      const TEXT_Z = 10000;
+      const nodes = [];
+      blocks.forEach((b, i) => {
+        const e = b.effect || {};
+        const fam = b.fontFamily
+          ? `${b.fontFamily}, Noto Sans SC, sans-serif`
+          : "Noto Sans SC, Inter, sans-serif";
+        const common = {
+          x: bx + (b.relX || 0) * bw,
+          y: by + (b.relY || 0) * bh,
+          width: Math.max(20, (b.relW || 0.3) * bw),
+          fontSize: Math.max(8, Math.round((b.relH || 0.04) * bh * 0.82)),
+          align: b.align || "left",
+          fontFamily: fam,
+          fontStyle: b.fontStyle || "normal",
+          letterSpacing: b.letterSpacing || 0,
+          text: b.text || "",
+          draggable: true,
+          rotation: 0,
+          zIndex: TEXT_Z + i,
+        };
+        // 浮雕：高光层(偏左上) + 暗影层(偏右下) + 主体层(最上)，三层同坐标 → 导出 PSD 即 3 个可编辑文字层
+        if (e.emboss) {
+          const d = e.emboss.depth || 2;
+          nodes.push({ ...common, id: `txt-${stamp}-${i}-es`, fill: e.emboss.shadow || "#00000066", x: common.x + d, y: common.y + d });
+          nodes.push({ ...common, id: `txt-${stamp}-${i}-eh`, fill: e.emboss.highlight || "#ffffff", x: common.x - d, y: common.y - d });
+        }
+        const main = { ...common, id: `txt-${stamp}-${i}`, fill: b.color || "#222222" };
+        if (e.stroke) {
+          main.stroke = e.stroke.color || "#ffffff";
+          main.strokeWidth = e.stroke.width || 2;
+          main.fillAfterStrokeEnabled = true;
+          main.lineJoin = "round";
+        }
+        if (e.shadow) {
+          main.shadowColor = e.shadow.color || "#000000";
+          main.shadowBlur = e.shadow.blur ?? 8;
+          main.shadowOffsetX = e.shadow.offsetX || 0;
+          main.shadowOffsetY = e.shadow.offsetY || 0;
+          main.shadowOpacity = e.shadow.opacity ?? 1;
+        }
+        nodes.push(main);
+      });
       setTexts((prev) => [...prev, ...nodes]);
-      toast.success(`已拆出 ${nodes.length} 个可编辑文字层`);
+      // 加载文案用到的设计字体（用裸字体名，loadGoogleFont 遇 "sans-serif" 会跳过），加载完强制重绘
+      [...new Set(blocks.map((b) => b.fontFamily).filter(Boolean))].forEach((fam) =>
+        loadGoogleFont(fam).then(() => {
+          const redraw = () => stageRef.current?.draw();
+          redraw();
+          setTimeout(redraw, 250);
+          setTimeout(redraw, 700);
+        })
+      );
+      toast.success(`已生成 ${blocks.length} 条可编辑文案`);
     };
 
     // 样式面板：改当前选中文字的属性
@@ -2962,7 +3005,7 @@ const CanvasArea = forwardRef(
               <div className="px-5 py-3 border-t border-divider flex items-center justify-between">
                 <span className="text-[11px] text-secondary-text">
                   {SET_TEMPLATES[setTpl]?.single
-                    ? `已选 ${setSel.size} 张 · 用第 1 张产品图出 6 张角色主图`
+                    ? `已选 ${setSel.size} 张 · 用第 1 张产品图，${SET_TEMPLATES[setTpl].cta}`
                     : `已选 ${setSel.size} 张 · 排版/字体/风格统一，每张消耗积分`}
                 </span>
                 <div className="flex gap-2">
