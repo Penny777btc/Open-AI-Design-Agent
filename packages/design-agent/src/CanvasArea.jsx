@@ -1203,7 +1203,7 @@ const CanvasArea = forwardRef(
         const blob = new Blob([buffer], { type: "image/vnd.adobe.photoshop" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12); // yyyymmddhhmm
+        const ts = new Date().toISOString().replace(/\D/g, "").slice(0, 12); // 仅留数字 → yyyymmddhhmm（勿用 [字符类]，会被 Tailwind 误扫成类名）
         a.href = url; a.download = `picsmith_分层_${W}x${H}_${ts}.psd`;
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
