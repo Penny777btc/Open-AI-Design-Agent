@@ -474,7 +474,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
     # bbox 裁子图内抠图 → 贴回整帧 → 完整性校验 → 按需 AI 补全（补全后必重抠成透明）
     if node.tool == "cutout_layer":
         from app.agents.split import (
-            complete_object, cutout_region, cutout_subject_full, dislocation_guard, verify_complete,
+            complete_object, cutout_region, cutout_subject_full, dislocation_guard,
+            verify_complete, verify_label_match,
         )
         from app.providers.base import GeneratedImage
         from app.providers.openai_compat import _png_dims
@@ -500,14 +501,17 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             if await loop.run_in_executor(None, lambda: dislocation_guard(cut, bbox)):
                 raise RuntimeError(f"装饰元素「{node.args.get('label', '')}」抠图错位/为空，跳过该层")
 
-        # 完整性校验 + 按需补全——**仅对主体**：主体是关键且语义明确，inpaint 补全可靠；
-        # 装饰元素小而语义模糊，补全时 gpt-image 易幻觉成别的东西（实测把"金色餐具"补成小酒瓶），
-        # 得不偿失 → 装饰元素只用干净抠图、宁可略残不冒幻觉风险。
-        if is_subject:
-            incomplete, _missing = await verify_complete(cut, bbox, bool(node.args.get("occluded")))
-            if incomplete:
-                cut = await complete_object(cut, src, bbox, "product",
-                                            lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac)
+        # 完整性校验 + 按需补全（主体 & 每个装饰元素都补——被遮挡/裁切的对象补成完整）。
+        # 元素补全后多做一道「label 复检」：inpaint 偶尔会幻觉成别的东西（曾把"金色餐具"补成小酒瓶），
+        # 复检不通过就丢弃补全、退回原抠图（宁可略残也不要幻觉）。
+        incomplete, _missing = await verify_complete(cut, bbox, bool(node.args.get("occluded")))
+        if incomplete:
+            label = "product" if is_subject else node.args.get("label", "")
+            completed = await complete_object(cut, src, bbox, label,
+                                              lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac)
+            if is_subject or await verify_label_match(completed, label):
+                cut = completed
+            # else：元素补全后已不是它本身 → 保留补全前的 cut
 
         w, h = _png_dims(cut) or _decode_frame(src)
         image = GeneratedImage(data=cut, mime="image/png", width=w, height=h, model="rembg-isnet")

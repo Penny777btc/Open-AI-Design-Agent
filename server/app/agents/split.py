@@ -451,6 +451,22 @@ async def verify_complete(layer_png: bytes, rel_box: dict, occluded: bool) -> tu
     return True, str(res.get("missing", ""))[:60]
 
 
+async def verify_label_match(layer_png: bytes, label: str) -> bool:
+    """补全后复检：补出来的还是不是「label」本身？防止 inpaint 幻觉成别的东西
+    （实测把"金色餐具"补成小酒瓶）。无法判断（无 key/异常）时默认放行，避免误杀。"""
+    if not label:
+        return True
+    prompt = (
+        f"这是一张从设计图里抠出的单个对象（已合成到白底）。判断它是不是一个「{label}」。"
+        f"只有当画面里明显是**别的东西**（不是 {label}）时才回 false。"
+        '只输出 JSON：{"match": true|false}'
+    )
+    res = await _gemini_vision_json(_on_white(layer_png), prompt, max_dim=512, timeout=40.0)
+    if not res or "match" not in res:
+        return True  # 判断不了就放行，不阻断补全
+    return bool(res.get("match"))
+
+
 def build_completion_mask(layer_png: bytes, rel_box: dict) -> bytes | None:
     """补全 mask（透明区=重绘区），两形态（§5.2）：
 
