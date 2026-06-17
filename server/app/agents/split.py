@@ -66,12 +66,15 @@ SPLIT_ROLES = [
         "key": "bg", "label": "背景层",
         "transparent": False,
         "prompt": (
-            "Remove the MAIN SUBJECT / product from this image COMPLETELY, AND remove ALL overlaid marketing "
-            "text / titles / captions / icon-text rows. Realistically inpaint and extend the background so the "
-            "scene looks natural and complete as if the product and text were never there. Keep the exact same "
-            "background style, colors, lighting, perspective and composition. Output ONLY the clean background "
-            "scene — no product, no text, no floating shadow. "
-            "Fill ALL transparent holes seamlessly, leaving no remnants of the removed objects."
+            "Extract a CLEAN, EMPTY BACKGROUND PLATE from this design image. Remove the MAIN PRODUCT, AND remove "
+            "EVERY foreground / decorative object — props, fruit, glassware, bowls, utensils, flowers, garnishes — "
+            "AND ALL overlaid marketing text / titles / captions / icon rows. Realistically inpaint every removed "
+            "area using ONLY the plain background surface (the table / fabric / backdrop / gradient) that sits "
+            "behind it, matching the existing background color, lighting, texture and perspective. "
+            "CRITICAL: do NOT regenerate, invent, or add ANY new objects, products, fruit, props, garnishes, or "
+            "text to fill the gaps — fill them with the EMPTY background ONLY, as if nothing was ever placed there. "
+            "Output ONLY the clean empty background scene — no product, no props, no fruit, no text, no floating "
+            "shadow, no remnants of any removed object."
         ),
     },
     {
@@ -718,11 +721,38 @@ async def build_smart_split_plan(session_id: str, source_label: str, src_bytes: 
     )
 
 
+def _ink_color(im, rel: tuple) -> str | None:
+    """从文字框区域采样真实「墨色」：与背景反差最大的那批像素的平均色。
+    比 vision 猜色更准（修复"提取出的可编辑文字颜色发虚/不对"）。失败返回 None。"""
+    try:
+        import numpy as np
+
+        W, H = im.size
+        x0, y0 = int(rel[0] * W), int(rel[1] * H)
+        x1, y1 = int(rel[2] * W), int(rel[3] * H)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        crop = np.asarray(im.crop((x0, y0, x1, y1)).convert("RGB")).reshape(-1, 3).astype(float)
+        if len(crop) < 12:
+            return None
+        bg = np.median(crop, axis=0)                       # 背景 ≈ 区域中位色
+        dist = np.linalg.norm(crop - bg, axis=1)
+        ink = crop[dist >= max(40.0, float(np.percentile(dist, 80)))]  # 反差最大的 ~20% = 墨
+        if len(ink) < 6:
+            ink = crop[dist >= float(np.percentile(dist, 70))]
+        if len(ink) < 6:
+            return None
+        r, g, b = (int(v) for v in ink.mean(axis=0))
+        return f"#{r:02x}{g:02x}{b:02x}"
+    except Exception:
+        return None
+
+
 async def detect_text_blocks(image: bytes, lang: str = "zh") -> list[dict]:
     """OCR：识别图中「叠加的营销文字」（不含印在产品标签上的字），返回相对坐标的文字块。
 
     返回 [{text, relX, relY, relW, relH, color, align}]，坐标/尺寸均为相对图片的 0~1 比例。
-    （成熟 prompt 不动，与 analyze_layers 各司其职、两次 vision 互不污染。）
+    color 优先从源图真实像素采样（_ink_color），比 vision 猜色更忠实、不发虚。
     """
     if not settings.gemini_api_key:
         return []
@@ -760,9 +790,11 @@ async def detect_text_blocks(image: bytes, lang: str = "zh") -> list[dict]:
             ymin, xmin, ymax, xmax = [max(0, min(1000, float(v))) / 1000 for v in box]
             if xmax <= xmin or ymax <= ymin:
                 continue
+            # 真实像素采样优先，失败回退 vision 猜色
+            color = _ink_color(im, (xmin, ymin, xmax, ymax)) or str(b.get("color", "#222222"))[:9]
             out.append({
                 "text": t, "relX": xmin, "relY": ymin, "relW": xmax - xmin, "relH": ymax - ymin,
-                "color": str(b.get("color", "#222222"))[:9], "align": b.get("align", "left"),
+                "color": color, "align": b.get("align", "left"),
             })
         return out
     except Exception:
