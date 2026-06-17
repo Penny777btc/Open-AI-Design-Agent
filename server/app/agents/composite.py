@@ -39,7 +39,7 @@ _DEFAULT_SCENE = {
     "camera": "eye-level, slight 8° downward tilt, 50mm lens, straight-on frontal product view",
     "light": {"azimuth": "upper-left", "elevation": 35, "quality": "soft large diffused softbox"},
     "color_temp": "warm 4800K",
-    "surface": {"desc": "matte light-oak wooden tabletop receding into a softly blurred backdrop", "horizon": 0.62},
+    "surface": {"desc": "matte light-oak wooden tabletop receding into a softly blurred backdrop", "horizon": 0.7},
     "palette": "warm neutral beige with soft shadow grey and one muted accent",
     "mood": "premium, calm, editorial e-commerce",
     "empty_zones": "top ~22% and lower-left kept clean for typography",
@@ -66,14 +66,19 @@ def _spec_clause(scene: dict) -> str:
 
 
 def _bg_prompt(scene: dict) -> str:
-    """第1层背景：三重否定保证空场景；中心-下方留干净支撑面给主体；预留排版留白。"""
+    """第1层背景：三重否定保证空场景；前景画一个占下部 40% 的大支撑面（产品要坐在它上面，故必须够大够前）；
+    背景保持简洁不与产品争视觉；预留排版留白。"""
+    horizon = int(float(scene.get("surface", {}).get("horizon", 0.7)) * 100)
     return (
         "Create ONLY a photorealistic premium e-commerce BACKGROUND scene. "
         "ABSOLUTELY NO product, NO bottle, NO props, NO decorative objects, NO text, NO logo, "
-        "NO people, NO floating object. Render an EMPTY staged environment ONLY: the support surface "
-        "and the backdrop behind it. Keep the CENTER-LOWER region a clean, evenly-lit empty patch of the "
-        "support surface — a product will be composited there later. Keep the reserved negative space clean "
-        "for typography. Photorealistic studio render, sharp focus on the support surface, no watermark."
+        "NO people, NO floating object. Render an EMPTY staged environment ONLY: a LARGE foreground "
+        f"SUPPORT SURFACE (a clean table / podium / slab) whose TOP edge sits at ~{horizon}% of the image "
+        f"height and which FILLS the entire lower {100 - horizon}% of the frame with a clear, visible front — "
+        "a product will be placed STANDING ON this surface near the front-center, so the surface must read as a "
+        "solid plane the product can rest on, not a thin line. Behind it, a SIMPLE uncluttered backdrop — keep it "
+        "calm and out of focus, NO competing architecture or busy detail. Keep the surface an evenly-lit empty "
+        "plane and reserve clean negative space for typography. Photorealistic studio render, no watermark."
         + _spec_clause(scene)
     )
 
@@ -147,9 +152,9 @@ def _sanitize_spec(raw: dict, n: int) -> dict:
     scene["light"] = {**_DEFAULT_SCENE["light"], **(scene.get("light") or {})}
     surf = {**_DEFAULT_SCENE["surface"], **(scene.get("surface") or {})}
     try:
-        surf["horizon"] = max(0.45, min(0.78, float(surf.get("horizon", 0.62))))
+        surf["horizon"] = max(0.55, min(0.80, float(surf.get("horizon", 0.7))))
     except (TypeError, ValueError):
-        surf["horizon"] = 0.62
+        surf["horizon"] = 0.7
     scene["surface"] = surf
 
     elements = []
@@ -362,35 +367,41 @@ def _open_trim(png: bytes):
     return im.crop(bbox) if bbox else im
 
 
+# 落地基线：产品底边坐到画面**靠下、桌面前部**（而非 horizon=桌面后沿，会让产品悬在墙根）。
+# 这是 v1/v2 校准发现的关键——把产品基线与 horizon 解耦，产品才落在可见桌面上、够大够前。
+_GROUND_BASELINE = 0.85   # 主体/阴影底边
+_ELEM_BASELINE = 0.80     # 装饰元素底边（略靠后于主体，仍在桌面上）
+
+
 def _grounded_box(fw: int, fh: int, cw: int, ch: int, horizon: float, h_ratio: float):
-    """主体/阴影：等比缩到目标高度、水平居中、底边坐在 horizon 线上。"""
+    """主体/阴影：等比缩到目标高度、水平居中、底边坐到 _GROUND_BASELINE（桌面前部）。"""
     th = fh * h_ratio
     tw = th * cw / ch
-    if tw > fw * 0.72:  # 太宽则按宽度约束
-        tw = fw * 0.72
+    if tw > fw * 0.78:  # 太宽则按宽度约束（放宽到 0.78，主体更具存在感）
+        tw = fw * 0.78
         th = tw * ch / cw
-    return ((fw - tw) / 2, fh * horizon - th, tw, th)
+    return ((fw - tw) / 2, fh * _GROUND_BASELINE - th, tw, th)
 
 
 def _anchor_box(anchor: str, fw: int, fh: int, cw: int, ch: int, scale: float, horizon: float):
-    """装饰元素：宽 = 帧宽 × scale，按锚点贴角/贴边；落地类锚点底边坐到 horizon 线（与主体共面）。"""
+    """装饰元素：宽 = 帧宽 × scale，按锚点贴角/贴边；落地类锚点底边坐到 _ELEM_BASELINE（与主体共面、略靠后）。"""
     tw = fw * scale
     th = tw * ch / cw
-    surf_y = fh * horizon - th
+    surf_y = fh * _ELEM_BASELINE - th
     if anchor in ("bottom-left", "beside-left"):
         return (fw * 0.04, surf_y, tw, th)
     if anchor in ("bottom-right", "beside-right"):
         return (fw * 0.96 - tw, surf_y, tw, th)
     if anchor == "top-left":
-        return (fw * 0.05, fh * 0.06, tw, th)
+        return (fw * 0.05, fh * 0.08, tw, th)
     if anchor == "top-right":
-        return (fw * 0.95 - tw, fh * 0.06, tw, th)
+        return (fw * 0.95 - tw, fh * 0.08, tw, th)
     return ((fw - tw) / 2, surf_y, tw, th)
 
 
 def compose_layer(content_png: bytes, frame_w: int, frame_h: int, *, mode: str = "anchor",
-                  anchor: str = "center", scale: float = 0.25, horizon: float = 0.62,
-                  h_ratio: float = 0.55) -> bytes:
+                  anchor: str = "center", scale: float = 0.25, horizon: float = 0.7,
+                  h_ratio: float = 0.6) -> bytes:
     """把一个透明内容（已抠图）摆到整帧透明画布上，返回整帧 PNG。"""
     from PIL import Image
 
@@ -410,8 +421,8 @@ def compose_layer(content_png: bytes, frame_w: int, frame_h: int, *, mode: str =
     return out.getvalue()
 
 
-def make_contact_shadow(cutout_png: bytes, frame_w: int, frame_h: int, *, horizon: float = 0.62,
-                        light: dict | None = None, h_ratio: float = 0.55) -> bytes:
+def make_contact_shadow(cutout_png: bytes, frame_w: int, frame_h: int, *, horizon: float = 0.7,
+                        light: dict | None = None, h_ratio: float = 0.6) -> bytes:
     """据主体抠图估算落地宽度，画一枚高斯模糊椭圆作接触阴影；方向按光向反向偏移、偏移量随光仰角变化。"""
     from PIL import Image, ImageDraw, ImageFilter
 

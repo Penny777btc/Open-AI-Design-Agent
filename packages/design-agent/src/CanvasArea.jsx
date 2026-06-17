@@ -1837,7 +1837,8 @@ const CanvasArea = forwardRef(
           x: bx + (b.relX || 0) * bw,
           y: by + (b.relY || 0) * bh,
           width: Math.max(20, (b.relW || 0.3) * bw),
-          fontSize: Math.max(8, Math.round((b.relH || 0.04) * bh * 0.82)),
+          // relH 是整块高度；多行块按行数均分，否则每行都用整块高度 → 块涨成数倍、压住下方文案
+          fontSize: Math.max(8, Math.round(((b.relH || 0.04) * bh * 0.82) / Math.max(1, String(b.text || "").split("\n").length))),
           align: b.align || "left",
           fontFamily: fam,
           fontStyle: b.fontStyle || "normal",
