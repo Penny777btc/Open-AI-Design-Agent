@@ -421,6 +421,10 @@ def _anchor_box(anchor: str, fw: int, fh: int, cw: int, ch: int, scale: float, h
     """装饰元素：宽 = 帧宽 × scale，按锚点贴角/贴边；落地类锚点底边坐到 _ELEM_BASELINE（与主体共面、略靠后）。"""
     tw = fw * scale
     th = tw * ch / cw
+    max_h = fh * 0.45  # 高度封顶：细高道具（木条/烛台/高瓶）按宽 scale 会竖向爆到顶、喧宾夺主 → 改按高度约束
+    if th > max_h:
+        th = max_h
+        tw = th * cw / ch
     surf_y = fh * _ELEM_BASELINE - th
     if anchor in ("bottom-left", "beside-left"):
         return (fw * 0.04, surf_y, tw, th)
