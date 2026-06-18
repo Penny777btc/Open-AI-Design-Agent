@@ -501,15 +501,19 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                 src, bbox, lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac,
                 other_rel_boxes=other_boxes))
             label = node.args.get("label", "")
+            from app.agents.split import judge_element_complete, subtract_alpha
+
+            subj_out = node_outputs.get("split_subject") if node_outputs else None
+            subj_png = subj_out.get("png") if subj_out else None
+            # 主体形状精确扣除（先于一切判定）：去掉元素里串入的主体像素——透明物(酒杯)抓到的邻
+            # 瓶会被整片扣掉 → 变空 → 下面 dislocation_guard 拦下 → 主体不被复制成两层。
+            if subj_png:
+                cut = await loop.run_in_executor(None, lambda: subtract_alpha(cut, subj_png))
             # 错位防护：明显抠空/抠偏的装饰层直接丢弃（不静默产出错位层）
             if await loop.run_in_executor(None, lambda: dislocation_guard(cut, bbox)):
                 raise RuntimeError(f"装饰元素「{label}」抠图错位/为空，跳过该层")
             # 执行期完整性实判（不靠 vision 的 occluded 猜测）：被画框出血 / 被主体遮挡 → 判为
             # 不完整 → 抛出跳过该层 → 元素自动留在背景里（背景 mask 不含它）。零补全、零幻觉。
-            from app.agents.split import judge_element_complete
-
-            subj_out = node_outputs.get("split_subject") if node_outputs else None
-            subj_png = subj_out.get("png") if subj_out else None
             ok = await loop.run_in_executor(None, lambda: judge_element_complete(cut, subj_png))
             if not ok:
                 raise RuntimeError(f"装饰元素「{label}」不完整（被遮挡/出血），留在背景层")

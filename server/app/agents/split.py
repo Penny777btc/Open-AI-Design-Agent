@@ -269,12 +269,15 @@ def _alpha_stats(rgba) -> tuple[int, tuple[int, int, int, int] | None]:
 
 
 def _drop_foreign_blobs(cut_png: bytes, ox: int, oy: int,
-                        self_box: tuple, other_boxes: list) -> bytes:
+                        self_box: tuple, other_boxes: list, *, protect_largest: bool = False) -> bytes:
     """连通块归属裁决：把明显属于「邻居对象」的连通块从本抠图里抹掉（alpha 置 0）。
 
     每个连通块按质心（全帧坐标 = (ox,oy)+局部）归属：若某邻居框包含该质心、且其框中心比本框中心
     更近 → 判为邻居、丢弃。保守：只在「邻居明确拥有」时才丢，避免误删本体偏心碎块。
     解决相邻/重叠对象的串入问题（如酒杯框抓进旁边瓶子、主体抓进盘子边）。
+
+    protect_largest=True（主体用）：永不丢「最大连通块」——主体是核心，哪怕 vision 把某个元素框
+    画到了主体身上，也绝不能把主体本体丢空（曾出现「酒杯」框压住瓶子 → 主体被抠空）。
     """
     if not other_boxes:
         return cut_png
@@ -288,6 +291,12 @@ def _drop_foreign_blobs(cut_png: bytes, ox: int, oy: int,
     if n <= 1:
         return cut_png
 
+    keep_id = 0
+    if protect_largest:  # 找最大块（本体），永不丢
+        counts = np.bincount(lbl.ravel())
+        counts[0] = 0
+        keep_id = int(counts.argmax())
+
     def _cx(b):
         return ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
 
@@ -300,6 +309,8 @@ def _drop_foreign_blobs(cut_png: bytes, ox: int, oy: int,
 
     changed = False
     for i in range(1, n + 1):
+        if i == keep_id:
+            continue
         ys, xs = np.where(lbl == i)
         if len(xs) == 0:
             continue
@@ -314,6 +325,31 @@ def _drop_foreign_blobs(cut_png: bytes, ox: int, oy: int,
         return cut_png
     out = io.BytesIO()
     Image.fromarray(arr, "RGBA").save(out, "PNG")
+    return out.getvalue()
+
+
+def subtract_alpha(cut_png: bytes, minus_png: bytes, *, dilate: int = 2, thr: int = 80) -> bytes:
+    """从 cut 的 alpha 里按 minus 的真实形状扣掉重叠区域（比 bbox 邻居裁决更准）。
+
+    用于：元素抠图串入了主体像素——尤其透明物（酒杯）抠不动自己、却抓到旁边实心的瓶子。按主体真实
+    alpha 形状整片扣除后，这种"伪元素"会变空 → 被 dislocation_guard 拦下丢弃 → 主体不再被复制成两层。
+    主体被前景元素遮挡处其 alpha 本就缺失，故不会误扣真正在主体之上的前景元素。
+    """
+    import numpy as np
+    from PIL import Image
+    from scipy import ndimage
+
+    c = np.array(Image.open(io.BytesIO(cut_png)).convert("RGBA"))
+    H, W = c.shape[:2]
+    mim = Image.open(io.BytesIO(minus_png)).convert("RGBA")
+    if mim.size != (W, H):
+        mim = mim.resize((W, H), Image.LANCZOS)
+    mask = np.array(mim)[:, :, 3] > thr
+    if dilate:
+        mask = ndimage.binary_dilation(mask, iterations=dilate)
+    c[mask, 3] = 0
+    out = io.BytesIO()
+    Image.fromarray(c, "RGBA").save(out, "PNG")
     return out.getvalue()
 
 
@@ -395,10 +431,10 @@ def cutout_subject_full(src: bytes, rel_box: dict, *, lift_lo: int = 25, lift_sc
         result = out.getvalue()
     else:
         result = region
-    if other_rel_boxes:  # 邻居块裁决（整帧坐标系，原点 0,0）：丢掉串入的盘子边/邻物
-        self_px = _px_box(rel_box, W, H, 0.0)
+    if other_rel_boxes:  # 邻居块裁决（整帧坐标系，原点 0,0）：丢掉串入的盘子边/邻物；
+        self_px = _px_box(rel_box, W, H, 0.0)  # protect_largest：主体本体永不丢空（防 vision 元素框压主体）
         other_px = [_px_box(b, W, H, 0.0) for b in other_rel_boxes]
-        result = _drop_foreign_blobs(result, 0, 0, self_px, other_px)
+        result = _drop_foreign_blobs(result, 0, 0, self_px, other_px, protect_largest=True)
     return result
 
 
@@ -471,120 +507,6 @@ def _fragment_count(layer_png: bytes) -> tuple[int, float]:
         return 1, 0.0
 
 
-_VERIFY_PROMPT = (
-    "这是从整图抠出的单个对象（透明背景，已合到白底），判断它作为独立完整对象是否完整、"
-    "有无被遮挡/裁切缺一块。\n"
-    '只输出 JSON：{"complete":true|false,"missing":"缺失部位简短描述(如 右下角被裁切 / 中部被遮挡)"}'
-)
-
-
-def _on_white(layer_png: bytes) -> bytes:
-    """透明层合到白底 → 喂 vision 校验（透明 PNG 直接喂常被忽略 alpha）。"""
-    from PIL import Image
-
-    im = Image.open(io.BytesIO(layer_png)).convert("RGBA")
-    bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
-    bg.alpha_composite(im)
-    out = io.BytesIO()
-    bg.convert("RGB").save(out, "JPEG", quality=85)
-    return out.getvalue()
-
-
-async def verify_complete(layer_png: bytes, rel_box: dict, occluded: bool) -> tuple[bool, str | None]:
-    """判定对象是否「不完整」。返回 (incomplete, missing_desc)。
-
-    几何先行（免费）：触边/出血裁切 或 碎裂（≥3 块且第二大>最大 0.3）→ 残缺；
-    occluded==true → 残缺；几何/occluded 疑似时才调一次 vision 复核。
-    都不疑似 → (False, None)，零补全调用。
-    """
-    edge = _touches_frame_edge(rel_box)
-    n_frag, ratio = _fragment_count(layer_png)
-    geom_suspect = edge is not None or (n_frag >= 3 and ratio > 0.3)
-    if not geom_suspect and not occluded:
-        return False, None
-    # 二次 vision 复核（调用方用 MAX_VERIFY 限次）
-    res = await _gemini_vision_json(_on_white(layer_png), _VERIFY_PROMPT, max_dim=768, timeout=60.0)
-    if res is None:
-        # 无 vision：保守地，仅当 occluded 或明显碎裂时才认定残缺（触边可能本就在边缘）
-        if occluded or (n_frag >= 3 and ratio > 0.3):
-            return True, ("被遮挡" if occluded else "碎裂")
-        return False, None
-    if res.get("complete") is True:
-        return False, None
-    return True, str(res.get("missing", ""))[:60]
-
-
-async def verify_label_match(layer_png: bytes, label: str) -> bool:
-    """补全后复检：补出来的还是不是「label」本身？防止 inpaint 幻觉成别的东西
-    （实测把"金色餐具"补成小酒瓶）。无法判断（无 key/异常）时默认放行，避免误杀。"""
-    if not label:
-        return True
-    prompt = (
-        f"这是一张从设计图里抠出的单个对象（已合成到白底）。判断它是不是一个「{label}」。"
-        f"只有当画面里明显是**别的东西**（不是 {label}）时才回 false。"
-        '只输出 JSON：{"match": true|false}'
-    )
-    res = await _gemini_vision_json(_on_white(layer_png), prompt, max_dim=512, timeout=40.0)
-    if not res or "match" not in res:
-        return True  # 判断不了就放行，不阻断补全
-    return bool(res.get("match"))
-
-
-def build_completion_mask(layer_png: bytes, rel_box: dict) -> bytes | None:
-    """补全 mask（透明区=重绘区），两形态（§5.2）：
-
-    - 触边/出血裁切 → outpaint：朝触边方向把 alpha 包围盒外扩 ~15% 设透明（重画外扩环）。
-    - 被前景遮挡（内部洞）→ inpaint：mask = bbox 矩形 − alpha 实心区（中间镂空的遮挡孔设透明）。
-
-    mask 与 layer_png 同尺寸（= 源帧）。若算出「全不透明无洞」→ 返回 None（对象已完整，跳过补全）。
-    """
-    import numpy as np
-    from PIL import Image
-
-    im = Image.open(io.BytesIO(layer_png)).convert("RGBA")
-    W, H = im.size
-    alpha = np.array(im)[:, :, 3]
-    solid = alpha > 40
-    if not solid.any():
-        return None
-    bx0, by0, bx1, by1 = _px_box(rel_box, W, H)
-
-    # mask alpha：255=保留(不动)，0=重绘(透明洞)
-    mask_a = np.full((H, W), 255, dtype=np.uint8)
-    edge = _touches_frame_edge(rel_box)
-    if edge is not None:
-        # outpaint：alpha 包围盒朝触边方向外扩 15%
-        ys, xs = np.where(solid)
-        ax0, ay0, ax1, ay1 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
-        ew = int((ax1 - ax0) * 0.15)
-        eh = int((ay1 - ay0) * 0.15)
-        ox0, oy0, ox1, oy1 = ax0, ay0, ax1, ay1
-        if edge == "left":
-            ox0 = max(0, ax0 - ew)
-        elif edge == "right":
-            ox1 = min(W, ax1 + ew)
-        elif edge == "top":
-            oy0 = max(0, ay0 - eh)
-        elif edge == "bottom":
-            oy1 = min(H, ay1 + eh)
-        region = np.zeros((H, W), dtype=bool)
-        region[oy0:oy1, ox0:ox1] = True
-        hole = region & (~solid)  # 外扩环里非实心的部分 = 要补的
-    else:
-        # inpaint 镂空孔：bbox 矩形 − alpha 实心区
-        region = np.zeros((H, W), dtype=bool)
-        region[by0:by1, bx0:bx1] = True
-        hole = region & (~solid)
-    if not hole.any():
-        return None
-    mask_a[hole] = 0
-    mask = np.zeros((H, W, 4), dtype=np.uint8)
-    mask[:, :, 3] = mask_a
-    out = io.BytesIO()
-    Image.fromarray(mask, "RGBA").save(out, "PNG")
-    return out.getvalue()
-
-
 def judge_element_complete(cut_png: bytes, subj_png: bytes | None = None, *,
                            edge_frac: float = 0.08, subj_adj_frac: float = 0.24) -> bool:
     """执行期实判：这个抠出来的元素「是否完整」（不靠 vision 的 occluded 猜测）。
@@ -599,9 +521,9 @@ def judge_element_complete(cut_png: bytes, subj_png: bytes | None = None, *,
     from scipy import ndimage
 
     a = np.array(Image.open(io.BytesIO(cut_png)).convert("RGBA"))[:, :, 3] > 40
-    if int(a.sum()) < 64:
-        return False  # 几乎抠空 → 当不完整，留背景
     H, W = a.shape
+    if int(a.sum()) < max(64, int(0.005 * H * W)):
+        return False  # 几乎抠空 / 太小碎片（<0.5% 帧）→ 当不完整，留背景，不吐废层
     boundary = a & ~ndimage.binary_erosion(a)
     nb = int(boundary.sum())
     if nb == 0:
@@ -657,37 +579,7 @@ def build_bg_hole_mask_from_layers(src: bytes, layer_pngs: list, text_blocks: li
     return out.getvalue()
 
 
-_COMPLETE_PROMPT = (
-    "Complete this partially occluded/clipped object into a single WHOLE, intact {label}. "
-    "Inpaint ONLY the transparent (missing) area so it becomes complete and natural, "
-    "matching its own color/material/lighting/perspective. Do not add background, props, or text."
-)
-
-
-def build_bg_hole_mask(src: bytes, boxes: list[dict], *, pad: float = 0.03) -> bytes:
-    """背景洞 mask：把传入 boxes（主体 + 完整元素 + 文字）挖空（透明=要补的洞），其余 255（保留）。
-
-    分层规则（用户定义）：背景层 = 场景 + 不完整(被遮挡)的元素。能干净抠出的（主体、完整元素、
-    文字）从背景挖走、由 edit 用周围场景自然补上；抠不干净的（被遮挡元素）不挖、留在背景里。
-    衬布/桌面/氛围本就是场景，永远保留。按源图真实像素 W×H 绘制（mask 同尺寸硬约束）。
-    """
-    import numpy as np
-    from PIL import Image
-
-    W, H = _decode_size(src)
-    mask_a = np.full((H, W), 255, dtype=np.uint8)
-    for b in boxes:
-        x0, y0, x1, y1 = _px_box(b, W, H, pad)
-        if x1 > x0 and y1 > y0:
-            mask_a[y0:y1, x0:x1] = 0
-    mask = np.zeros((H, W, 4), dtype=np.uint8)
-    mask[:, :, 3] = mask_a
-    out = io.BytesIO()
-    Image.fromarray(mask, "RGBA").save(out, "PNG")
-    return out.getvalue()
-
-
-# ── 子图回帧 helper（补全：edit 输出回到子图裁切框尺寸再重抠，§5.2 末） ──
+# ── resize helper：provider.edit 产出的整帧回到目标尺寸（背景层叠回画布前对齐用） ──
 
 def resize_cover(png: bytes, w: int, h: int) -> bytes:
     """把图 resize 到 w×h；宽高比不同则 cover（铺满）+ 中心裁切，保持不变形。"""
@@ -712,69 +604,46 @@ def resize_cover(png: bytes, w: int, h: int) -> bytes:
     return out.getvalue()
 
 
-def _alpha_area(png: bytes) -> int:
-    from PIL import Image
-
-    area, _ = _alpha_stats(Image.open(io.BytesIO(png)).convert("RGBA"))
-    return area
-
-
-def recut_completed(edit_rgb: bytes, src: bytes, rel_box: dict, *, lift_lo: int, lift_scale: int,
-                    min_frac: float) -> bytes:
-    """补全后强制重抠（§5.2 闭环）：provider.edit 返回不透明整帧 RGB →
-    先回帧到子图裁切框尺寸 → cutout_subject + _clean_fragments 重抠成透明 → 贴回整帧原坐标。"""
-    from PIL import Image
-
-    from app.agents.composite import _clean_fragments
-
-    W, H = _decode_size(src)
-    x0, y0, x1, y1 = _px_box(rel_box, W, H, pad=0.06)
-    cw, ch = max(2, x1 - x0), max(2, y1 - y0)
-    # edit 输出是 gpt-image 固定档位 → 回到子图裁切框尺寸（与贴回坐标像素对齐）
-    sub = resize_cover(edit_rgb, cw, ch)
-    cut = cutout_subject(sub, lift_lo=lift_lo, lift_scale=lift_scale)
-    cut = _clean_fragments(cut, min_frac)
-    cut_im = Image.open(io.BytesIO(cut)).convert("RGBA")
-    frame = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    frame.alpha_composite(cut_im, (x0, y0))
-    out = io.BytesIO()
-    frame.save(out, "PNG")
-    return out.getvalue()
-
-
-async def complete_object(layer_png: bytes, src: bytes, rel_box: dict, label: str, *,
-                          lift_lo: int, lift_scale: int, min_frac: float) -> bytes:
-    """补全不完整对象：构造 mask → provider.edit(transparent=False) inpaint → 回帧 → 重抠
-    → 补坏自检（重抠 alpha 面积反而 < 补全前 → 丢弃补全，用补全前）。
-
-    任何失败 → 返回补全前的 layer_png（残缺也成层，§7 降级 3）。
-    """
-    from app.providers import get_image_provider
-
-    mask = build_completion_mask(layer_png, rel_box)
-    if mask is None:
-        return layer_png  # 无洞 → 对象已完整，跳过补全
-    provider = get_image_provider()
-    prompt = _COMPLETE_PROMPT.replace("{label}", label or "object")
-    try:
-        # transparent=False（§强制：transparent=True → 502）；mask 透明区=重绘区
-        edited = await provider.edit(prompt, src, "1:1", mask=mask, transparent=False)
-    except Exception:
-        return layer_png  # edit 失败 / URL 型 raise → 退回未补全
-    try:
-        recut = recut_completed(edited.data, src, rel_box, lift_lo=lift_lo,
-                                lift_scale=lift_scale, min_frac=min_frac)
-    except Exception:
-        return layer_png
-    # 补坏自检：补全后 alpha 面积反而变小 → 判定补坏，用补全前
-    if _alpha_area(recut) < _alpha_area(layer_png):
-        return layer_png
-    return recut
-
-
 # ============================================================================
 # 智能四层拆解 plan 构造（async：识别在审批前定型，DAG/节点数 fixed）
 # ============================================================================
+
+def _rel_iou(a: dict, b: dict) -> float:
+    """两个 rel-box 的 IoU。"""
+    ax1, ay1 = a["relX"] + a["relW"], a["relY"] + a["relH"]
+    bx1, by1 = b["relX"] + b["relW"], b["relY"] + b["relH"]
+    iw = max(0.0, min(ax1, bx1) - max(a["relX"], b["relX"]))
+    ih = max(0.0, min(ay1, by1) - max(a["relY"], b["relY"]))
+    inter = iw * ih
+    union = a["relW"] * a["relH"] + b["relW"] * b["relH"] - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _covered_frac(a: dict, b: dict) -> float:
+    """a 的面积有多大比例落在 b 里。"""
+    ax1, ay1 = a["relX"] + a["relW"], a["relY"] + a["relH"]
+    bx1, by1 = b["relX"] + b["relW"], b["relY"] + b["relH"]
+    iw = max(0.0, min(ax1, bx1) - max(a["relX"], b["relX"]))
+    ih = max(0.0, min(ay1, by1) - max(a["relY"], b["relY"]))
+    aa = a["relW"] * a["relH"]
+    return (iw * ih) / aa if aa > 0 else 0.0
+
+
+def _dedup_elements(elements: list, subject: dict, text_blocks: list,
+                    *, subj_iou: float = 0.55, text_cov: float = 0.6) -> list:
+    """plan 期几何去重 vision 标注噪声：
+    - 与主体 IoU > subj_iou → vision 把主体重复标成元素 → 丢（防重复主体层）。
+    - 面积 >text_cov 落在某文字框里 → 那是叠加文字、单独成层 → 丢（防文字被当道具抠）。
+    """
+    out = []
+    for e in elements:
+        if _rel_iou(e, subject) > subj_iou:
+            continue
+        if any(_covered_frac(e, t) > text_cov for t in (text_blocks or [])):
+            continue
+        out.append(e)
+    return out
+
 
 async def build_smart_split_plan(session_id: str, source_label: str, src_bytes: bytes | None) -> Plan:
     """识别四层布局 → 构造显式 z_index、单 depends 链的拆解 DAG。
@@ -785,17 +654,19 @@ async def build_smart_split_plan(session_id: str, source_label: str, src_bytes: 
     if layout is None:
         return build_split_plan(source_label)  # 识别失败 → 三层降级（§7.1 总开关）
 
-    elements = layout["elements"]
-    # 执行期实判：plan 期不靠 vision 的 occluded 猜测，先把每个元素都尝试抠；抠出来后按
-    # 「实际是否完整(画框出血/主体遮挡)」决定成层还是留背景。z 序按 in_front 排（执行序≠z序）。
-    behind = [e for e in elements if not e["in_front"]]
-    front = [e for e in elements if e["in_front"]]
-
     # 文字框：plan 期 OCR 一次——既用于背景挖掉文字、又复用给文字层（避免二次识别/坐标漂移）
     try:
         text_blocks = await detect_text_blocks(src_bytes) if src_bytes else []
     except Exception:
         text_blocks = []
+
+    # plan 期几何去重（治 vision 标注噪声的根）：丢掉①与主体高度重叠的元素框（vision 偶尔把主体
+    # 又标成一个装饰元素 → 重复瓶子层）②大部分落在文字框里的元素框（那是文字、单独成层，别当道具抠）。
+    elements = _dedup_elements(layout["elements"], layout["subject"], text_blocks)
+    # 执行期实判：plan 期不靠 vision 的 occluded 猜测，先把每个元素都尝试抠；抠出来后按
+    # 「实际是否完整(画框出血/主体遮挡)」决定成层还是留背景。z 序按 in_front 排（执行序≠z序）。
+    behind = [e for e in elements if not e["in_front"]]
+    front = [e for e in elements if e["in_front"]]
 
     # 邻居块裁决用：每个对象抠图时把「其它对象」的框传下去，丢掉串入的邻居整块
     def _box(e: dict) -> dict:
