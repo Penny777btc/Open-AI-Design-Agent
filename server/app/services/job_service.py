@@ -496,6 +496,14 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             cut = await loop.run_in_executor(None, lambda: cutout_subject_full(
                 src, bbox, lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac,
                 other_rel_boxes=other_boxes))
+            # 护栏式补全：主体被前景挡住一截 → 在缺口里 inpaint 补成完整产品 → 重抠 → 面积+vision
+            # 双护栏，过不了就退回残缺版（永不更差）。仅主体 + 手动标记的关键元素(complete=True)走这里。
+            if node.args.get("complete") and node.args.get("occlusion"):
+                from app.agents.split import complete_object
+
+                cut = await complete_object(
+                    cut, src, bbox, node.args.get("label", "product"), node.args["occlusion"],
+                    lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac)
         else:
             cut = await loop.run_in_executor(None, lambda: cutout_region(
                 src, bbox, lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac,

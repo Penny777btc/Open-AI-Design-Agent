@@ -608,6 +608,112 @@ def resize_cover(png: bytes, w: int, h: int) -> bytes:
 # 智能四层拆解 plan 构造（async：识别在审批前定型，DAG/节点数 fixed）
 # ============================================================================
 
+# ============================================================================
+# 护栏式 AI 补全（仅主体 + 手动标记的关键元素）：窄范围 inpaint → 重抠 → 多重校验 → 退回保底
+# ============================================================================
+
+def _area(png: bytes) -> int:
+    from PIL import Image
+
+    return _alpha_stats(Image.open(io.BytesIO(png)).convert("RGBA"))[0]
+
+
+def build_inpaint_mask(src: bytes, occ_rels: list, *, pad: float = 0.01) -> bytes:
+    """补全用 inpaint mask：把「被遮挡的缺口区域」(occ_rels，整帧 rel-box) 设透明(=重绘)，其余 255 保留。"""
+    import numpy as np
+    from PIL import Image
+
+    W, H = _decode_size(src)
+    a = np.full((H, W), 255, dtype=np.uint8)
+    for b in occ_rels:
+        x0, y0, x1, y1 = _px_box(b, W, H, pad)
+        if x1 > x0 and y1 > y0:
+            a[y0:y1, x0:x1] = 0
+    mask = np.zeros((H, W, 4), dtype=np.uint8)
+    mask[:, :, 3] = a
+    out = io.BytesIO()
+    Image.fromarray(mask, "RGBA").save(out, "PNG")
+    return out.getvalue()
+
+
+def recut_to_frame(edited_rgb: bytes, src: bytes, rel_box: dict, *,
+                   lift_lo: int, lift_scale: int, min_frac: float) -> bytes:
+    """补全后强制重抠：edit 输出是不透明整帧 RGB → 回帧到源尺寸 → 裁主体 bbox → cutout_subject
+    → _clean_fragments → 贴回整帧原坐标透明 PNG（与其它层像素对齐）。"""
+    from PIL import Image
+
+    from app.agents.composite import _clean_fragments
+
+    W, H = _decode_size(src)
+    ed = Image.open(io.BytesIO(edited_rgb)).convert("RGB")
+    if ed.size != (W, H):
+        ed = ed.resize((W, H), Image.LANCZOS)
+    x0, y0, x1, y1 = _px_box(rel_box, W, H, pad=0.04)
+    sub = io.BytesIO()
+    ed.crop((x0, y0, x1, y1)).save(sub, "PNG")
+    cut = cutout_subject(sub.getvalue(), lift_lo=lift_lo, lift_scale=lift_scale)
+    cut = _clean_fragments(cut, min_frac)
+    cim = Image.open(io.BytesIO(cut)).convert("RGBA")
+    frame = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    frame.alpha_composite(cim, (x0, y0))
+    out = io.BytesIO()
+    frame.save(out, "PNG")
+    return out.getvalue()
+
+
+async def verify_object_label(png: bytes, label: str) -> bool:
+    """补全防幻觉复检：vision 判「这是不是一个完整、单个的 {label}」。无 key/失败 → True（不拦，靠面积护栏）。"""
+    if not label:
+        return True
+    r = await _gemini_vision_json(
+        png, f'这张透明背景图里是不是一个完整的、单独的「{label}」（没有变成别的东西、没有多出别的物体）？'
+             '只输出 JSON：{"match": true 或 false}')
+    if r is None:
+        return True
+    return bool(r.get("match", True))
+
+
+async def complete_object(layer_png: bytes, src: bytes, rel_box: dict, label: str, occ_rels: list, *,
+                          attempts: int = 2, lift_lo: int = 25, lift_scale: int = 4,
+                          min_frac: float = 0.05) -> bytes:
+    """护栏式补全：在 occ_rels（被遮挡缺口）内 inpaint 补成完整对象 → 重抠 → 多重校验：
+    面积合理（不缩水/不暴涨）+ vision label 复检 → 过检里挑最克制那张；全不过 → 退回 layer_png。
+
+    保底：永远不会比「不补」更差——成功给完整对象，失败就还是原残缺图，绝不吐幻觉。
+    """
+    if not occ_rels:
+        return layer_png
+    from app.providers import get_image_provider
+
+    base = _area(layer_png)
+    if base < 64:
+        return layer_png
+    mask = build_inpaint_mask(src, occ_rels)
+    provider = get_image_provider()
+    prompt = (
+        f"Complete the main {label or 'product'} into a single WHOLE, intact object. Fill ONLY the masked "
+        "(transparent) area by naturally extending the object ITSELF — its own shape, material, color, label and "
+        "lighting — as if the thing in front of it were removed. Do NOT add any new object, prop, hand, garnish, "
+        "text or background; do NOT change the visible part. Keep edges clean."
+    )
+    best = None
+    for _ in range(max(1, attempts)):
+        try:
+            edited = await provider.edit(prompt, src, "1:1", mask=mask, transparent=False)
+            recut = recut_to_frame(edited.data, src, rel_box,
+                                   lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac)
+        except Exception:
+            continue
+        a = _area(recut)
+        if a < base or a > base * 2.3:          # 缩水=补坏；暴涨=乱画 → 弃
+            continue
+        if not await verify_object_label(recut, label):  # 变成别的东西 → 弃
+            continue
+        if best is None or a < best[0]:         # 过检里挑增量最小（最克制）的
+            best = (a, recut)
+    return best[1] if best else layer_png       # 全不过 → 退回残缺版（永不更差）
+
+
 def _rel_iou(a: dict, b: dict) -> float:
     """两个 rel-box 的 IoU。"""
     ax1, ay1 = a["relX"] + a["relW"], a["relY"] + a["relH"]
@@ -617,6 +723,16 @@ def _rel_iou(a: dict, b: dict) -> float:
     inter = iw * ih
     union = a["relW"] * a["relH"] + b["relW"] * b["relH"] - inter
     return inter / union if union > 0 else 0.0
+
+
+def _rel_intersection(a: dict, b: dict) -> dict | None:
+    """两 rel-box 的交集 rel-box；不相交返回 None。"""
+    ix0, iy0 = max(a["relX"], b["relX"]), max(a["relY"], b["relY"])
+    ix1 = min(a["relX"] + a["relW"], b["relX"] + b["relW"])
+    iy1 = min(a["relY"] + a["relH"], b["relY"] + b["relH"])
+    if ix1 <= ix0 or iy1 <= iy0:
+        return None
+    return {"relX": ix0, "relY": iy0, "relW": ix1 - ix0, "relH": iy1 - iy0}
 
 
 def _covered_frac(a: dict, b: dict) -> float:
@@ -678,11 +794,18 @@ async def build_smart_split_plan(session_id: str, source_label: str, src_bytes: 
     nodes: list[PlanNode] = []
     element_ids: list[str] = []
 
-    # 主体最先抠（z=k+1）——元素的「被主体遮挡」实判要用主体 alpha，故主体须先于元素执行
+    # 主体被前景元素遮挡的缺口（front 元素框 ∩ 主体框）→ 主体补全只在这些洞里 inpaint（窄范围）
+    subj = layout["subject"]
+    subj_occ = [r for r in (_rel_intersection(f, subj) for f in front) if r]
+
+    # 主体最先抠（z=k+1）——元素的「被主体遮挡」实判要用主体 alpha，故主体须先于元素执行。
+    # 主体默认开启护栏式补全：被前景挡住一截 → 在缺口里补成完整产品（过不了护栏则退回残缺版）。
     nodes.append(PlanNode(
         id=subject_id, tool="cutout_layer", label="智能拆解 · 主体层", depends=[],
-        args={"source_asset": source_label, "split_role": "subject", "bbox": layout["subject"],
-              "z_index": z_subject, "other_boxes": [_box(o) for o in elements]},
+        args={"source_asset": source_label, "split_role": "subject", "bbox": subj,
+              "z_index": z_subject, "other_boxes": [_box(o) for o in elements],
+              "label": subj.get("label") or "product",
+              "complete": bool(subj_occ), "occlusion": subj_occ},
     ))
 
     # 装饰元素：都 depends=[主体]（拿到主体 alpha 后实判完整性）。behind 在主体下、front 在主体上
