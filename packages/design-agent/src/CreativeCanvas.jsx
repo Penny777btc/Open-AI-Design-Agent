@@ -1789,7 +1789,7 @@ export default function CreativeCanvas({
                             <TypingDots />
                           )}
                           
-                          {(msg.events || []).filter(e => e && ["tool_call", "tool_result", "plan_propose", "error", "info"].includes(e.type)).map((ev, i) => (
+                          {visibleEvents(msg.events).map((ev, i) => (
                             <EventPill key={i} event={{...ev, onAction: handleJobAction}} />
                           ))}
                         </div>
@@ -2197,6 +2197,21 @@ function friendlyDone(name, asset) {
   if (asset?.split_role === "subject") return "主体已抠出";
   if (asset?.split_role === "bg") return "背景已生成";
   return "画面已生成";
+}
+
+// 已完成的 tool_call 不再显示转圈：把每个 tool_call 与它后面最近的一个 tool_result/error 配对，
+// 配上的（已出结果）隐藏掉、只留结果勾；没配上的（仍在跑）才显示转圈。修「重进历史会话还在转圈」。
+function visibleEvents(events) {
+  const arr = (events || []).filter(e => e && ["tool_call", "tool_result", "plan_propose", "error", "info"].includes(e.type));
+  const resultPositions = [];
+  arr.forEach((e, i) => { if (e.type === "tool_result" || e.type === "error") resultPositions.push(i); });
+  const used = new Set();
+  return arr.filter((e, i) => {
+    if (e.type !== "tool_call") return true;
+    const r = resultPositions.find(j => j > i && !used.has(j));
+    if (r !== undefined) { used.add(r); return false; } // 已出结果 → 隐藏转圈
+    return true;                                          // 仍在跑 → 保留转圈
+  });
 }
 
 function EventPill({ event }) {
