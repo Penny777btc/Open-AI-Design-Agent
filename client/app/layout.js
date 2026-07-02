@@ -1,7 +1,6 @@
 import { Inter, Syne, Roboto_Mono } from "next/font/google";
-// design-agent 的样式必须先于 globals.css 注入，且全局加载：
-// 只在 /canvas 引入会导致客户端导航后 CSS 注入顺序变化，首页风格漂移
-import "design-agent/dist/tailwind.css";
+// 单条 Tailwind v4 管线：globals.css 用 @source 扫描 design-agent 包源码生成其全部工具类，
+// 不再单独 import 包内 v3 dist/tailwind.css（避免同名类双份定义 → translate/transform 叠加错位）。
 import "./globals.css";
 import { Providers } from "./providers";
 import { Toaster } from "react-hot-toast";

@@ -1,11 +1,16 @@
 @import "tailwindcss";
 @custom-variant dark (&:is(.dark *));
+/* 统一 Tailwind 管线：让 v4 也扫描 design-agent 包源码，生成它用到的全部工具类
+   （bg-bg-card/95 透明度变体、shadow-pop、hover:bg-bg-card-hover 等）。配合删除 layout.js
+   对包内 v3 dist/tailwind.css 的 import → 单条 v4 管线，消除同名类双份定义(translate/transform 叠加)。 */
+@source "../../packages/design-agent/src";
 
 @theme {
   --color-primary: var(--primary);
   --color-brand-primary: var(--primary);
   --color-bg-page: var(--bg-page);
   --color-bg-card: var(--bg-card);
+  --color-bg-card-hover: var(--bg-card-hover);  /* 包内 hover:bg-bg-card-hover 依赖，否则 hover 无效 */
   --color-primary-text: var(--text-primary);
   --color-secondary-text: var(--text-secondary);
   --color-secondary-strong: var(--text-secondary-strong);  /* 小字号专用：对比度更高 */
