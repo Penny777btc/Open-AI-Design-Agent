@@ -330,6 +330,8 @@ export default function UsersTab({ readOnly }) {
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [inited, setInited] = useState(false);
+  // 三态补全：加载失败 ≠ 「没有匹配的用户」，留可见 error 态 + 重试
+  const [error, setError] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [creditsFor, setCreditsFor] = useState(null);
   const [banFor, setBanFor] = useState(null);
@@ -345,6 +347,7 @@ export default function UsersTab({ readOnly }) {
   const load = useCallback(
     async (reset) => {
       setLoading(true);
+      setError(false); // 重试/翻页/换筛选前清掉上次的错误态
       const off = reset ? 0 : offset;
       try {
         const q = encodeURIComponent(debounced);
@@ -356,6 +359,7 @@ export default function UsersTab({ readOnly }) {
         setDone(data.length < PAGE);
       } catch (err) {
         toast.error(errMsg(err, "加载用户失败"));
+        setError(true);
       } finally {
         setLoading(false);
         setInited(true);
@@ -476,6 +480,8 @@ export default function UsersTab({ readOnly }) {
           done={done && rows.length > 0}
           empty={inited && rows.length === 0}
           emptyText="没有匹配的用户"
+          error={error}
+          errorText="加载用户失败"
         />
       </div>
 

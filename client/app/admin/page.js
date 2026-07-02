@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   FiGrid, FiUsers, FiUserPlus, FiActivity, FiZap, FiDollarSign, FiHardDrive,
   FiShoppingCart, FiBox, FiGift, FiImage, FiFileText, FiMenu, FiX, FiChevronLeft, FiChevronRight, FiLogOut,
 } from "react-icons/fi";
 import { PicsmithMark } from "@/components/Logo";
-import { API, adminGet, MiniBars, SudoProvider, cardCls, fmtMoney, fmtBytes } from "./ui";
+import { API, adminGet, MiniBars, SudoProvider, btnGhost, cardCls, fmtMoney, fmtBytes } from "./ui";
 import axios from "axios";
+import { useLang } from "@/context/LanguageContext";
+import { COPY } from "@/lib/copy";
 import UsersTab from "./UsersTab";
 import OrdersTab from "./OrdersTab";
 import PackagesTab from "./PackagesTab";
@@ -40,17 +42,20 @@ const NAV = [
 const ITEMS = NAV.flatMap((g) => g.items);
 const META = Object.fromEntries(ITEMS.map((i) => [i.key, i]));
 
-// 与 not-found.js 一致的「页面不存在」（不暴露这是管理入口）
+// 与 not-found.js 一致的「页面不存在」（不暴露这是管理入口）。
+// 文案必须走 COPY[lang].notFound：原来硬编码中文，英文用户看到的伪装页与真 404 不一致，等于自曝有东西被藏起来了。
 function NotFoundDisguise() {
+  const { lang } = useLang();
+  const t = COPY[lang].notFound;
   return (
     <div className="min-h-dvh grid-bg flex flex-col items-center justify-center gap-6 px-6 text-center">
       <PicsmithMark size={40} className="text-white" />
       <div className="micro-label">// 404 · NOT_FOUND</div>
-      <h1 className="font-display text-4xl sm:text-6xl font-extrabold tracking-tight">页面不存在</h1>
-      <p className="text-secondary-text text-sm max-w-sm">你访问的页面已被移动或从未存在。</p>
+      <h1 className="font-display text-4xl sm:text-6xl font-extrabold tracking-tight">{t.title}</h1>
+      <p className="text-secondary-text text-sm max-w-sm">{t.desc}</p>
       <div className="flex gap-3 mt-2">
-        <Link href="/" className="px-6 py-2.5 bg-white text-black rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all">返回首页</Link>
-        <Link href="/dashboard" className="px-6 py-2.5 border border-white/15 bg-white/5 text-gray-400 rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] hover:text-white hover:border-white/30 transition-all">进入工作台</Link>
+        <Link href="/" className="px-6 py-2.5 bg-white text-black rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all">{t.home}</Link>
+        <Link href="/dashboard" className="px-6 py-2.5 border border-white/15 bg-white/5 text-gray-400 rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] hover:text-white hover:border-white/30 transition-all">{t.dash}</Link>
       </div>
     </div>
   );
@@ -98,7 +103,7 @@ function Overview({ metrics, series }) {
 }
 
 export default function AdminPage() {
-  const [state, setState] = useState("loading"); // loading | denied | ready
+  const [state, setState] = useState("loading"); // loading | denied | error | ready
   const [metrics, setMetrics] = useState(null);
   const [series, setSeries] = useState(null);
   const [me, setMe] = useState(null);
@@ -106,16 +111,39 @@ export default function AdminPage() {
   const [navOpen, setNavOpen] = useState(false);   // 移动抽屉
   const [collapsed, setCollapsed] = useState(false); // 桌面侧边栏收起为图标条
 
-  useEffect(() => {
-    adminGet("/metrics").then(({ data }) => { setMetrics(data); setState("ready"); }).catch(() => setState("denied"));
-    axios.get(`${API}/api/v1/auth/me`).then(({ data }) => setMe(data)).catch(() => {});
+  const fetchOverview = useCallback(() => {
+    setState("loading");
+    adminGet("/metrics")
+      .then(({ data }) => { setMetrics(data); setState("ready"); })
+      .catch((err) => {
+        // 只有 401/403（未登录/非管理员）才伪装 404：伪装只为对外藏入口。
+        // 网络断/5xx 也伪装的话，真管理员会误以为后台被下线且无从重试——那是自伤。
+        const code = err?.response?.status;
+        setState(code === 401 || code === 403 ? "denied" : "error");
+      });
+    // 趋势图是增强信息：失败可容忍（series 为空时区块自动隐藏），不阻塞整页
     adminGet("/metrics/timeseries?days=30").then(({ data }) => setSeries(data)).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    fetchOverview();
+    axios.get(`${API}/api/v1/auth/me`).then(({ data }) => setMe(data)).catch(() => {});
+  }, [fetchOverview]);
 
   if (state === "loading") {
     return <div className="min-h-dvh bg-bg-page flex items-center justify-center"><div className="micro-label animate-pulse">// LOADING</div></div>;
   }
   if (state === "denied") return <NotFoundDisguise />;
+  if (state === "error") {
+    // error ≠ denied：这是给真管理员看的可重试失败页，不做伪装
+    return (
+      <div className="min-h-dvh bg-bg-page flex flex-col items-center justify-center gap-4 px-6 text-center">
+        <div className="micro-label text-red-400">// METRICS_LOAD_FAILED</div>
+        <p className="text-[13px] text-gray-400">概览数据加载失败，请检查网络后重试。</p>
+        <button onClick={fetchOverview} className={btnGhost}>重试</button>
+      </div>
+    );
+  }
 
   const role = me?.role || "user";
   const readOnly = role === "support";

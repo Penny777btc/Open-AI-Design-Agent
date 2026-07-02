@@ -138,11 +138,14 @@ export default function RedeemTab({ readOnly }) {
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [inited, setInited] = useState(false);
+  // 三态补全：加载失败 ≠ 「暂无兑换码」，留可见 error 态 + 重试
+  const [error, setError] = useState(false);
   const [generating, setGenerating] = useState(false);
 
   const load = useCallback(
     async (reset) => {
       setLoading(true);
+      setError(false); // 重试/换筛选前清掉上次的错误态
       const off = reset ? 0 : offset;
       try {
         const { data } = await adminGet(`/redeem-codes?status=${status}&limit=${PAGE}&offset=${off}`);
@@ -151,6 +154,7 @@ export default function RedeemTab({ readOnly }) {
         setDone(data.length < PAGE);
       } catch (err) {
         toast.error(errMsg(err, "加载兑换码失败"));
+        setError(true);
       } finally {
         setLoading(false);
         setInited(true);
@@ -249,6 +253,8 @@ export default function RedeemTab({ readOnly }) {
           done={done && rows.length > 0}
           empty={inited && rows.length === 0}
           emptyText="暂无兑换码"
+          error={error}
+          errorText="加载兑换码失败"
         />
       </div>
 

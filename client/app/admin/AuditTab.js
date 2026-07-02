@@ -61,10 +61,13 @@ export default function AuditTab() {
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [inited, setInited] = useState(false);
+  // 三态补全：审计日志加载失败若显示成「暂无审计日志」，等于告诉运营「没人动过后台」——必须显式报错
+  const [error, setError] = useState(false);
 
   const load = useCallback(
     async (reset) => {
       setLoading(true);
+      setError(false); // 重试/换筛选前清掉上次的错误态
       const off = reset ? 0 : offset;
       try {
         const actionQ = action ? `&action=${encodeURIComponent(action)}` : "";
@@ -74,6 +77,7 @@ export default function AuditTab() {
         setDone(data.length < PAGE);
       } catch (err) {
         toast.error(errMsg(err, "加载审计日志失败"));
+        setError(true);
       } finally {
         setLoading(false);
         setInited(true);
@@ -143,6 +147,8 @@ export default function AuditTab() {
           done={done && rows.length > 0}
           empty={inited && rows.length === 0}
           emptyText="暂无审计日志"
+          error={error}
+          errorText="加载审计日志失败"
         />
       </div>
     </div>

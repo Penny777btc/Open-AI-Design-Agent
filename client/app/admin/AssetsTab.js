@@ -68,10 +68,13 @@ export default function AssetsTab({ readOnly }) {
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [inited, setInited] = useState(false);
+  // 三态补全：内容巡查是运营红线——断网/接口挂时整页显示「暂无内容」会被误读成「没有违规」
+  const [error, setError] = useState(false);
   const [takedownFor, setTakedownFor] = useState(null);
 
   const load = useCallback(async (reset) => {
     setLoading(true);
+    setError(false); // 重试/翻页前清掉上次的错误态
     const off = reset ? 0 : offset;
     try {
       const { data } = await adminGet(`/assets/recent?limit=${PAGE}&offset=${off}`);
@@ -80,6 +83,7 @@ export default function AssetsTab({ readOnly }) {
       setDone(data.length < PAGE);
     } catch (err) {
       toast.error(errMsg(err, "加载内容失败"));
+      setError(true);
     } finally {
       setLoading(false);
       setInited(true);
@@ -91,9 +95,8 @@ export default function AssetsTab({ readOnly }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (inited && rows.length === 0) {
-    return <div className="px-5 py-12 text-center text-[13px] text-gray-600">暂无内容</div>;
-  }
+  // 原来这里有个 `inited && rows.length === 0` 的整页早退「暂无内容」：
+  // error 也命中它，等于把「加载失败」伪装成「没有内容」。改为统一走下方 LoadMore 的三态分支。
 
   return (
     <div className="flex flex-col gap-5">
@@ -146,7 +149,10 @@ export default function AssetsTab({ readOnly }) {
         onClick={() => load(false)}
         loading={loading}
         done={done && rows.length > 0}
-        empty={false}
+        empty={inited && rows.length === 0}
+        emptyText="暂无内容"
+        error={error}
+        errorText="加载内容失败"
       />
 
       {takedownFor ? (

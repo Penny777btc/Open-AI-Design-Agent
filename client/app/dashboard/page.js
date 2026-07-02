@@ -36,6 +36,9 @@ export default function AssistantDashboard() {
   // 之前 catch 只 console.error，断网时和「真没历史」显示一样，用户会误以为项目全丢了
   const [sessionsState, setSessionsState] = useState("loading");
   const [skills, setSkills] = useState([]);
+  // 技能列表三态：loading / error / ready，与 sessionsState 同范式。
+  // 之前 catch 只 console.error，断网时技能弹窗一片空白，用户会误以为平台没上技能
+  const [skillsState, setSkillsState] = useState("loading");
   const [showSkillsMenu, setShowSkillsMenu] = useState(false);
   const [activeSkill, setActiveSkill] = useState(null);
   const [showMentionPopup, setShowMentionPopup] = useState(false);
@@ -117,11 +120,16 @@ export default function AssistantDashboard() {
   };
 
   const fetchSkills = async () => {
+    // 重试入口也走这里：先回 loading 让骨架重新出现
+    setSkillsState("loading");
     try {
       const { data } = await axios.get(`${API}/agent-skills`);
       setSkills(data);
+      setSkillsState("ready");
     } catch (err) {
+      // 失败进 error 态并在弹窗里给重试，不再把「加载失败」伪装成「没有技能」
       console.error("Failed to fetch skills:", err);
+      setSkillsState("error");
     }
   };
 
@@ -492,6 +500,26 @@ export default function AssistantDashboard() {
                             </button>
                           </div>
                           <div className="p-2 max-h-[60vh] overflow-y-auto scrollbar-subtle grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {/* 技能三态之 loading：骨架卡占位 */}
+                            {skillsState === "loading" && Array.from({ length: 4 }).map((_, i) => (
+                              <div key={`skill-skeleton-${i}`} className="h-24 rounded bg-bg-page/50 border border-divider/50 animate-pulse" />
+                            ))}
+                            {/* 三态之 error：加载失败 ≠ 没有技能，给明确失败提示 + 重试 */}
+                            {skillsState === "error" && (
+                              <div className="col-span-full flex flex-col items-center justify-center gap-3 py-10">
+                                <div className="text-sm font-bold text-primary-text">{t.skillsError}</div>
+                                <button
+                                  onClick={fetchSkills}
+                                  className="px-4 py-2 text-xs font-bold text-primary border border-primary/30 rounded hover:bg-primary/10 transition-colors"
+                                >
+                                  {t.retry}
+                                </button>
+                              </div>
+                            )}
+                            {/* 三态之 empty：确认加载成功且列表确实为空 */}
+                            {skillsState === "ready" && skills.length === 0 && (
+                              <div className="col-span-full py-10 text-center text-sm text-secondary-text">{t.skillsEmpty}</div>
+                            )}
                             {skills.map(s => (
                               <button
                                 key={s.name}

@@ -124,11 +124,14 @@ export default function OrdersTab({ readOnly }) {
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [inited, setInited] = useState(false);
+  // 三态补全：加载失败要留下可见的 error 态（toast 会消失，rows=[] 会被误读成「暂无订单」）
+  const [error, setError] = useState(false);
   const [refundFor, setRefundFor] = useState(null);
   const [markFor, setMarkFor] = useState(null);
 
   const load = useCallback(async (reset) => {
     setLoading(true);
+    setError(false); // 重试/翻页前清掉上次的错误态
     const off = reset ? 0 : offset;
     try {
       const { data } = await adminGet(`/orders?limit=${PAGE}&offset=${off}`);
@@ -137,6 +140,7 @@ export default function OrdersTab({ readOnly }) {
       setDone(data.length < PAGE);
     } catch (err) {
       toast.error(errMsg(err, "加载订单失败"));
+      setError(true);
     } finally {
       setLoading(false);
       setInited(true);
@@ -209,6 +213,8 @@ export default function OrdersTab({ readOnly }) {
           done={done && rows.length > 0}
           empty={inited && rows.length === 0}
           emptyText="暂无订单"
+          error={error}
+          errorText="加载订单失败"
         />
       </div>
 

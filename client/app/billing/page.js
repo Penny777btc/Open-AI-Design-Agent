@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import axios from "axios";
 import toast from "react-hot-toast";
@@ -19,23 +19,61 @@ export default function BillingPage() {
   const [packages, setPackages] = useState([]);
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [ledger, setLedger] = useState([]);
+  // 套餐/流水各自三态（loading / ready / error），对齐 dashboard 的 sessionsState 范式：
+  // 之前静默 catch + 初值 []，断网时套餐区整块消失、流水区伪装成「还没有流水」，全是误导
+  const [packagesState, setPackagesState] = useState("loading");
+  const [ledgerState, setLedgerState] = useState("loading");
   const [buying, setBuying] = useState(null);
   const [redeemCode, setRedeemCode] = useState("");
   const [redeeming, setRedeeming] = useState(false);
 
-  useEffect(() => {
-    axios.get(`${API}/api/v1/billing/packages`).then(({ data }) => {
+  const fetchPackages = useCallback(async () => {
+    // 重试入口也走这里：先回 loading 让骨架重新出现
+    setPackagesState("loading");
+    try {
+      const { data } = await axios.get(`${API}/api/v1/billing/packages`);
       setPackages(data.packages);
       setPaymentsEnabled(data.payments_enabled);
-    }).catch(() => {});
-    axios.get(`${API}/api/v1/billing/ledger`).then(({ data }) => setLedger(data)).catch(() => {});
+      setPackagesState("ready");
+    } catch {
+      setPackagesState("error");
+    }
+  }, []);
+
+  const fetchLedger = useCallback(async () => {
+    setLedgerState("loading");
+    try {
+      const { data } = await axios.get(`${API}/api/v1/billing/ledger`);
+      setLedger(data);
+      setLedgerState("ready");
+    } catch {
+      setLedgerState("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPackages();
+    fetchLedger();
+  }, [fetchPackages, fetchLedger]);
+
+  // ?paid 支付回跳 toast：不能在首帧就弹——SSR 兜底下 lang 首帧恒为 "en"，
+  // 中文用户从 Stripe 回来会看到英文 "Payment successful"。
+  // 做法：effect 依赖 lang 并把弹 toast 推迟一个宏任务；LanguageProvider 的语言检测
+  // effect（父组件，晚于子组件执行）会在同一次提交里跑完，若 lang 因此变化，
+  // cleanup 取消旧 timer，由携带最终语言的下一次 effect 弹出；ref 防重复弹。
+  const paidToastShown = useRef(false);
+  useEffect(() => {
+    if (paidToastShown.current) return;
     const params = new URLSearchParams(window.location.search);
-    if (params.get("paid")) {
-      toast.success(t.paid);
+    if (!params.get("paid")) return;
+    const timer = setTimeout(() => {
+      paidToastShown.current = true;
+      toast.success(COPY[lang].billing.paid);
       fetchUserData();
       window.history.replaceState(null, "", "/billing");
-    }
-  }, [fetchUserData]);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [lang, fetchUserData]);
 
   const buy = async (id) => {
     setBuying(id);
@@ -57,7 +95,7 @@ export default function BillingPage() {
       toast.success(t.redeem.success(data.credits));
       setRedeemCode("");
       fetchUserData(); // 刷新顶部余额
-      axios.get(`${API}/api/v1/billing/ledger`).then(({ data }) => setLedger(data)).catch(() => {});
+      fetchLedger(); // 复用带三态的拉取：失败会进入 error 态而不是静默丢失
     } catch (err) {
       toast.error(err.response?.data?.detail || t.redeem.failed);
     } finally {
@@ -86,8 +124,23 @@ export default function BillingPage() {
           </div>
         </div>
 
-        {/* 套餐 */}
+        {/* 套餐：三态渲染。error 时保留区块并给重试入口，而不是让整个购买区从页面上消失 */}
+        {packagesState === "error" ? (
+          <div className="bg-bg-card border border-white/[0.08] rounded-sm px-6 py-10 flex flex-col items-center gap-3">
+            <div className="text-[13px] text-gray-400">{t.packagesError}</div>
+            <button
+              onClick={fetchPackages}
+              className="px-5 py-2 border border-white/15 bg-white/5 text-gray-300 rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] hover:text-white hover:border-white/30 transition-all"
+            >
+              {t.retry}
+            </button>
+          </div>
+        ) : (
         <div className="grid sm:grid-cols-3 gap-5">
+          {/* loading：骨架卡占位，避免「先空后闪现」 */}
+          {packagesState === "loading" && Array.from({ length: 3 }).map((_, i) => (
+            <div key={`pkg-skeleton-${i}`} className="bg-bg-card border border-white/[0.08] rounded-sm h-56 animate-pulse" />
+          ))}
           {packages.map((p) => (
             <div key={p.id} className="bg-bg-card border border-white/[0.08] rounded-sm p-6 flex flex-col gap-3 hover:border-white/20 transition-all">
               <div className="micro-label">{p.label}</div>
@@ -111,6 +164,13 @@ export default function BillingPage() {
             </div>
           ))}
         </div>
+        )}
+
+        {/* 支付未开通的运营兜底：按钮只显「开通中」会让付费意愿空转，
+            这里衔接到下方兑换码 / 注册赠送积分，给用户一条马上能走的路 */}
+        {packagesState === "ready" && !paymentsEnabled && (
+          <div className="text-secondary-text text-[12px] -mt-8">{t.pendingHint}</div>
+        )}
 
         {/* 兑换码 */}
         <div className="flex flex-col gap-3">
@@ -137,10 +197,29 @@ export default function BillingPage() {
         <div className="flex flex-col gap-4">
           <div className="micro-label">{t.ledger}</div>
           <div className="bg-bg-card border border-white/[0.08] rounded-sm divide-y divide-white/[0.05]">
-            {ledger.length === 0 && (
+            {/* 三态之 loading：骨架行。之前初值 [] 直接命中「还没有流水」，加载中被当成空 */}
+            {ledgerState === "loading" && Array.from({ length: 3 }).map((_, i) => (
+              <div key={`ledger-skeleton-${i}`} className="px-5 py-4">
+                <div className="h-3 w-2/3 bg-white/[0.06] rounded animate-pulse" />
+              </div>
+            ))}
+            {/* 三态之 error：请求失败 ≠ 没有流水，给重试而不是误导用户「消费记录没了」 */}
+            {ledgerState === "error" && (
+              <div className="px-5 py-6 flex items-center gap-4 text-[13px] text-gray-500">
+                <span>{t.ledgerError}</span>
+                <button
+                  onClick={fetchLedger}
+                  className="px-4 py-1.5 border border-white/15 bg-white/5 text-gray-300 rounded-sm text-[10px] font-bold uppercase tracking-[0.15em] hover:text-white hover:border-white/30 transition-all"
+                >
+                  {t.retry}
+                </button>
+              </div>
+            )}
+            {/* 三态之 empty：确认加载成功且确实没有流水，才显示空态文案 */}
+            {ledgerState === "ready" && ledger.length === 0 && (
               <div className="px-5 py-6 text-[13px] text-gray-600">{t.empty}</div>
             )}
-            {ledger.map((r, i) => (
+            {ledgerState === "ready" && ledger.map((r, i) => (
               <div key={i} className="px-5 py-3 flex items-center gap-4 text-[12px]">
                 <span className="micro-label w-20 shrink-0">{t.kinds[r.kind] || r.kind}</span>
                 <span className={`font-mono font-bold w-16 ${r.delta >= 0 ? "text-white" : "text-gray-500"}`}>

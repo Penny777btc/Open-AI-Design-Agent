@@ -240,7 +240,19 @@ export function Badge({ tone = "ok", children }) {
   );
 }
 
-export function LoadMore({ onClick, loading, done, empty, emptyText = "暂无数据" }) {
+export function LoadMore({ onClick, loading, done, empty, emptyText = "暂无数据", error, errorText = "加载失败" }) {
+  // error 必须先于 empty 判断：接口挂/断网时 rows 为空 ≠ 真没有数据，
+  // 运营巡查若把「加载失败」误读成「暂无订单/暂无违规内容」会漏掉真实问题
+  if (error) {
+    return (
+      <div className="px-5 py-8 flex flex-col items-center gap-3">
+        <div className="text-[13px] text-red-400">{errorText}</div>
+        <button onClick={onClick} disabled={loading} className={btnGhost}>
+          {loading ? "加载中…" : "重试"}
+        </button>
+      </div>
+    );
+  }
   if (empty) {
     return <div className="px-5 py-8 text-center text-[13px] text-gray-600">{emptyText}</div>;
   }
