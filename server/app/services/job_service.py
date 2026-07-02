@@ -289,9 +289,15 @@ async def _run_job(job_id: str) -> None:
             )
         await emit(job_id, "text", {"content": summary})
         await _set_status(job_id, "done" if failed == 0 else ("done" if ok else "failed"))
-    except Exception:
+    except Exception as exc:
         logger.exception("job %s crashed", job_id)
-        await emit(job_id, "error", {"message": "Internal error while running the job."})
+        # 失败要说人话（用户曾看到英文 "Internal error" 完全不知所措）：
+        # 上游 AI 服务抖动(sub2api 503/超时)是最常见 crash 源 → 明说"稍后重试"；其余给通用中文。
+        exc_text = str(exc)
+        transient = "sub2api" in exc_text or "503" in exc_text or "timeout" in exc_text.lower()
+        msg = ("AI 服务暂时不可用（上游波动），未完成步骤的积分会退回——请点「重试」或稍后再试"
+               if transient else "任务执行出错，未完成步骤的积分会退回——请点「重试」，若持续失败请联系支持")
+        await emit(job_id, "error", {"message": msg})
         await _set_status(job_id, "failed")
     finally:
         _runtime.pop(job_id, None)

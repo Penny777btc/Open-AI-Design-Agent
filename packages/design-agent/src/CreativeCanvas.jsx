@@ -1763,6 +1763,7 @@ export default function CreativeCanvas({
               ref={canvasRef}
               theme={resolvedTheme}
               activeTasks={activeTasks}
+              chatBusy={busy}  // 任务(含规划期)进行中 → 画布空态起点卡先让位，避免看着像「还要再输入一遍」
               setActiveTasks={setActiveTasks}
               onZoomChange={setZoomLevel}
               onRegionEdit={handleRegionEdit}
