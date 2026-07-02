@@ -479,6 +479,38 @@ async def cut_locked_subject(src: bytes) -> bytes | None:
 
 
 # ============================================================================
+# 锁人物合成（locked-person composite）——单张 edit_image 的人物锁：
+# 含人物的图片编辑默认不让扩散模型重绘人（gpt-image/nano 整图重绘会让脸/身材变形），
+# 而是「本地抠出人物(原始像素零变形) + AI 只生成背景/排版(明确 NO PERSON、留位) + 合成」。
+# 与「套图锁主体」同源（cut_locked_subject / place_subject_on_bg），只是这里作用于单张。
+# why：卖家/自媒体最怕人脸漂移；抠一次贴回，人物 100% 零变形，AI 只负责它擅长的背景与文字。
+# ============================================================================
+
+# 原编辑指令里对「人/人物」的描述词——改写背景 prompt 时用来软性剔除（避免 AI 又去画人）。
+# 只做提示层面的约束（append 硬指令），不强删原句，避免误伤合法语义（如 "personal"）。
+_PERSON_BG_DIRECTIVE = (
+    " IMPORTANT COMPOSITING CONSTRAINT: do NOT draw, paint or render ANY person, human, face, "
+    "figure or body in this image — a real subject will be composited in afterwards. Produce ONLY "
+    "the background scene, environment, props and graphic layout described above. Leave the "
+    "LOWER-CENTER area open and unobstructed as clear space for a subject to be placed later. "
+    "If any text / title / caption is requested, render that text EXACTLY as specified, correctly "
+    "spelled and legible, but keep it clear of the lower-center subject area."
+)
+
+
+def rewrite_bg_prompt_no_person(prompt: str) -> str:
+    """把「含人物的编辑指令」改写成「只画背景/排版、明确 NO PERSON、给人物留位」的背景生成 prompt。
+
+    策略（保守、纯字符串）：保留原 prompt 的场景/风格/排版/文字诉求（AI 擅长的部分），
+    只在末尾追加一段硬约束——禁止画任何人、下中部留白给人物、要求的文字照旧精确渲染。
+    不去正则删原文里的「人」描述：删得不干净反而更乱，且可能误伤；靠 append 的强指令压住即可。
+    该函数是纯函数（无 I/O）→ 便于离线自测「改写后 prompt 含 NO PERSON 且保留原诉求」。
+    """
+    base = (prompt or "").strip()
+    return (base + _PERSON_BG_DIRECTIVE) if base else _PERSON_BG_DIRECTIVE.strip()
+
+
+# ============================================================================
 # 锁主体（locked-subject）合成：把「一次抠好的同一个主体透明层」按各模板槽位
 # 排布，叠合到 AI 生成的背景上 → 整套图共用同一主体像素 → 跨图 100% 一致。
 # why：约束式重生成让扩散模型每张重画主体，logo/形态漂移；抠一次、贴到底，才真一致。

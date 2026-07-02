@@ -673,13 +673,74 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                 # 用模块级 storage（顶部已 import）。绝不能在此再 local import——那会让 storage
                 # 在整个 _generate_node 变函数局部，导致 compose_subject 等更早引用它的分支 UnboundLocalError。
                 mask = storage._safe_path(mask_key).read_bytes()  # 过 _safe_path 防路径穿越
-        # 按任务路由编辑模型：含真人且无 mask 的整图编辑 → nano-banana（gemini 系，人物一致性最强），
-        # 修 gpt-image 整图重绘导致人脸/身材明显变形。其余（所有带 mask 的：拆图背景/局部编辑/护栏补全，
-        # 以及无人物的普通编辑）→ 保持 gpt-image（唯一支持 mask 局部重绘的通道）。
+        # ── 人物编辑路由矩阵（含真人的 edit_image，仅 sub2api 真实出图时；mock 走占位图不改） ──
+        #   | 条件                                             | 走法                        |
+        #   |--------------------------------------------------|-----------------------------|
+        #   | has_person 且无 mask 且 person_mode!="fuse"(默认) | 锁人物合成(本地抠人+AI背景) |
+        #   | has_person 且无 mask 且 person_mode=="fuse"       | nano 重绘（融合/风格化）    |
+        #   | 带 mask / 无 has_person                           | gpt-image（不变）           |
+        # why：默认「锁人物合成」——本地抠出人物原始像素零变形 + AI 只生成背景/排版 + 合成，
+        # 彻底规避扩散模型整图重绘造成的人脸/身材变形；仅当用户明确要把人融进画面/风格化时才 fuse。
+        person_mode = str(node.args.get("person_mode", "lock")).lower()
+        has_person = bool(node.args.get("has_person"))
+        person_lock = (
+            node.tool == "edit_image"
+            and has_person
+            and mask is None
+            and person_mode != "fuse"
+            and settings.provider_mode == "sub2api"
+        )
+        if person_lock:
+            # 锁人物合成：抠人物 → 生成「无人物/留位」背景 → 叠回原人物。任一环节失败 →
+            # 优雅降级回 gpt-image edit(原 prompt)，绝不硬失败（下方 person_lock 置 False 走原路由）。
+            try:
+                from app.agents.split import (
+                    cut_locked_subject, place_subject_on_bg, resize_cover,
+                    rewrite_bg_prompt_no_person,
+                )
+                from app.providers.base import GeneratedImage
+                from app.providers.openai_compat import _png_dims
+
+                person_png = await cut_locked_subject(source)  # 抠人物透明层（零变形原始像素）
+                if not person_png:
+                    raise RuntimeError("人物抠图失败")  # → 降级 gpt-image edit
+                # 人物层沿用 masks/ 落盘 pattern（与套图锁主体一致：可追溯、可复用）
+                import uuid as _uuidlib
+                person_key = f"masks/{session_id}/person_{_uuidlib.uuid4().hex[:12]}.png"
+                await loop.run_in_executor(None, lambda: storage.save_bytes(person_key, person_png))
+
+                ar = node.args.get("aspect_ratio", "1:1")
+                bg_prompt = rewrite_bg_prompt_no_person(prompt)  # 改写：NO PERSON + 留位 + 文字照旧
+                bg = None
+                bg_exc = None
+                for _ in range(2):  # 背景生成节点级重试（与 edit/generate 一致）
+                    try:
+                        bg = await provider.generate(bg_prompt, ar)
+                        break
+                    except Exception as exc:
+                        bg_exc = exc
+                if bg is None:
+                    raise bg_exc or RuntimeError("背景生成失败")
+
+                # 人物尺寸对齐到背景画幅（cover 不变形）→ 封面场景人物占比大、居中偏下合成
+                person_fit = await loop.run_in_executor(
+                    None, lambda: resize_cover(person_png, bg.width, bg.height))
+                composed = await loop.run_in_executor(None, lambda: place_subject_on_bg(
+                    bg.data, person_fit, scale=0.78, anchor="center-lower"))
+                cw, ch = _png_dims(composed) or (bg.width, bg.height)
+                image = GeneratedImage(data=composed, mime="image/png", width=cw, height=ch,
+                                       model=bg.model)
+            except Exception as exc:
+                logger.warning("锁人物合成失败，降级 gpt-image edit：%s", str(exc)[:160])
+                person_lock = False  # 降级：走下方常规 edit（gpt-image，原 prompt）
+
+        # fuse 路由：含真人且无 mask 且 person_mode=="fuse" → nano-banana（gemini 系，人物一致性最强），
+        # 允许把人物融进画面/风格化。其余（带 mask 的拆图背景/局部编辑/护栏补全，或无人物）→ gpt-image。
         use_person = (
             node.tool == "edit_image"
-            and bool(node.args.get("has_person"))
+            and has_person
             and mask is None
+            and person_mode == "fuse"
             and settings.provider_mode == "sub2api"  # mock 下路由无意义（占位图），不改动既有 mock 流程
         )
         edit_model = None  # 供计价：本节点 edit 实际走的模型（None=默认 EDIT_CREDITS）
@@ -693,7 +754,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
 
         last_exc = None
         person_failed = False  # nano 抛错/解析失败 → 降级 gpt-image 重试一次（宁可变形也别整节点失败）
-        for _ in range(2):  # 节点级重试
+        # image 已由「锁人物合成」产出时跳过重试循环；否则按路由走 nano/gpt/generate。
+        for _ in range(0 if image is not None else 2):  # 节点级重试
             try:
                 if node.tool == "edit_image":
                     if use_person and not person_failed:

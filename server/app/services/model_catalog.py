@@ -65,6 +65,17 @@ for _mid, _ec in _EDIT_CREDITS_BY_MODEL.items():
         f"编辑模型 {_mid} 积分 {_ec} 毛利低于地板 {MIN_MARGIN:.0%}，需上调"
     )
 
+# 合成型定价加成（compose_subject 套图锁主体 + 单张锁人物合成）：售价 = 默认生图价 + 此加成。
+# 成本 ≈ 一次生图（背景），本地合成/抠图不额外购模型，故复用生图成本口径过地板——写错当场暴露。
+COMPOSITE_CREDIT_BONUS = 4
+_comp_default = next((mid for mid, m in MODELS.items() if m.get("default")), "gpt-image-2")
+_comp_credits = MODELS[_comp_default]["credits"] + COMPOSITE_CREDIT_BONUS
+_comp_rev = _comp_credits * CREDIT_USD
+_comp_cost = MODELS[_comp_default]["cost_rmb"] / RMB_PER_USD
+assert _comp_rev > 0 and (1 - _comp_cost / _comp_rev) >= MIN_MARGIN, (
+    f"合成型定价 {_comp_credits} 积分毛利低于地板 {MIN_MARGIN:.0%}，需上调 COMPOSITE_CREDIT_BONUS"
+)
+
 
 def margin(model_id: str) -> float:
     """该模型的毛利率（0-1）。"""

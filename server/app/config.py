@@ -74,16 +74,25 @@ class Settings(BaseSettings):
 
 
 def tool_cost(tool: str, model: str | None = None, seconds: float | None = None,
-              complete: bool = False, has_person: bool = False) -> int:
+              complete: bool = False, has_person: bool = False,
+              person_mode: str = "lock") -> int:
     """节点积分价。按模型差异化：高级图片模型/视频不能再走统一 10 积分（会亏）。
 
     向后兼容：旧调用 tool_cost(tool) 不传 model → 默认图片模型（gpt-image-2，10 积分）。
-    has_person=True 的 edit_image 走 nano-banana（人物一致性），须按其真实成本单独计价，防倒挂。
+
+    含真人 edit_image 的三态计价（与 job_service 路由矩阵一一对应，别倒挂）：
+    - has_person 且 person_mode!="fuse"(默认 lock) → 锁人物合成 = 一次背景生图 + 本地合成 + 摊抠图，
+      按 compose_subject 同量级（image_credits + 4）。比 nano 重绘便宜，因为不用贵的人物一致性模型。
+    - has_person 且 person_mode=="fuse" → nano-banana 重绘（人物一致性，拿货更贵）→ 按其 edit 分价(45)。
+    - 无 has_person → 默认 gpt-image edit（EDIT_CREDITS）。
     """
     from app.services import model_catalog
 
     if tool == "edit_image":
-        # 含真人编辑会路由到 person_edit_model（nano-banana，拿货更贵）→ 按该模型 edit 分价。
+        if has_person and str(person_mode).lower() != "fuse":
+            # 锁人物合成：≈ compose_subject（背景生图 + 本地合成 + 摊抠图/合成开销）
+            return model_catalog.image_credits(model) + 4
+        # 含真人且 fuse → nano-banana（拿货更贵）→ 按该模型 edit 分价；无真人 → 默认 gpt-image edit。
         return model_catalog.edit_credits(settings.person_edit_model if has_person else None)
     if tool == "cutout_layer":
         # 纯本地 rembg 抠图层便宜(3)；但带护栏式补全(complete=True)时会跑最多 2 次 edit + 2 次
@@ -108,7 +117,8 @@ def node_cost(node) -> int:
     else:
         tool, args = getattr(node, "tool", ""), (getattr(node, "args", {}) or {})
     return tool_cost(tool, args.get("model"), args.get("seconds"), bool(args.get("complete")),
-                     has_person=bool(args.get("has_person")))
+                     has_person=bool(args.get("has_person")),
+                     person_mode=str(args.get("person_mode", "lock")))
 
 
 def validate_production_config() -> list[str]:
