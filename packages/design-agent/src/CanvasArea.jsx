@@ -2902,7 +2902,7 @@ const CanvasArea = forwardRef(
         {/* 局部编辑入口：选中带 assetLabel 的图片时出现 */}
         {onRegionEdit && !maskMode && selectedId?.startsWith("img") &&
           images.find((i) => i.id === selectedId)?.assetLabel && (
-          <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
+          <div className="absolute bottom-20 inset-x-0 mx-auto w-fit z-20">
             <button
               onClick={() => enterMaskMode(selectedId)}
               className="px-4 py-2 bg-white text-black rounded text-[11px] font-bold uppercase tracking-wider shadow-lg hover:bg-gray-200 transition-all"
@@ -2954,7 +2954,7 @@ const CanvasArea = forwardRef(
 
         {/* 浮动操作条：框选多张 或 单击选中一张图片 都出现（单张也能套图/导出/删除）*/}
         {!maskMode && !showSetPanel && (setSel.size > 0 || selectedId?.startsWith("img")) && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 whitespace-nowrap bg-bg-card/95 backdrop-blur border border-divider rounded-2xl shadow-pop px-2.5 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200 ease-[var(--ease-out)]">
+          <div className="absolute bottom-6 inset-x-0 mx-auto w-fit max-w-[94%] overflow-x-auto z-30 flex items-center gap-1.5 whitespace-nowrap bg-bg-card border border-divider rounded-2xl shadow-pop px-2.5 py-2">
             <span className="text-[12px] font-semibold text-primary-text px-2">已选 {setSel.size > 0 ? setSel.size : 1} 张</span>
             <button
               onClick={() => { if (setSel.size === 0 && selectedId?.startsWith("img")) setSetSel(new Set([selectedId])); setShowSetPanel(true); }}

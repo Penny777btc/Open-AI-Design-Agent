@@ -1011,6 +1011,7 @@ export default function CreativeCanvas({
       activeSessionId = await ensureSession();
     } catch (err) {
       toast.error(t("establish_session_failed"));
+      sendingRef.current = false;  // 复位：否则此后所有发送/套图/拆图被 guard 静默吞掉，UI 死锁到刷新
       return;
     }
 
@@ -1611,8 +1612,8 @@ export default function CreativeCanvas({
               onSplitImage={handleSplitImage}
             />
 
-            {/* Floating Toolbar */}
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-bg-card border border-divider shadow-2xl px-2 py-1.5 rounded z-20">
+            {/* 缩放工具条：放右下角，避免与画布底部居中的多选操作条(CanvasArea)同位重叠 */}
+            <div className="absolute bottom-6 right-6 flex items-center gap-1 bg-bg-card border border-divider shadow-2xl px-2 py-1.5 rounded z-20">
               <div className="flex items-center gap-3 px-3">
                 <span className="text-[10px] font-bold text-secondary-text uppercase tracking-widest">{zoomLevel}%</span>
                 <div className="flex items-center gap-1">

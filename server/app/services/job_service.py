@@ -264,6 +264,10 @@ def _skill_brief(job_input: dict) -> str:
     return " ".join(str(v) for v in inputs.values()) or "design request"
 
 
+class SkipLayer(Exception):
+    """元素被判为「不完整 → 按设计留在背景层」时抛出：这是预期行为，不是失败（走 info 而非 error）。"""
+
+
 async def _execute_plan(
     job_id: str, session_id: str, user_id: str, plan: Plan,
     canvas_nodes: list | None = None, viewport: dict | None = None,
@@ -271,6 +275,7 @@ async def _execute_plan(
     semaphore = asyncio.Semaphore(settings.executor_concurrency)
     done_nodes: set[str] = set()
     results: dict[str, bool] = {}
+    skipped: set[str] = set()  # 按设计留在背景的元素（不计入「失败」）
     node_outputs: dict[str, dict] = {}  # 节点产出落位（供 overlay_on 跨节点叠放，如分层版产品叠到背景上）
     planner = PlacementPlanner(canvas_nodes, viewport)
 
@@ -296,32 +301,57 @@ async def _execute_plan(
             )
             await db.commit()
 
-    async def run_node(node) -> None:
-        for dep in node.depends:
-            while dep not in done_nodes:
-                await asyncio.sleep(0.2)
-        async with semaphore:
-            if _runtime.get(job_id, {}).get("cancelled"):
-                results[node.id] = False
-                done_nodes.add(node.id)
-                await refund_node(node, "cancelled")
-                return
-            est = 180 if node.tool == "edit_image" else 60
-            if settings.provider_mode == "mock":
-                est = 3
-            await emit(job_id, "tool_call", {"name": node.tool, "args": node.args, "est_seconds": est})
-            try:
-                results[node.id] = await _generate_node(job_id, session_id, user_id, node, planner, source_cache, node_outputs)
-            except Exception as exc:
-                logger.exception("node %s failed", node.id)
-                await emit(job_id, "error", {"message": f"{node.label}: 生成失败（{str(exc)[:160]}），该节点积分已退还"})
-                results[node.id] = False
-                await refund_node(node, "failed")
-            done_nodes.add(node.id)
+    # 依赖健壮性：丢弃悬空依赖（LLM 计划可能引用不存在/被截断的节点），否则等待循环会死等
+    node_ids = {n.id for n in plan.nodes}
+    for n in plan.nodes:
+        n.depends = [d for d in (n.depends or []) if d in node_ids]
 
-    await asyncio.gather(*(run_node(node) for node in plan.nodes))
+    async def run_node(node) -> None:
+        try:
+            waited = 0.0
+            for dep in node.depends:
+                while dep not in done_nodes:
+                    if _runtime.get(job_id, {}).get("cancelled"):
+                        results[node.id] = False
+                        await refund_node(node, "cancelled")
+                        return
+                    if waited > 600:  # 兜底：依赖 10 分钟未完成 → 放弃本节点，防 job 永久挂死
+                        results[node.id] = False
+                        await refund_node(node, "dep_timeout")
+                        await emit(job_id, "error", {"message": f"{node.label}: 依赖超时已跳过（积分已退还）"})
+                        return
+                    await asyncio.sleep(0.2)
+                    waited += 0.2
+            async with semaphore:
+                if _runtime.get(job_id, {}).get("cancelled"):
+                    results[node.id] = False
+                    await refund_node(node, "cancelled")
+                    return
+                est = 180 if node.tool == "edit_image" else 60
+                if settings.provider_mode == "mock":
+                    est = 3
+                await emit(job_id, "tool_call", {"name": node.tool, "args": node.args, "est_seconds": est})
+                try:
+                    results[node.id] = await _generate_node(job_id, session_id, user_id, node, planner, source_cache, node_outputs)
+                    if not results[node.id]:  # 节点返回 False（如视频未开通）也退款——否则预扣积分白扣
+                        await refund_node(node, "failed")
+                except SkipLayer as skip:  # 元素判为「留在背景」是设计行为，非失败
+                    await emit(job_id, "info", {"content": str(skip)})
+                    results[node.id] = False
+                    skipped.add(node.id)
+                    await refund_node(node, "skipped")
+                except Exception as exc:
+                    logger.exception("node %s failed", node.id)
+                    await emit(job_id, "error", {"message": f"{node.label}: 生成失败（{str(exc)[:160]}），该节点积分已退还"})
+                    results[node.id] = False
+                    await refund_node(node, "failed")
+        finally:
+            done_nodes.add(node.id)  # 无论成功/失败/早退，都标完成，避免依赖节点死等（+ emit/refund 抛错也不悬空）
+
+    await asyncio.gather(*(run_node(node) for node in plan.nodes), return_exceptions=True)
     ok = sum(1 for v in results.values() if v)
-    return ok, len(results) - ok
+    failed = len(results) - ok - len(skipped)  # 「留在背景」的元素不算失败
+    return ok, failed
 
 
 def _decode_frame(src: bytes) -> tuple[int, int]:
@@ -472,6 +502,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
     image = None
     loop = asyncio.get_running_loop()
     split_role = node.args.get("split_role")
+    raw_png = None  # 主体补全前的真实 alpha（供前景元素形状扣除，见 cutout 分支）
 
     # 智能拆解·装饰元素/主体抠图层（纯本地 rembg，cutout_layer 工具）：
     # bbox 裁子图内抠图 → 贴回整帧 → 完整性校验 → 按需 AI 补全（补全后必重抠成透明）
@@ -496,6 +527,10 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             cut = await loop.run_in_executor(None, lambda: cutout_subject_full(
                 src, bbox, lift_lo=lift_lo, lift_scale=lift_scale, min_frac=min_frac,
                 other_rel_boxes=other_boxes))
+            # 主体抠空护栏：rembg 返回全透明时不能静默产出一张看不见的「主体层」（曾计成功不退款）
+            if await loop.run_in_executor(None, lambda: dislocation_guard(cut, bbox)):
+                raise RuntimeError("主体抠图为空/错位")
+            raw_png = cut
             # 护栏式补全：主体被前景挡住一截 → 在缺口里 inpaint 补成完整产品 → 重抠 → 面积+vision
             # 双护栏，过不了就退回残缺版（永不更差）。仅主体 + 手动标记的关键元素(complete=True)走这里。
             if node.args.get("complete") and node.args.get("occlusion"):
@@ -512,19 +547,21 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             from app.agents.split import judge_element_complete, subtract_alpha
 
             subj_out = node_outputs.get("split_subject") if node_outputs else None
-            subj_png = subj_out.get("png") if subj_out else None
+            # 用「补全前」的主体 alpha 做扣除：补全会把前景压住主体的缺口填实，若用补全后的 alpha 扣，
+            # 会把压在主体上的前景元素整片扣空 → 前景装饰凭空消失。故优先 png_raw。
+            subj_png = (subj_out.get("png_raw") or subj_out.get("png")) if subj_out else None
             # 主体形状精确扣除（先于一切判定）：去掉元素里串入的主体像素——透明物(酒杯)抓到的邻
             # 瓶会被整片扣掉 → 变空 → 下面 dislocation_guard 拦下 → 主体不被复制成两层。
             if subj_png:
                 cut = await loop.run_in_executor(None, lambda: subtract_alpha(cut, subj_png))
             # 错位防护：明显抠空/抠偏的装饰层直接丢弃（不静默产出错位层）
             if await loop.run_in_executor(None, lambda: dislocation_guard(cut, bbox)):
-                raise RuntimeError(f"装饰元素「{label}」抠图错位/为空，跳过该层")
+                raise SkipLayer(f"「{label}」抠不出干净图层，已留在背景层（积分已退还）")
             # 执行期完整性实判（不靠 vision 的 occluded 猜测）：被画框出血 / 被主体遮挡 → 判为
-            # 不完整 → 抛出跳过该层 → 元素自动留在背景里（背景 mask 不含它）。零补全、零幻觉。
+            # 不完整 → 按设计留在背景里（背景 mask 不含它）。零补全、零幻觉。SkipLayer=预期非失败。
             ok = await loop.run_in_executor(None, lambda: judge_element_complete(cut, subj_png))
             if not ok:
-                raise RuntimeError(f"装饰元素「{label}」不完整（被遮挡/出血），留在背景层")
+                raise SkipLayer(f"「{label}」被遮挡/出血不完整，已按设计留在背景层（积分已退还）")
 
         w, h = _png_dims(cut) or _decode_frame(src)
         image = GeneratedImage(data=cut, mime="image/png", width=w, height=h, model="rembg-isnet")
@@ -633,6 +670,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             if node.id.startswith("split_"):  # 智能拆解：缓存抠出 alpha，供主体遮挡实判 + 背景最后挖洞
                 entry["png"] = image.data
                 entry["split_role"] = node.args.get("split_role")
+                if raw_png:  # 主体：补全前的真实 alpha，供前景元素形状扣除（避免扣掉补出来的缺口）
+                    entry["png_raw"] = raw_png
             node_outputs[node.id] = entry
 
         db.add(Asset(
