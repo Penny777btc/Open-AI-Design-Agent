@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     image_model: str = "gpt-image-2"  # 需支持带 mask 局部编辑（拆图背景/局部编辑/补全）；gemini 不支持 edit
     # 含真人的编辑专用模型：gemini 系（nano-banana）人物一致性业界最强，避免 gpt-image 整图重绘导致人脸/身材变形。
     # 仅用于「has_person 且无 mask」的 edit_image 节点（见 job_service 路由）；其余仍走 image_model。
-    person_edit_model: str = "nano-banana-2"
+    person_edit_model: str = "gemini-3.1-flash-image"  # Nano Banana 官方 id（vibetools 后台实际暴露名）
     # 视频生成：供应商加白后给的 endpoint；为空 = 视频未开通（执行层优雅提示）
     video_api_base: str = ""
     video_api_key: str = ""

@@ -24,6 +24,12 @@ MODELS = {
         "label": "Nano Banana 2 · 高清", "kind": "image", "unit": "image",
         "cost_rmb": 0.8, "credits": 40,
     },
+    # Nano Banana 的官方模型 id（vibetools 后台实际暴露的名字 = Gemini 3.x Flash Image）。
+    # 与 nano-banana-2 同拿货成本；人物一致性编辑路由到它，用官方 id 最稳。
+    "gemini-3.1-flash-image": {
+        "label": "Nano Banana · Gemini 3.1 Flash Image", "kind": "image", "unit": "image",
+        "cost_rmb": 0.8, "credits": 40,
+    },
     "seedance-2-480p": {
         "label": "Seedance 2.0 · 480p", "kind": "video", "unit": "second",
         "cost_rmb": 0.45, "credits": 22,
@@ -42,6 +48,7 @@ EDIT_CREDITS = 15
 # 每个模型：max(该模型生图价 + 编辑加成, EDIT_CREDITS)——编辑通道成本≈生图，另摊图文往返开销。
 _EDIT_CREDITS_BY_MODEL = {
     "nano-banana-2": 45,  # 生图 40 + 5；45 积分毛利 = 1 - (0.8/7.2)/(45*0.0099) ≈ 75%，达标
+    "gemini-3.1-flash-image": 45,  # 同 nano-banana（官方 id），同价同毛利
 }
 
 
