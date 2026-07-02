@@ -84,6 +84,11 @@ def tool_cost(tool: str, model: str | None = None, seconds: float | None = None,
         # 纯本地 rembg 抠图层便宜(3)；但带护栏式补全(complete=True)时会跑最多 2 次 edit + 2 次
         # vision，成本≈一次 edit，须按 edit 计价，否则成本倒挂。
         return 3 + model_catalog.EDIT_CREDITS if complete else 3
+    if tool == "compose_subject":
+        # 锁主体套图：每节点跑一次背景生成(=一张生图) + 本地合成，另摊上「整套一次性抠主体
+        # (+按需一次护栏式补全)」的成本。按 生图价+4 计：+4 覆盖本地合成与摊到各节点的抠图/补全，
+        # 既不成本倒挂（远高于纯生图价，含摊销）、又比旧约束式重生成(edit 15/张)略省——主体不再每张重画。
+        return model_catalog.image_credits(model) + 4
     if tool == "extract_text":
         return 3  # AI 拆图文字层：一次 OCR 视觉调用，便宜
     if tool == "generate_video":

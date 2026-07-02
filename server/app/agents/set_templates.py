@@ -398,6 +398,92 @@ def build_main_set_plan(source_label: str, content_map: dict | None = None, lang
 
 
 # ============================================================================
+# 锁主体版主图六联：主体只抠一次、贯穿全套；每张 = AI 生成「无产品的背景/排版」+ 叠回同一主体。
+# why：约束式重生成让扩散模型每张重画产品 → logo/形态/细节跨图漂移，卖家不敢上架。锁主体后
+# 6 张里产品是同一份像素，100% 一致；只有背景、机位氛围、文字排版随角色变化。
+# 每个角色需一段「只画背景、别画产品、给主体留位」的 prompt + 一个主体槽位（scale/anchor）。
+# ============================================================================
+
+# 锁主体背景约束：明确禁止画任何瓶子/产品/杯子，只出角色对应的背景场景与文字排版，
+# 并在指定区域留出一块干净的产品摆放位（后续把抠好的同一主体合成进去）。
+_MAIN_LOCKED_STYLE = (
+    "Create ONLY the BACKGROUND & LAYOUT for a premium bright e-commerce product image — "
+    "absolutely NO bottle, NO product, NO wine glass, NO liquid (the real product will be "
+    "composited in later). Keep the BRAND look consistent across the 6-image set: airy "
+    "light-gray studio palette, refined GOLD accents, elegant bold Chinese typography with thin "
+    "gold rules, neat icon rows, soft professional lighting, generous negative space. Square 1:1."
+)
+
+# 每角色：背景/排版描述 + 主体槽位(scale=占帧高比例, anchor=落位)。anchor 决定主体在这张图里的位置，
+# scale 决定大小 → 6 张里主体大小/位置各异（编辑系列感），但都是同一份主体像素。
+MAIN_LOCKED_ROLES = [
+    {"key": "hero", "label": "白底主图", "scale": 0.66, "anchor": "center-lower",
+     "bg": _MAIN_LOCKED_STYLE + (
+         " ROLE — clean HERO: pure white seamless background, a soft round podium and gentle "
+         "contact-shadow area CENTERED where the product will stand, a sweep of soft silk and a "
+         "few fresh fruits at the base to one side. Leave the center clear. No text.")},
+    {"key": "sell", "label": "标题卖点", "scale": 0.72, "anchor": "right-lower",
+     "bg": _MAIN_LOCKED_STYLE + (
+         " ROLE — title + selling points: keep the RIGHT third clear (product placed there later, "
+         "standing tall); on the LEFT render a large bold two-line Chinese TITLE + subtitle + thin "
+         "gold rule, then 4 icon+text bullet rows. Minimal props, lots of clean space.")},
+    {"key": "flavor", "label": "风味口感", "scale": 0.56, "anchor": "center",
+     "bg": _MAIN_LOCKED_STYLE + (
+         " ROLE — flavor & tasting: a styled bright TABLETOP, the specific tasting fruits & spices "
+         "artfully scattered; keep the CENTER clear for the product; top-left a bold title + product "
+         "name; a column of 5 icon+text tasting-note rows down the left.")},
+    {"key": "craft", "label": "工艺陈酿", "scale": 0.6, "anchor": "left-lower",
+     "bg": _MAIN_LOCKED_STYLE + (
+         " ROLE — craft / oak aging: a warm wood-toned setting with stacked OAK BARRELS toward the "
+         "LEFT (props = oak, cork, staves — no fruit); keep a clear LEFT-lower spot for the product; "
+         "a bold title + subtitle and 4 icon+text craft bullets on the right.")},
+    {"key": "scene", "label": "场景佐餐", "scale": 0.5, "anchor": "right-lower",
+     "bg": _MAIN_LOCKED_STYLE + (
+         " ROLE — serving & pairing: an elegant place setting with PLATED FOOD prominent in the "
+         "foreground; keep one SIDE (right-lower) clear where the product will be set back; a bold "
+         "title + subtitle and 3 icon+text rows.")},
+    {"key": "spec", "label": "产品档案", "scale": 0.7, "anchor": "right",
+     "bg": _MAIN_LOCKED_STYLE + (
+         " ROLE — product profile: clean minimal studio, no fruit; keep the RIGHT clear for the full "
+         "product standing; on the LEFT a bold title + a small 'PRODUCT PROFILE' kicker and a column "
+         "of 5 icon+text spec rows.")},
+]
+
+
+def build_main_set_locked_plan(source_label: str, subject_key: str,
+                               content_map: dict | None = None, lang: str = "zh") -> Plan:
+    """锁主体版主图六联：每张一个 compose_subject 节点 = 生成无产品背景 + 叠回同一主体。
+
+    subject_key：一次抠好的主体透明 PNG 的 storage key（整套复用 → 跨图一致）。
+    节点 id 仍用 set_1..set_6 → 复用 job_service 的网格落位/arrange。
+    """
+    if not source_label or not subject_key:
+        raise ValueError("锁主体缺少产品图或主体层")
+    content_map = content_map or {}
+    nodes = []
+    for i, role in enumerate(MAIN_LOCKED_ROLES):
+        rc = content_map.get(role["key"]) if role["key"] != "hero" else None
+        prompt = role["bg"] + (_main_block(rc, lang) if rc else "")
+        nodes.append(PlanNode(
+            id=f"set_{i + 1}", tool="compose_subject",
+            label=f"主图 {i + 1}/6 · {role['label']}（锁主体）",
+            args={
+                "prompt": prompt, "source_asset": source_label,
+                "subject_key": subject_key, "aspect_ratio": "1:1", "set_member": True,
+                "subject_scale": role["scale"], "subject_anchor": role["anchor"],
+            },
+            depends=[],
+        ))
+    return Plan(
+        mode="plan", title="电商主图六联 · 锁主体（6 张）", nodes=nodes,
+        notes=[
+            "锁主体：产品主体只抠一次、贯穿 6 张 → 跨图 100% 一致（logo/瓶型/标签不漂移）",
+            "每张 = AI 生成无产品的背景与文字排版 + 叠回同一主体：白底 / 卖点 / 风味 / 工艺 / 场景 / 参数",
+        ],
+    )
+
+
+# ============================================================================
 # 电商详情页七段：从「单个产品」生成 7 段长详情页（暗调影院风、中英双语、竖版）
 # 与主图六联是「一套两风格」：主图明亮通透，详情页暗调高级。竖版便于拼成长图。
 # ============================================================================
@@ -531,4 +617,104 @@ def build_detail_set_plan(source_label: str, content_map: dict | None = None, la
     return Plan(
         mode="plan", title="电商详情页七段（7 张）", nodes=nodes,
         notes=["AI 生成 7 段详情页：封面 / 核心信息 / 风味 / 工艺 / 产区 / 餐配 / 规格，暗调影院风，文案取自产品与文档"],
+    )
+
+
+# ============================================================================
+# 锁主体版详情页七段：与主图六联同理——主体只抠一次、贯穿全套；每段 = AI 生成「无产品的
+# 暗调背景/排版」+ 叠回同一主体。暗调影院风、竖版 3:4。
+# 注意：banner/origin 属环境大场景（黄昏葡萄园/酒庄），瓶子在画面里偏小 → subject_scale 更小；
+# coreinfo/flavor 等近景 studio 段主体占比更大。
+# ============================================================================
+
+# 锁主体暗调背景约束：明确禁止画任何瓶子/产品/杯子，只出该段对应的暗调影院场景与中英排版，
+# 并在指定区域留出干净产品位（后续把整套复用的同一主体合成进去）。
+_DETAIL_LOCKED_STYLE = (
+    "Create ONLY the BACKGROUND & LAYOUT for a premium cinematic e-commerce DETAIL-PAGE section — "
+    "absolutely NO bottle, NO product, NO wine glass, NO liquid (the real product will be "
+    "composited in later). Keep the BRAND mood consistent across the 7-section page: dark moody "
+    "premium atmosphere, deep burgundy-to-black, GOLD serif typography, BILINGUAL Chinese+English "
+    "headings, thin gold dividers and line icons, high contrast. Vertical 3:4."
+)
+
+# 每段：暗调背景/排版描述 + 主体槽位(scale=占帧高比例, anchor=落位)。
+# banner/origin 是大环境场景 → scale 小（瓶子偏小）；近景 studio 段 → scale 大。
+DETAIL_LOCKED_ROLES = [
+    {"key": "banner", "label": "封面", "scale": 0.3, "anchor": "right-lower",
+     "bg": _DETAIL_LOCKED_STYLE + (
+         " ROLE — cover banner: a WIDE cinematic establishing shot, a vast dusk vineyard-and-mountain "
+         "panorama with lots of sky and depth (environmental, not a studio); keep the LOWER-RIGHT clear "
+         "where a SMALL bottle will be composited later. A large bilingual product name in gold serif "
+         "across the top, a one-line meta strip (aging | vintage | alcohol) beneath. No loose fruit.")},
+    {"key": "coreinfo", "label": "核心信息", "scale": 0.66, "anchor": "left-lower",
+     "bg": _DETAIL_LOCKED_STYLE + (
+         " ROLE — core info: a dark minimal studio; keep the LEFT clear where the full bottle will stand "
+         "later. Bold bilingual heading 核心信息; a neat BILINGUAL spec table (each row: gold icon + Chinese "
+         "label + value + small English) for region / grade / variety / vintage / alcohol / aging / "
+         "aging-potential filling the right side.")},
+    {"key": "flavor", "label": "风味口感", "scale": 0.58, "anchor": "center",
+     "bg": _DETAIL_LOCKED_STYLE + (
+         " ROLE — tasting notes: a dramatic slightly LOW spotlit scene on near-black with the actual "
+         "tasting fruits & spices catching the light (the real notes, not generic fruit); keep the CENTER "
+         "clear for the product. Bilingual heading 风味口感 / TASTING NOTES; a column of 6 round-icon "
+         "tasting-note rows; and a FLAVOR PYRAMID infographic at the bottom with 4 tiers (初闻 / 中段 / "
+         "后段 / 余味), each a thin gold band with a short note.")},
+    {"key": "craft", "label": "橡木桶陈酿", "scale": 0.5, "anchor": "left-lower",
+     "bg": _DETAIL_LOCKED_STYLE + (
+         " ROLE — oak aging: a 3/4 angle deep inside a DIM CELLAR with stacked OAK BARRELS in heavy shadow "
+         "(props = oak, char, cork — no fruit), texture-rich; keep a clear LEFT-lower spot for the product. "
+         "Bilingual heading 橡木桶陈酿 / OAK BARREL AGING; a short poetic line; 4 icon+text craft bullets; and "
+         "a strip of 3 atmospheric MACRO photos along the bottom (barrel grain / charred oak / swirling wine).")},
+    {"key": "origin", "label": "产区与酒庄", "scale": 0.28, "anchor": "right-lower",
+     "bg": _DETAIL_LOCKED_STYLE + (
+         " ROLE — origin & winery: a GOLDEN-HOUR vineyard LANDSCAPE, warmer and brighter than the other "
+         "sections (a deliberate contrast), grapevines in the foreground (props = grapes on the vine); keep "
+         "the LOWER foreground to one side clear where a SMALL bottle will be composited later. Bilingual "
+         "heading 产区与酒庄 / ORIGIN & WINERY; a short winery story; a row of 4 gold-icon feature cards "
+         "(sunlight / terroir / quality grapes / heritage).")},
+    {"key": "pairing", "label": "侍酒与餐配", "scale": 0.5, "anchor": "right-lower",
+     "bg": _DETAIL_LOCKED_STYLE + (
+         " ROLE — serving & pairing: a TABLE-LEVEL candle-lit dining scene, PLATED FOOD prominent in the "
+         "foreground (props = food, not loose fruit), warm and intimate; keep one SIDE (right-lower) clear "
+         "where the product will be set back later. Bilingual heading 侍酒与餐配 / SERVING & PAIRING; 3 "
+         "icon+text rows (serving temperature / food pairings / tannin).")},
+    {"key": "footer", "label": "规格物流", "scale": 0.42, "anchor": "right-lower",
+     "bg": _DETAIL_LOCKED_STYLE + (
+         " ROLE — footer: a WIDE SHORT banner-feel composition, a refined brand crest centered at top, a dim "
+         "luxurious setting with minimal props; keep ONE SIDE (right-lower) clear where the product will be "
+         "placed later. The bilingual product name and 2 icon+text lines for packaging spec and shipping "
+         "note; brand sign-off at the bottom.")},
+]
+
+
+def build_detail_set_locked_plan(source_label: str, subject_key: str,
+                                 content_map: dict | None = None, lang: str = "zh") -> Plan:
+    """锁主体版详情页七段：每段一个 compose_subject 节点 = 生成无产品暗调背景 + 叠回同一主体。
+
+    subject_key：一次抠好的主体透明 PNG 的 storage key（整套复用 → 跨图一致）。
+    节点 id 仍用 set_1..set_7 → 复用 job_service 的网格落位/arrange。
+    """
+    if not source_label or not subject_key:
+        raise ValueError("锁主体缺少产品图或主体层")
+    content_map = content_map or {}
+    nodes = []
+    for i, role in enumerate(DETAIL_LOCKED_ROLES):
+        rc = content_map.get(role["key"])
+        prompt = role["bg"] + (_main_block(rc, lang) if rc else "")
+        nodes.append(PlanNode(
+            id=f"set_{i + 1}", tool="compose_subject",
+            label=f"详情页 {i + 1}/7 · {role['label']}（锁主体）",
+            args={
+                "prompt": prompt, "source_asset": source_label,
+                "subject_key": subject_key, "aspect_ratio": "3:4", "set_member": True,
+                "subject_scale": role["scale"], "subject_anchor": role["anchor"],
+            },
+            depends=[],
+        ))
+    return Plan(
+        mode="plan", title="电商详情页七段 · 锁主体（7 张）", nodes=nodes,
+        notes=[
+            "锁主体：产品主体只抠一次、贯穿 7 段 → 跨图 100% 一致（logo/瓶型/标签不漂移）",
+            "每段 = AI 生成无产品的暗调背景与中英排版 + 叠回同一主体：封面 / 核心信息 / 风味 / 工艺 / 产区 / 餐配 / 规格",
+        ],
     )

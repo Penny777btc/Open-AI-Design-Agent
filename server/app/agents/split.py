@@ -446,6 +446,142 @@ def _blank_frame(W: int, H: int) -> bytes:
     return out.getvalue()
 
 
+async def cut_locked_subject(src: bytes) -> bytes | None:
+    """锁主体前置：把产品图抠成「一份」主体透明层，供整套图复用（跨图一致的唯一真源）。
+
+    流程：analyze_layers 拿主体 bbox（拿不到就用整帧框兜底）→ cutout_subject_full 双路抠图
+    → 若被前景遮挡则 complete_object 护栏式补成完整产品 → dislocation_guard 兜底判空。
+    任一环节抠空/异常 → 返回 None（调用方据此优雅降级回「约束式重生成」，不硬失败）。
+
+    只跑一次（不是每张套图跑一次）：省成本、且保证 6/7 张共用同一像素 → 主体不会漂移。
+    """
+    if not src:
+        return None
+    try:
+        # 主体 bbox：优先 vision 识别，失败用整帧框（cutout_subject_full 会与整图直抠求交）
+        layout = await analyze_layers(src)
+        subj = (layout or {}).get("subject") if layout else None
+        rel_box = subj if subj else {"relX": 0.0, "relY": 0.0, "relW": 1.0, "relH": 1.0}
+        cut = cutout_subject_full(src, rel_box)
+        if dislocation_guard(cut, rel_box):
+            return None  # 抠空/严重错位 → 降级（不吐一张看不见的主体层）
+
+        # 主体被前景元素遮挡 → 在缺口里护栏式补全成完整产品（补不好会自动退回残缺版，永不更差）
+        if layout and layout.get("elements"):
+            front = [e for e in layout["elements"] if e.get("in_front")]
+            occ = [r for r in (_rel_intersection(f, rel_box) for f in front) if r]
+            if occ:
+                cut = await complete_object(
+                    cut, src, rel_box, (subj or {}).get("label") or "product", occ)
+        return cut
+    except Exception:
+        return None  # 任何异常 → 降级路径（约束式重生成），绝不硬失败
+
+
+# ============================================================================
+# 锁主体（locked-subject）合成：把「一次抠好的同一个主体透明层」按各模板槽位
+# 排布，叠合到 AI 生成的背景上 → 整套图共用同一主体像素 → 跨图 100% 一致。
+# why：约束式重生成让扩散模型每张重画主体，logo/形态漂移；抠一次、贴到底，才真一致。
+# ============================================================================
+
+def place_subject_on_bg(bg_png: bytes, subject_png: bytes, *,
+                        scale: float = 0.62, anchor: str = "center",
+                        margin: float = 0.06, contact_shadow: bool = True,
+                        light: dict | None = None) -> bytes:
+    """把主体透明层等比缩放后按 anchor 摆到背景帧上，返回合成后的整帧 RGBA PNG。
+
+    - bg_png：AI 生成的背景（无产品）。合成结果尺寸 = 背景尺寸（模板槽位就是背景的画幅）。
+    - subject_png：一次抠好的主体透明 PNG（整套复用同一份 → 一致）。先裁掉透明边拿真实内容框，
+      再按 scale（占帧高度比例，宽超 0.9 帧宽时以宽约束）等比缩放，绝不变形。
+    - anchor：主体在帧内的落位（center / center-lower / right-lower / left / right ...）。
+    - contact_shadow：落地锚点(带 lower/bottom)时在主体脚下垫一枚接触阴影，避免"贴纸感"。
+
+    纯 PIL、无外部调用 → 便宜、可离线自测；异常时回退返回背景本身（降级不崩）。
+    """
+    from PIL import Image
+
+    from app.agents.composite import _clean_fragments, _open_trim
+
+    try:
+        bg = Image.open(io.BytesIO(bg_png)).convert("RGBA")
+        FW, FH = bg.size
+        subj = _open_trim(_clean_fragments(subject_png))  # 裁透明边 → 真实内容框，缩放/定位才准
+        cw, ch = subj.size
+        if cw < 1 or ch < 1 or FW < 1 or FH < 1:
+            return bg_png
+
+        # 等比缩放：目标高 = scale×帧高；若因此过宽（>0.9 帧宽）则改以宽约束，保持不变形
+        th = FH * scale
+        tw = th * cw / ch
+        if tw > FW * 0.9:
+            tw = FW * 0.9
+            th = tw * ch / cw
+        tw, th = max(1, int(round(tw))), max(1, int(round(th)))
+        subj = subj.resize((tw, th), Image.LANCZOS)
+
+        # anchor → 帧内像素位置（水平/垂直各三档，靠 margin 留边）
+        a = (anchor or "center").lower()
+        mx, my = int(FW * margin), int(FH * margin)
+        if "left" in a:
+            x = mx
+        elif "right" in a:
+            x = FW - tw - mx
+        else:
+            x = (FW - tw) // 2
+        if "lower" in a or "bottom" in a:
+            y = FH - th - my
+        elif "upper" in a or "top" in a:
+            y = my
+        else:
+            y = (FH - th) // 2
+
+        out_frame = bg.copy()
+        # 落地锚点：先垫接触阴影（用主体剪影估宽度），主体再压上去 → 有重量、不像贴纸
+        if contact_shadow and ("lower" in a or "bottom" in a):
+            try:
+                shadow = _contact_shadow_at(tw, th, x, y, FW, FH, light)
+                out_frame.alpha_composite(shadow)
+            except Exception:
+                pass  # 阴影是锦上添花，失败不影响主体合成
+        out_frame.alpha_composite(subj, (x, y))
+        buf = io.BytesIO()
+        out_frame.save(buf, "PNG")
+        return buf.getvalue()
+    except Exception:
+        return bg_png  # 合成任何异常 → 退回背景（降级不崩，调用方仍得到一张可用图）
+
+
+def _contact_shadow_at(sw: int, sh: int, sx: int, sy: int, FW: int, FH: int,
+                       light: dict | None) -> "object":
+    """在 (sx,sy,sw,sh) 主体脚下画一枚高斯椭圆接触阴影，返回整帧 RGBA Image。
+    比 make_contact_shadow 更直接：那个按 grounded 几何自己算落位，这里主体位置已定，只据其定阴影。"""
+    import math
+
+    from PIL import Image, ImageDraw, ImageFilter
+
+    cx = sx + sw / 2
+    cy = min(sy + sh, FH * 0.98)     # 阴影中心 ≈ 主体底边，但夹住不贴帧底
+    ew = sw * 0.82                    # 椭圆宽略窄于主体
+    eh = max(6.0, sw * 0.12)          # 压扁
+    az = str((light or {}).get("azimuth", "upper-left")).lower()
+    dx = ew * 0.12 if "left" in az else (-ew * 0.12 if "right" in az else 0.0)
+    try:
+        elev = max(10.0, min(80.0, float((light or {}).get("elevation", 35))))
+    except (TypeError, ValueError):
+        elev = 35.0
+    dx *= max(0.6, min(1.2, 1.0 / math.tan(math.radians(elev))))
+    blur = max(4.0, ew * 0.05)
+    half = ew / 2 + blur
+    ccx = max(half, min(FW - half, cx + dx))
+    shadow = Image.new("RGBA", (FW, FH), (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).ellipse(
+        [ccx - ew / 2, cy - eh / 2, ccx + ew / 2, cy + eh / 2], fill=(0, 0, 0, 150))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(radius=blur))
+    r, g, b, aa = shadow.split()
+    aa = aa.point(lambda v: int(v * 0.8))
+    return Image.merge("RGBA", (r, g, b, aa))
+
+
 def dislocation_guard(layer_png: bytes, rel_box: dict) -> bool:
     """抠图错位防护（§4.2）：alpha 包围盒中心相对识别 bbox 中心偏离 >50% bbox 边长，
     或 alpha 面积 < bbox 面积 3% → 判定抠空/抠错，返回 True（应丢弃该层）。"""

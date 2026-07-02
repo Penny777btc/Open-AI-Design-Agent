@@ -36,6 +36,13 @@ import Image from "next/image";
 
 const API = "/api/v1/creative-agent";
 
+// P1-1.1 审批默认反转的阈值（积分）。
+// 心智反转：自主 agent 不该每单都伸手要「批准」——那是把 agent 变成要人陪跑的表单。
+// 低消耗计划（≤ 此值）默认直接开跑，只有大额消耗才值得打断用户确认一次。
+// 取 30 ≈ 单张图生成/小修小改的量级：误批的最大损失可控（一张图的钱）；
+// 而主图六联、详情页七段这类批量任务的总消耗通常远超此值，仍会走人工确认。
+const AUTO_APPROVE_UNDER = 30;
+
 const formatTime = (dateStr) => {
   if (!dateStr) return "";
   const d = new Date(dateStr);
@@ -166,7 +173,9 @@ export default function CreativeCanvas({
   // 会话首次加载后把镜头对准内容（zoom-to-fit），后续生成不抢镜头
   const initialFitDoneRef = useRef(false);
   const initialHandoffProcessed = useRef(false);
-  const autoApprovedRef = useRef(new Set()); // 极速模式已自动批准过的 job，防重复批准
+  const autoApprovedRef = useRef(new Set()); // 已自动批准过的 job（极速/低消耗共用），防重复批准
+  // P1-5.2 失败可重试：记住最近一条用户指令原文（不含附件注记），失败 pill 一键重发
+  const lastUserMsgRef = useRef("");
   const mountedRef = useRef(true);           // 卸载后停止后台轮询
   const sessionIdRef = useRef(sessionId);    // 切会话时让旧轮询自停，防串会话/锁死输入
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
@@ -359,18 +368,26 @@ export default function CreativeCanvas({
     if (!flat) return;
     flat.job_id = ev.job_id || p.job_id;
 
-    // 极速模式：计划一到且尚未定夺 → 自动批准（每个 job 只批一次）。
+    // P1-1.1 审批默认反转（对标 Lovart 的自主感）：
+    // 旧行为 = 每个计划都弹卡等人点「批准」，打断心流；
+    // 新行为 = 低消耗计划（total_credits ≤ AUTO_APPROVE_UNDER）默认直接执行，
+    //          只有大额消耗才打断用户确认一次。极速模式（用户显式开启）= 不看金额全自动。
     // 读 localStorage 而非闭包变量，避免轮询回调里拿到过期的 expressMode。
     if (
       flat.type === "plan_propose" &&
       (ev.approved === undefined || ev.approved === null) &&
-      typeof localStorage !== "undefined" &&
-      localStorage.getItem("picsmith_express") === "1" &&
       flat.job_id &&
       !autoApprovedRef.current.has(flat.job_id)
     ) {
-      autoApprovedRef.current.add(flat.job_id);
-      setTimeout(() => handleJobAction(flat.job_id, "approve"), 60);
+      const expressOn = typeof localStorage !== "undefined" && localStorage.getItem("picsmith_express") === "1";
+      // 消耗未知（后端没给数字）时不自动批 —— 未知成本必须人工把关
+      const cheapPlan = typeof flat.total_credits === "number" && flat.total_credits <= AUTO_APPROVE_UNDER;
+      if (expressOn || cheapPlan) {
+        autoApprovedRef.current.add(flat.job_id); // 每个 job 只批一次，防轮询重放重复批准
+        // 标记原因：计划卡仍然展示（用户能看到 agent 在做什么），但按钮换成一行自动执行说明
+        flat.auto_approved = expressOn ? "express" : "low_cost";
+        setTimeout(() => handleJobAction(flat.job_id, "approve", { silent: true }), 60);
+      }
     }
 
     // If the job has already been approved or rejected, mark approval events as handled.
@@ -734,10 +751,24 @@ export default function CreativeCanvas({
     }
   };
 
-  const handleJobAction = async (jobId, action) => {
+  // 自动批准失败（如积分不足）时，撤掉计划卡上的「已自动执行」说明、把手动按钮还给用户，
+  // 否则卡片会停留在一个「说已开始、其实没开始」的撒谎态。
+  const revertAutoApproved = (jobId) => {
+    setMessages(prev => prev.map(m => ({
+      ...m,
+      events: (m.events || []).map(e =>
+        e.job_id === jobId && e.type === "plan_propose" && e.auto_approved
+          ? { ...e, auto_approved: null }
+          : e
+      )
+    })));
+  };
+
+  // opts.silent：自动批准（低消耗/极速）时不弹「任务已通过」toast —— 自动化就该安静
+  const handleJobAction = async (jobId, action, opts = {}) => {
     try {
       await axios.post(`${API}/jobs/${jobId}/${action}`, {}, { headers: getHeaders() });
-      toast.success(t("job_actioned", action));
+      if (!opts.silent) toast.success(t("job_actioned", action));
       
       // Hide the approval card in the UI
       setMessages(prev => prev.map(m => ({
@@ -755,6 +786,7 @@ export default function CreativeCanvas({
     } catch (err) {
       // 审计 U2：积分不足时给充值直达入口，而不是只报错
       if (err.response?.status === 402) {
+        revertAutoApproved(jobId);
         toast((tt) => (
           <span className="flex items-center gap-3 text-[12px]">
             {err.response?.data?.detail || t("insufficient_credits")}
@@ -782,6 +814,7 @@ export default function CreativeCanvas({
         })));
         toast(t("plan_expired"), { icon: "ℹ️" });
       } else {
+        revertAutoApproved(jobId);
         toast.error(err.response?.data?.detail || t("job_action_failed", action));
       }
     }
@@ -1055,6 +1088,8 @@ export default function CreativeCanvas({
     const currentAttachments = attachmentsOverride || attachments;
     if ((!typed && currentAttachments.length === 0) || busy || sendingRef.current) return;
     sendingRef.current = true;
+    // P1-5.2：留住这条指令原文，失败 pill 的「重试」一键重发
+    if (typed) lastUserMsgRef.current = typed;
     
     const currentSkill = skillOverride || activeSkill;
 
@@ -1160,6 +1195,41 @@ export default function CreativeCanvas({
         });
       }
     }
+  };
+
+  // P1-5.2 失败可重试：优先用 ref 里的最近指令；刷新恢复的会话 ref 为空时，
+  // 从消息流兜底找最近一条用户消息（去掉附件注记），保证老会话里的失败也能一键重发。
+  const retryLastMessage = () => {
+    let text = lastUserMsgRef.current;
+    if (!text) {
+      const lastUser = [...messages].reverse().find(m => m?.role === "user" && m.content);
+      text = (lastUser?.content || "").replace(/\n\n\[Attached [^\]]*\]$/, "").trim();
+    }
+    if (text) sendMessage(text);
+  };
+
+  // P1-1.2 结果尾部「下一步建议」chips：纯前端启发式，无需后端。
+  // why：Lovart 式自主感的核心是 agent「想在用户前面」——出图后主动给出最可能的下一步，
+  // 点一下就继续，而不是让用户面对空输入框想指令。单图 vs 套图给不同的后续动作。
+  const nextStepChips = (msg) => {
+    const okImages = (msg.events || []).filter(
+      e => e.type === "tool_result" && e.result?.ok !== false && e.asset?.kind === "image"
+    );
+    if (okImages.length === 0) return [];
+    const label = okImages[okImages.length - 1].asset?.asset_label || t("chip_this_image");
+    if (okImages.length === 1) {
+      // 出了单图 → 往「整套电商物料」引导
+      return [
+        { label: t("chip_make_set"), prompt: t("chip_make_set_prompt", label) },
+        { label: t("chip_swap_bg"), prompt: t("chip_swap_bg_prompt", label) },
+        { label: t("chip_add_badge"), prompt: t("chip_add_badge_prompt", label) },
+      ];
+    }
+    // 出了套图 → 往「成品交付」引导
+    return [
+      { label: t("chip_stitch_detail"), prompt: t("chip_stitch_detail_prompt") },
+      { label: t("chip_edit_copy"), prompt: t("chip_edit_copy_prompt") },
+    ];
   };
 
   const markdownComponents = useMemo(() => ({
@@ -1883,7 +1953,15 @@ export default function CreativeCanvas({
                           )}
                           
                           {visibleEvents(msg.events).map((ev, i) => (
-                            <EventPill key={i} event={{...ev, onAction: handleJobAction}} />
+                            <EventPill key={i} event={{
+                              ...ev,
+                              onAction: handleJobAction,
+                              // P1-1.3 ask_user 选项可点：点选项直接替用户回信，不用手打「1/2」
+                              onSend: (text) => sendMessage(text),
+                              // P1-5.2 重试只挂在最后一条消息上：历史消息里的失败若也能点，
+                              // 会重发「最新」指令而非当年那条，反而制造事故
+                              onRetry: idx === messages.length - 1 ? retryLastMessage : undefined,
+                            }} />
                           ))}
                         </div>
 
@@ -1897,6 +1975,28 @@ export default function CreativeCanvas({
                           <FiCopy size={12} />
                         </button>
                       </div>
+
+                      {/* P1-1.2 下一步建议 chips：只在「最后一条助手消息 + 空闲」时出现，
+                          避免历史消息串满过期建议；点击即发送对应指令，延续心流 */}
+                      {msg.role === "assistant" && !busy && idx === messages.length - 1 && (() => {
+                        const chips = nextStepChips(msg);
+                        if (chips.length === 0) return null;
+                        return (
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1.5 animate-fade-in-up">
+                            <span className="text-[10px] text-secondary-text">{t("next_steps")}</span>
+                            {chips.map((c) => (
+                              <button
+                                key={c.label}
+                                type="button"
+                                onClick={() => sendMessage(c.prompt)}
+                                className="px-2.5 py-1 rounded-full bg-bg-page border border-divider text-[11px] text-secondary-text hover:border-primary/60 hover:text-primary-text transition-all"
+                              >
+                                {c.label}
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 </React.Fragment>
@@ -2350,6 +2450,10 @@ function EventPill({ event }) {
     <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-page/70 text-secondary-strong text-[12px] mt-1.5">
       <span className="typing-dots text-primary"><span /><span /><span /></span>
       <span>{friendlyAction(event.name)}…</span>
+      {/* P1-5.1 ETA：等待有预期才不焦虑。后端随 tool_call 下发 est_seconds，有才显示 */}
+      {Number(event.est_seconds) > 0 && (
+        <span className="text-[10px] opacity-60 shrink-0">{t("eta_about", Math.round(Number(event.est_seconds)))}</span>
+      )}
     </div>
   );
 
@@ -2360,14 +2464,25 @@ function EventPill({ event }) {
       return (
         <div className="px-3.5 py-2.5 rounded-xl bg-bg-page border border-divider text-[12px] mt-1.5 shadow-soft">
           <div className="font-semibold text-primary-text mb-1">{event.result.question}</div>
+          {/* P1-1.3 选项可点：以前是纯文本要用户手打「1/2」，现在点选项直接替用户回信。
+              仍保留序号，习惯手打的用户照旧可用 */}
           {choices.length > 0 && (
-            <div className="flex flex-col gap-1 mt-1">
+            <div className="flex flex-col gap-1.5 mt-1.5">
               {choices.map((c, i) => (
-                <div key={i} className="text-secondary-text">{i + 1}. {c}</div>
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => event.onSend?.(c)}
+                  className="text-left px-2.5 py-1.5 rounded-lg bg-bg-card border border-divider text-secondary-text hover:border-primary/60 hover:text-primary-text transition-all"
+                >
+                  <span className="text-primary font-semibold mr-1.5">{i + 1}.</span>{c}
+                </button>
               ))}
             </div>
           )}
-          <div className="text-[11px] text-secondary-strong mt-1.5">{t("reply_to_continue")}</div>
+          <div className="text-[11px] text-secondary-strong mt-1.5">
+            {choices.length > 0 ? t("click_or_reply") : t("reply_to_continue")}
+          </div>
         </div>
       );
     }
@@ -2388,11 +2503,36 @@ function EventPill({ event }) {
             </span>
           )}
         </div>
+        {/* P1-5.2 失败可重试：一键重发最近一条用户指令（仅最后一条消息会传入 onRetry） */}
+        {!ok && typeof event.onRetry === "function" && (
+          <button
+            type="button"
+            onClick={event.onRetry}
+            className="shrink-0 px-2.5 py-1 rounded-md border border-current text-[10px] font-bold hover:opacity-75 transition-opacity"
+          >
+            {t("retry")}
+          </button>
+        )}
       </div>
     );
   }
 
   if (event.type === "plan_propose") {
+    // P1-1.1 自动批准的计划：保留计划卡（用户能看到 agent 打算做什么、花多少），
+    // 但不再要人点按钮 —— 换成一行「已自动开始执行」说明。这是自主感的关键展示位。
+    if (event.auto_approved) return (
+      <div className="flex flex-col gap-2">
+        <PlanVisualizer plan={event} />
+        <div className="flex items-center gap-1.5 px-1 pb-1 text-[11px] text-secondary-text">
+          <FiZap size={12} className="text-primary shrink-0" />
+          <span>
+            {event.auto_approved === "express"
+              ? t("plan_auto_express")
+              : t("plan_auto_low", event.total_credits, AUTO_APPROVE_UNDER)}
+          </span>
+        </div>
+      </div>
+    );
     if (event.handled) return null;
     return (
     <div className="flex flex-col gap-2">
@@ -2455,8 +2595,18 @@ function EventPill({ event }) {
   }
 
   if (event.type === "error") return (
-    <div className="px-2.5 py-1.5 rounded bg-[var(--color-error-bg)] text-[var(--color-error)] border border-[var(--color-error)] text-[11px] mt-1 shadow-sm">
-      ❌ {event.message}
+    <div className="px-2.5 py-1.5 rounded bg-[var(--color-error-bg)] text-[var(--color-error)] border border-[var(--color-error)] text-[11px] mt-1 shadow-sm flex items-center gap-2">
+      <span className="flex-1 min-w-0">❌ {event.message}</span>
+      {/* P1-5.2 失败可重试（同 tool_result 失败态） */}
+      {typeof event.onRetry === "function" && (
+        <button
+          type="button"
+          onClick={event.onRetry}
+          className="shrink-0 px-2.5 py-1 rounded-md border border-current text-[10px] font-bold hover:opacity-75 transition-opacity"
+        >
+          {t("retry")}
+        </button>
+      )}
     </div>
   );
 

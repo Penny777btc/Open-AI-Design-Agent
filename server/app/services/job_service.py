@@ -151,13 +151,51 @@ async def _run_job(job_id: str) -> None:
                 from app.agents.set_templates import build_main_set_plan, generate_main_content
 
                 main_content = await generate_main_content(items[0], doc_text, lang=lang) if items else {}
-                plan = build_main_set_plan(labels[0], content_map=main_content, lang=lang)
+                # 锁主体（默认）：主体只抠一次、贯穿全套 → 跨图一致（Lovart 招牌能力）。
+                # 抠图失败/无源图 → 优雅降级回「约束式重生成」（build_main_set_plan），绝不硬失败。
+                plan = None
+                try:
+                    from app.agents.set_templates import build_main_set_locked_plan
+                    from app.agents.split import cut_locked_subject
+
+                    src_bytes = await _load_asset_bytes(session_id, labels[0])
+                    subject_png = await cut_locked_subject(src_bytes)
+                    if subject_png:
+                        # 主体透明层落盘（整套复用同一 key）；沿用 masks/ 落盘 pattern
+                        import uuid as _uuidlib
+                        subject_key = f"masks/{session_id}/subject_{_uuidlib.uuid4().hex[:12]}.png"
+                        storage.save_bytes(subject_key, subject_png)
+                        plan = build_main_set_locked_plan(
+                            labels[0], subject_key, content_map=main_content, lang=lang)
+                except Exception:
+                    plan = None  # 任何异常 → 降级
+                if plan is None:
+                    plan = build_main_set_plan(labels[0], content_map=main_content, lang=lang)
             elif tpl_key == "detail7":
                 # 详情页七段：用第一张产品图，出 7 段暗调详情页
                 from app.agents.set_templates import build_detail_set_plan, generate_detail_content
 
                 detail_content = await generate_detail_content(items[0], doc_text, lang=lang) if items else {}
-                plan = build_detail_set_plan(labels[0], content_map=detail_content, lang=lang)
+                # 锁主体（默认）：主体只抠一次、贯穿全套 → 跨图一致（与主图六联同理）。
+                # 抠图失败/无源图 → 优雅降级回「约束式重生成」（build_detail_set_plan），绝不硬失败。
+                plan = None
+                try:
+                    from app.agents.set_templates import build_detail_set_locked_plan
+                    from app.agents.split import cut_locked_subject
+
+                    src_bytes = await _load_asset_bytes(session_id, labels[0])
+                    subject_png = await cut_locked_subject(src_bytes)
+                    if subject_png:
+                        # 主体透明层落盘（整套复用同一 key）；沿用 masks/ 落盘 pattern
+                        import uuid as _uuidlib
+                        subject_key = f"masks/{session_id}/subject_{_uuidlib.uuid4().hex[:12]}.png"
+                        storage.save_bytes(subject_key, subject_png)
+                        plan = build_detail_set_locked_plan(
+                            labels[0], subject_key, content_map=detail_content, lang=lang)
+                except Exception:
+                    plan = None  # 任何异常 → 降级
+                if plan is None:
+                    plan = build_detail_set_plan(labels[0], content_map=detail_content, lang=lang)
             elif job_input.get("set_mode") == "layered":
                 # 分层版：背景层(生成) + 产品层(抠图) + 可编辑文字层
                 from app.agents.set_templates import build_layered_plan
@@ -502,9 +540,46 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
     split_role = node.args.get("split_role")
     raw_png = None  # 主体补全前的真实 alpha（供前景元素形状扣除，见 cutout 分支）
 
+    # 锁主体合成（compose_subject）：AI 生成「无产品的背景/排版」+ 叠回「整套复用的同一主体」。
+    # why：约束式重生成让扩散模型每张重画产品 → logo/形态跨图漂移；锁主体后 6 张共用同一像素 → 一致。
+    # 主体抠图由 plan 构造期一次性完成并落盘（subject_key），这里只读盘 + 生背景 + 合成（不再抠图）。
+    if node.tool == "compose_subject":
+        from app.agents.split import place_subject_on_bg, resize_cover
+        from app.providers.base import GeneratedImage
+        from app.providers.openai_compat import _png_dims
+
+        subject_key = node.args.get("subject_key")
+        if not subject_key:
+            raise RuntimeError("锁主体缺少 subject_key")
+        subject_png = await loop.run_in_executor(
+            None, lambda: storage._safe_path(subject_key).read_bytes())  # 过 _safe_path 防穿越
+        ar = node.args.get("aspect_ratio", "1:1")
+
+        # 1) 生成无产品背景（节点级重试，与 edit/generate 一致）
+        bg = None
+        last_exc = None
+        for _ in range(2):
+            try:
+                bg = await provider.generate(prompt, ar)
+                break
+            except Exception as exc:
+                last_exc = exc
+        if bg is None:
+            raise last_exc or RuntimeError("背景生成失败")
+
+        # 2) 主体尺寸对齐到背景画幅（cover 不变形），再按槽位 scale/anchor 合成同一主体
+        subj_fit = await loop.run_in_executor(
+            None, lambda: resize_cover(subject_png, bg.width, bg.height))
+        composed = await loop.run_in_executor(None, lambda: place_subject_on_bg(
+            bg.data, subj_fit,
+            scale=float(node.args.get("subject_scale", 0.62)),
+            anchor=node.args.get("subject_anchor", "center")))
+        cw, ch = _png_dims(composed) or (bg.width, bg.height)
+        image = GeneratedImage(data=composed, mime="image/png", width=cw, height=ch, model=bg.model)
+
     # 智能拆解·装饰元素/主体抠图层（纯本地 rembg，cutout_layer 工具）：
     # bbox 裁子图内抠图 → 贴回整帧 → 完整性校验 → 按需 AI 补全（补全后必重抠成透明）
-    if node.tool == "cutout_layer":
+    elif node.tool == "cutout_layer":
         from app.agents.split import cutout_region, cutout_subject_full, dislocation_guard
         from app.providers.base import GeneratedImage
         from app.providers.openai_compat import _png_dims

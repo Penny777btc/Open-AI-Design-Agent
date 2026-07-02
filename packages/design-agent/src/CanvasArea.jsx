@@ -20,8 +20,17 @@ import {
   Arc,
 } from "react-konva";
 import toast from "react-hot-toast";
-import { FiType, FiGrid, FiAlignJustify, FiLayers, FiScissors, FiTrash2, FiX } from "react-icons/fi";
+import { FiType, FiGrid, FiAlignJustify, FiLayers, FiScissors, FiTrash2, FiX, FiEdit3 } from "react-icons/fi";
 import { t } from "./i18n";
+
+// ── 画布选中态语义色（去蓝归白）────────────────────────────────────
+// why：Konva 画在 canvas 上，拿不到 CSS 变量，只能用 JS 常量统一引用。
+// 门面主题的 primary 是白色，选中态跟随（旧蓝色 #3898ec/#60a5fa 全部废弃）。
+const ACCENT = "#fafafa";                          // 选框描边 / 变换手柄 / 尺寸标签 / 转圈
+const ACCENT_SOFT = "rgba(250,250,250,0.12)";      // 选框/橡皮筋填充（半透明白，压在图上不刺眼）
+const MASK_HIGHLIGHT = "rgba(250,250,250,0.85)";   // 局部编辑蒙版笔迹高亮
+const LOADER_BG = "#0d0d0f";                       // Loader/音频卡底色（贴近画布黑，#1E1E1E 太亮发白）
+const LOADER_BORDER = "rgba(255,255,255,0.08)";    // Loader/音频卡默认边框（细弱分隔，不抢视觉）
 
 // 电商文字预设：AI 出背景，文字做成可编辑矢量图层叠加，导出精确不糊（扩散模型渲染文字必错）。
 // 统一带描边 + 阴影，保证在杂乱产品图上也清晰可读；fillAfterStrokeEnabled 让填充压在描边上、字形干净。
@@ -160,9 +169,8 @@ const MenuButton = ({ label, shortcut, onClick, theme }) => (
 );
 
 const MenuDivider = ({ theme }) => (
-  <div
-    className={`h-[1px] w-full my-1 ${theme === "dark" ? "bg-border-main" : "bg-border-main"}`}
-  />
+  // v4 @theme 里没有 border-main 这个 token（旧写法静默失效=分隔线透明），统一用 divider
+  <div className="h-[1px] w-full my-1 bg-divider" />
 );
 
 const URLImage = ({
@@ -260,8 +268,8 @@ const URLImage = ({
           x={pos.x} y={pos.y}
           width={(imageObj.width || 200)} height={(imageObj.height || 200)}
           rotation={imageObj.rotation}
-          stroke="#3898ec" strokeWidth={2 / (shapeRef.current?.getStage()?.scaleX() || 1)}
-          fill="rgba(56,152,236,0.12)"
+          stroke={ACCENT} strokeWidth={2 / (shapeRef.current?.getStage()?.scaleX() || 1)}
+          fill={ACCENT_SOFT}
         />
       )}
       {isSelected && !imageObj.locked && (
@@ -283,7 +291,7 @@ const URLImage = ({
             text={t("image")}
             fontSize={11}
             fontFamily="sans-serif"
-            fill="#3898ec"
+            fill={ACCENT}
             x={0}
             y={5}
           />
@@ -292,7 +300,7 @@ const URLImage = ({
             text={`${dims.w} × ${dims.h}`}
             fontSize={11}
             fontFamily="sans-serif"
-            fill="#3898ec"
+            fill={ACCENT}
             align="right"
             width={dims.w * (shapeRef.current?.getStage()?.scaleX() || 1)}
             x={0}
@@ -314,9 +322,9 @@ const URLImage = ({
           ]}
           anchorSize={8}
           anchorCornerRadius={4}
-          anchorStroke="#3898ec"
+          anchorStroke={ACCENT}
           anchorFill="white"
-          borderStroke="#3898ec"
+          borderStroke={ACCENT}
           boundBoxFunc={(oldBox, newBox) => {
             if (newBox.width < 5 || newBox.height < 5) {
               return oldBox;
@@ -464,7 +472,7 @@ const URLVideo = ({
             text={t("video")}
             fontSize={11}
             fontFamily="sans-serif"
-            fill="#3898ec"
+            fill={ACCENT}
             x={0}
             y={5}
           />
@@ -472,7 +480,7 @@ const URLVideo = ({
             text={`${dims.w} × ${dims.h}`}
             fontSize={11}
             fontFamily="sans-serif"
-            fill="#3898ec"
+            fill={ACCENT}
             align="right"
             width={dims.w * (shapeRef.current?.getStage()?.scaleX() || 1)}
             x={0}
@@ -494,9 +502,9 @@ const URLVideo = ({
           ]}
           anchorSize={8}
           anchorCornerRadius={4}
-          anchorStroke="#3898ec"
+          anchorStroke={ACCENT}
           anchorFill="white"
-          borderStroke="#3898ec"
+          borderStroke={ACCENT}
           boundBoxFunc={(oldBox, newBox) => {
             if (newBox.width < 5 || newBox.height < 5) {
               return oldBox;
@@ -625,13 +633,14 @@ const URLAudio = ({
         onDragMove={onDragMove}
         onDragEnd={(e) => onDragEnd(e, audioObj)}
       >
-        {/* Background Card */}
+        {/* Background Card：播放态用半透明白提亮（底色仍暗，白色文字/图标可读）；
+            选中才亮白描边，平时细弱边——与 Loader 卡同一套暗色语言 */}
         <Rect
           width={180}
           height={60}
-          fill={playing ? "#3898ec" : "#1E1E1E"}
+          fill={playing ? "rgba(250,250,250,0.16)" : LOADER_BG}
           cornerRadius={2}
-          stroke="#3898ec"
+          stroke={isSelected ? ACCENT : LOADER_BORDER}
           strokeWidth={isSelected ? 2 : 1}
           shadowBlur={isSelected ? 10 : 5}
           shadowOpacity={0.3}
@@ -833,9 +842,9 @@ const LoaderNode = ({ task, isSelected, onSelect, onChange, theme }) => {
         <Rect
           width={240}
           height={240}
-          fill={theme === "dark" ? "#1E1E1E" : "#FFFFFF"}
+          fill={theme === "dark" ? LOADER_BG : "#FFFFFF"}
           cornerRadius={8}
-          stroke="#3898ec"
+          stroke={LOADER_BORDER}
           strokeWidth={1}
           shadowColor={theme === "dark" ? "#ffffff" : "#000000"}
           shadowBlur={10}
@@ -862,7 +871,7 @@ const LoaderNode = ({ task, isSelected, onSelect, onChange, theme }) => {
           y={110}
           text={t("move_to_change_spawn")}
           fontSize={10}
-          fill="#3898ec"
+          fill={ACCENT}
           width={220}
           align="center"
         />
@@ -874,7 +883,7 @@ const LoaderNode = ({ task, isSelected, onSelect, onChange, theme }) => {
           innerRadius={20}
           outerRadius={24}
           angle={300}
-          fill="#3898ec"
+          fill={ACCENT}
           rotation={0}
         />
       </Group>
@@ -889,7 +898,8 @@ const CanvasArea = forwardRef(
   (
     {
       theme = "dark",
-      colors = { textSecondary: "text-text-sub", border: "border-border-main" },
+      // v4 @theme 没有 text-sub/border-main（旧 token 静默失效），换成真实存在的语义 token
+      colors = { textSecondary: "text-secondary-text", border: "border-divider" },
       activeTasks = [],
       setActiveTasks = () => {},
       onZoomChange,
@@ -1447,7 +1457,8 @@ const CanvasArea = forwardRef(
         }
       }
       if (containerRef.current) {
-        containerRef.current.style.backgroundSize = `${32 * newZoom}px ${32 * newZoom}px`;
+        // 与容器 style 的 24px 基准保持一致（网格点随缩放变密/变疏，空间感跟手）
+        containerRef.current.style.backgroundSize = `${24 * newZoom}px ${24 * newZoom}px`;
         if (pos) {
           containerRef.current.style.backgroundPosition = `${pos.x}px ${pos.y}px`;
         }
@@ -2645,7 +2656,7 @@ const CanvasArea = forwardRef(
         node.x(node.x() + g.diff);
         newGuides.push({
           points: [g.lineGuide, -5000, g.lineGuide, 10000],
-          stroke: "#3898ec",
+          stroke: ACCENT,
           strokeWidth: 1 / zoom,
           dash: [4, 4],
         });
@@ -2655,7 +2666,7 @@ const CanvasArea = forwardRef(
         node.y(node.y() + g.diff);
         newGuides.push({
           points: [-5000, g.lineGuide, 10000, g.lineGuide],
-          stroke: "#3898ec",
+          stroke: ACCENT,
           strokeWidth: 1 / zoom,
           dash: [4, 4],
         });
@@ -2787,6 +2798,14 @@ const CanvasArea = forwardRef(
       <div
         className={`relative w-full h-full bg-bg-page overflow-hidden ${maskMode ? "cursor-crosshair" : spaceDown ? "cursor-grab" : "cursor-crosshair"}`}
         ref={containerRef}
+        // Lovart 式点阵网格底：Konva Stage 本身透明，把网格画在容器 CSS 背景上（零渲染成本）。
+        // why 不画在 Konva 层：无限画布网格要铺满视口且随平移/缩放走，CSS background 天然支持。
+        // backgroundSize 随 zoom 缩放（基准 24px），backgroundPosition 由 updateZoom/滚轮/空格拖拽
+        // 三处平移逻辑直接写 DOM 同步（避开 React 重渲染，跟手不掉帧）。
+        style={{
+          backgroundImage: "radial-gradient(rgba(255,255,255,0.06) 1px, transparent 1px)",
+          backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
+        }}
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
       >
@@ -2946,8 +2965,8 @@ const CanvasArea = forwardRef(
                 <Rect
                   listening={false}
                   x={marquee.x} y={marquee.y} width={marquee.w} height={marquee.h}
-                  fill="rgba(56,152,236,0.12)"
-                  stroke="#3898ec" strokeWidth={1 / zoom} dash={[6 / zoom, 4 / zoom]}
+                  fill={ACCENT_SOFT}
+                  stroke={ACCENT} strokeWidth={1 / zoom} dash={[6 / zoom, 4 / zoom]}
                 />
               )}
             </Layer>
@@ -2967,7 +2986,7 @@ const CanvasArea = forwardRef(
                       <Line
                         key={i}
                         points={s.points}
-                        stroke="rgba(96,165,250,0.8)"
+                        stroke={MASK_HIGHLIGHT}
                         strokeWidth={s.size}
                         lineCap="round"
                         lineJoin="round"
@@ -2977,26 +2996,13 @@ const CanvasArea = forwardRef(
                   <Rect
                     listening={false}
                     x={img.x} y={img.y} width={img.width} height={img.height}
-                    stroke="#60a5fa" strokeWidth={2 / zoom} dash={[8 / zoom, 6 / zoom]}
+                    stroke={ACCENT} strokeWidth={2 / zoom} dash={[8 / zoom, 6 / zoom]}
                   />
                 </Layer>
               );
             })()}
           </Stage>
         </div>
-
-        {/* 局部编辑入口：选中带 assetLabel 的图片时出现 */}
-        {onRegionEdit && !maskMode && selectedId?.startsWith("img") &&
-          images.find((i) => i.id === selectedId)?.assetLabel && (
-          <div className="absolute bottom-20 inset-x-0 mx-auto w-fit z-20">
-            <button
-              onClick={() => enterMaskMode(selectedId)}
-              className="px-4 py-2 bg-white text-black rounded text-[11px] font-bold uppercase tracking-wider shadow-lg hover:bg-gray-200 transition-all"
-            >
-              {t("edit_region")}
-            </button>
-          </div>
-        )}
 
         {/* 隐藏文件选择器：空态「上传产品图」按钮触发。走 handleLocalImageFile 注册成资产 */}
         <input
@@ -3119,6 +3125,31 @@ const CanvasArea = forwardRef(
                 ><FiScissors size={13} /> {t("ai_split")}</button>
               );
             })()}
+            {/* 局部编辑并入主操作条：原先单独浮在 bottom-20 的入口太隐蔽（可发现性差），
+                与套图/拆分等同级并列。仅支持「恰好选中一张已注册(带 assetLabel)的图」，
+                禁用时 title 说明原因，用户知道差什么。 */}
+            {onRegionEdit && (() => {
+              const oneId = setSel.size === 1
+                ? [...setSel][0]
+                : (setSel.size === 0 && selectedId?.startsWith("img") ? selectedId : null);
+              const target = oneId ? images.find((i) => i.id === oneId && i.assetLabel) : null;
+              const reason = !oneId
+                ? t("edit_region_need_one")
+                : (!target ? t("edit_region_need_asset") : t("edit_region_title"));
+              return (
+                <button
+                  onClick={() => {
+                    if (!target) return;
+                    setSetSel(new Set()); // 清掉多选高亮框，避免与蒙版视觉打架
+                    enterMaskMode(target.id);
+                  }}
+                  disabled={!target}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-primary-text hover:bg-bg-page disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  title={reason}
+                  aria-label={t("edit_region")}
+                ><FiEdit3 size={13} /> {t("edit_region")}</button>
+              );
+            })()}
             <div className="w-px h-5 bg-divider mx-0.5" />
             <button
               onClick={handleDelete}
@@ -3171,10 +3202,12 @@ const CanvasArea = forwardRef(
                 <div className="px-5 pt-3">
                   <div className="text-[10px] text-secondary-text mb-1.5">{t("set_mode_label")}</div>
                   <div className="flex items-center gap-2">
+                    {/* sceneKey：给不懂设计术语的卖家一句「什么情况选我」的场景化人话，
+                        与技术说明(hintKey)分行——先看懂场景再看细节 */}
                     {[
-                      { k: "ai", labelKey: "set_mode_ai", beauty: true, hintKey: "set_mode_ai_hint" },
-                      { k: "layered", labelKey: "set_mode_layered", beauty: false, hintKey: "set_mode_layered_hint" },
-                      { k: "editable", labelKey: "set_mode_editable", beauty: false, hintKey: "set_mode_editable_hint" },
+                      { k: "ai", labelKey: "set_mode_ai", beauty: true, hintKey: "set_mode_ai_hint", sceneKey: "set_mode_ai_scene" },
+                      { k: "layered", labelKey: "set_mode_layered", beauty: false, hintKey: "set_mode_layered_hint", sceneKey: "set_mode_layered_scene" },
+                      { k: "editable", labelKey: "set_mode_editable", beauty: false, hintKey: "set_mode_editable_hint", sceneKey: "set_mode_editable_scene" },
                     ].map((m) => (
                       <button
                         key={m.k}
@@ -3187,6 +3220,8 @@ const CanvasArea = forwardRef(
                           <span className={`ml-auto text-[9px] px-1.5 py-0.5 rounded-full ${m.beauty ? "bg-primary/15 text-primary" : "bg-success/15 text-success"}`}>{m.beauty ? t("tag_beauty_first") : t("tag_editable_first")}</span>
                         </div>
                         <div className="text-[10px] text-secondary-text mt-0.5 ml-[18px]">{t(m.hintKey)}</div>
+                        {/* 场景化人话：比技术说明稍亮一档，让卖家先扫到这句 */}
+                        <div className="text-[10px] text-primary-text/85 mt-1 ml-[18px]">{t(m.sceneKey)}</div>
                       </button>
                     ))}
                   </div>
@@ -3383,7 +3418,8 @@ const CanvasArea = forwardRef(
                   node.style.marginTop = `-${rect.bottom - window.innerHeight + 10}px`;
               }
             }}
-            className={`fixed z-[100] w-56 rounded shadow-2xl border border-divider text-sm ${theme === "dark" ? "bg-bg-card border-border-main text-text-main" : "bg-bg-card border-border-main text-text-main"}`}
+            // border-main/text-main 不在 v4 @theme（静默失效 → 文字继承默认色），改成 divider/primary-text
+            className="fixed z-[100] w-56 rounded shadow-2xl border border-divider text-sm bg-bg-card text-primary-text"
             style={{ top: contextMenu.y, left: contextMenu.x }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -3472,7 +3508,8 @@ const CanvasArea = forwardRef(
                       <span>›</span>
                     </button>
                     <div
-                      className={`absolute left-full bottom-0 hidden group-hover:block w-32 rounded shadow-2xl border border-divider text-sm ${theme === "dark" ? "bg-bg-card border-border-main" : "bg-bg-card border-border-main"}`}
+                      // 同上：border-main 是坏 token，divider 才是 v4 @theme 里的真实边框色
+                      className="absolute left-full bottom-0 hidden group-hover:block w-32 rounded shadow-2xl border border-divider text-sm bg-bg-card"
                     >
                       <MenuButton
                         label="PNG"
