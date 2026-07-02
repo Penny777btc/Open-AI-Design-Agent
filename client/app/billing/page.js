@@ -22,7 +22,6 @@ export default function BillingPage() {
   const [buying, setBuying] = useState(null);
   const [redeemCode, setRedeemCode] = useState("");
   const [redeeming, setRedeeming] = useState(false);
-  const zh = lang === "zh";
 
   useEffect(() => {
     axios.get(`${API}/api/v1/billing/packages`).then(({ data }) => {
@@ -44,7 +43,7 @@ export default function BillingPage() {
       const { data } = await axios.post(`${API}/api/v1/billing/checkout`, { package_id: id });
       window.location.href = data.checkout_url;
     } catch (err) {
-      toast.error(err.response?.data?.detail || "下单失败");
+      toast.error(err.response?.data?.detail || t.checkoutFailed);
       setBuying(null);
     }
   };
@@ -55,12 +54,12 @@ export default function BillingPage() {
     setRedeeming(true);
     try {
       const { data } = await axios.post(`${API}/api/v1/billing/redeem`, { code });
-      toast.success(zh ? `已到账 ${data.credits} 积分` : `${data.credits} credits added`);
+      toast.success(t.redeem.success(data.credits));
       setRedeemCode("");
       fetchUserData(); // 刷新顶部余额
       axios.get(`${API}/api/v1/billing/ledger`).then(({ data }) => setLedger(data)).catch(() => {});
     } catch (err) {
-      toast.error(err.response?.data?.detail || (zh ? "兑换失败" : "Redeem failed"));
+      toast.error(err.response?.data?.detail || t.redeem.failed);
     } finally {
       setRedeeming(false);
     }
@@ -80,9 +79,8 @@ export default function BillingPage() {
             <div className="font-data text-4xl">{userData?.balance ?? "—"}</div>
             {userData?.balance > 0 && (
               <div className="text-secondary-text text-[11px] mt-1">
-                {zh
-                  ? `≈ ${Math.floor(userData.balance / 10)} 张图`
-                  : `≈ ${Math.floor(userData.balance / 10)} images`}
+                {/* 积分→图数换算令牌化：双语文案统一维护在 copy.js，避免页面内再出现术语分叉 */}
+                {t.approxImages(Math.floor(userData.balance / 10))}
               </div>
             )}
           </div>
@@ -93,11 +91,10 @@ export default function BillingPage() {
           {packages.map((p) => (
             <div key={p.id} className="bg-bg-card border border-white/[0.08] rounded-sm p-6 flex flex-col gap-3 hover:border-white/20 transition-all">
               <div className="micro-label">{p.label}</div>
-              <div className="font-data text-3xl">{p.credits.toLocaleString()}<span className="text-sm text-gray-500 ml-1 font-normal">credits</span></div>
+              {/* 单位不再写死 "credits"：中文站显示「积分」，避免 $ / credits / 积分 同屏三写 */}
+              <div className="font-data text-3xl">{p.credits.toLocaleString()}<span className="text-sm text-gray-500 ml-1 font-normal">{t.unit}</span></div>
               <div className="text-secondary-text text-[11px] -mt-1">
-                {zh
-                  ? `≈ ${Math.floor(p.credits / 10).toLocaleString()} 张图`
-                  : `≈ ${Math.floor(p.credits / 10).toLocaleString()} images`}
+                {t.approxImages(Math.floor(p.credits / 10).toLocaleString())}
               </div>
               <div className="text-secondary-text text-[13px]">${(p.amount_cents / 100).toFixed(2)}</div>
               <button
@@ -117,13 +114,13 @@ export default function BillingPage() {
 
         {/* 兑换码 */}
         <div className="flex flex-col gap-3">
-          <div className="micro-label">{zh ? "兑换码" : "Redeem code"}</div>
+          <div className="micro-label">{t.redeem.label}</div>
           <div className="bg-bg-card border border-white/[0.08] rounded-sm p-5 flex flex-col sm:flex-row gap-3 sm:items-center">
             <input
               value={redeemCode}
               onChange={(e) => setRedeemCode(e.target.value.toUpperCase())}
               onKeyDown={(e) => { if (e.key === "Enter" && !redeeming) redeem(); }}
-              placeholder={zh ? "输入兑换码，如 PIC-XXXX-XXXX-XXXX-XXXX" : "Enter your code"}
+              placeholder={t.redeem.placeholder}
               className="flex-1 px-4 py-2.5 bg-white/[0.02] border border-white/10 rounded-sm text-white placeholder-gray-600 focus:outline-none focus:border-white/30 transition-all font-mono text-sm"
             />
             <button
@@ -131,7 +128,7 @@ export default function BillingPage() {
               disabled={redeeming || !redeemCode.trim()}
               className="py-2.5 px-6 rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] bg-white text-black hover:bg-gray-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {redeeming ? (zh ? "兑换中…" : "Redeeming…") : (zh ? "兑换" : "Redeem")}
+              {redeeming ? t.redeem.redeeming : t.redeem.button}
             </button>
           </div>
         </div>

@@ -53,7 +53,12 @@ const TEXT_PRESETS = {
   },
 };
 
-const TEXT_SWATCHES = ["#ffffff", "#000000", "#ffe24d", "#ff3b3b", "#19c37d", "#3b82f6"];
+// 色板排序=中性色优先（白/墨黑/暖灰/低饱和金），促销红黄放最后。
+// why：第一眼看到的颜色定调整个工具的档次——促销大红大黄打头显廉价，
+// 中性高级色打头「打开就高级」（对标 Lovart）。墨黑/暖灰/金与下方
+// SET_TEMPLATE 的 _INK/_GREY/_GOLD 同一套语义（此处内联 hex 是因为
+// 那三个常量声明在本数组之后，直接引用会踩 TDZ）。
+const TEXT_SWATCHES = ["#ffffff", "#262320", "#8a847c", "#a8884e", "#ffe24d", "#ff3b3b"];
 
 // 套图模板：选中一批产品图，AI 按同一套约束（排版/字体/风格写进系统提示）批量生成
 // 一组风格统一的「新图」——不是事后叠文字图层，而是约束生成本身。模板细节在后端
@@ -65,6 +70,12 @@ const SET_TEMPLATES = {
   rednote: { labelKey: "tpl_rednote", descKey: "tpl_rednote_desc" },
   minimal: { labelKey: "tpl_minimal", descKey: "tpl_minimal_desc" },
 };
+
+// 套图单张积分的前端预估值（只做「点生成前心里有数」，非最终计费）。
+// why：真实单价在后端 model_catalog 按工具/模型差异化（生图 10 / edit 15 /
+// compose 14…），套图各模式混用这些工具，前端拿不到逐节点报价——取 15 做
+// 保守中值，UI 恒标「≈」。后端调价时这里只需改一个数。
+const SET_EST_CREDITS_PER_IMAGE = 15;
 
 // 混合方案的【固定文字模板】：AI 出干净底图后，前端在每张图上叠这些槽位。
 // 坐标/字号都相对图片尺寸（rel*）→ 全集排版/字体/字号 100% 一致，只有文字内容可改。
@@ -796,6 +807,7 @@ const LoaderNode = ({ task, isSelected, onSelect, onChange, theme }) => {
   const shapeRef = useRef();
   const trRef = useRef();
   const arcRef = useRef();
+  const glowRef = useRef(); // 呼吸光晕层
 
   useEffect(() => {
     if (isSelected && trRef.current) {
@@ -809,6 +821,12 @@ const LoaderNode = ({ task, isSelected, onSelect, onChange, theme }) => {
       const anim = new Konva.Animation((frame) => {
         const angleDiff = frame.timeDiff * 0.36; // roughly 360 degrees per second
         arcRef.current.rotate(angleDiff);
+        // 呼吸光晕：光晕描边层 opacity 在 0.5~1.0 间正弦缓动（周期 2.4s）。
+        // why：静态转圈只是「在等」，呼吸让占位卡「活着」——Lovart 生成中的高级感
+        // 核心就是这种低频律动。复用同一个 Konva.Animation，零额外循环成本。
+        if (glowRef.current) {
+          glowRef.current.opacity(0.75 + 0.25 * Math.sin((frame.time / 2400) * Math.PI * 2));
+        }
       }, arcRef.current.getLayer());
 
       anim.start();
@@ -839,6 +857,21 @@ const LoaderNode = ({ task, isSelected, onSelect, onChange, theme }) => {
         ref={shapeRef}
         name="konva-item"
       >
+        {/* 呼吸光晕层：柔和的白描边+外发光，opacity 由上方 Konva.Animation 驱动。
+            画在卡片底下（先画=在下层），listening=false 不挡任何点击/拖拽事件。 */}
+        <Rect
+          ref={glowRef}
+          width={240}
+          height={240}
+          cornerRadius={8}
+          stroke={theme === "dark" ? ACCENT : "#0F172A"}
+          strokeWidth={1.5}
+          shadowColor={theme === "dark" ? ACCENT : "#0F172A"}
+          shadowBlur={24}
+          shadowOpacity={0.5}
+          opacity={0.75}
+          listening={false}
+        />
         <Rect
           width={240}
           height={240}
@@ -1301,6 +1334,142 @@ const CanvasArea = forwardRef(
       window.addEventListener("keyup", up);
       return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
     }, []);
+
+    // ===== 触屏手势（additive：只补触屏，桌面鼠标路径零改动）=====
+    // why：框选/平移/缩放原本全靠 鼠标+修饰键（Shift/空格/⌘滚轮），iPad/手机上
+    // 基本只读。Konva 对触屏派发的是 touch/tap 事件（不派发 mouse/click），
+    // 所以下面的 onTouch* 与既有 onMouse*/onWheel 天然互不干扰。
+    // 手势映射：单指拖空白=平移（触屏没有空格键）、双指捏合=缩放（以两指中点为锚）、
+    // 长按图片=切换多选（触屏没有 Shift 键）。
+    const touchRef = useRef({
+      mode: null,        // null | "pan" | "pinch"
+      lastPan: null,     // 单指平移上一帧的 clientX/Y
+      panMoved: false,   // 本次单指触摸是否发生了实际位移（没动=视为点空白→清选择）
+      lastDist: 0,       // 捏合上一帧的两指距离
+      lastCenter: null,  // 捏合上一帧的两指中点（client 坐标）
+      lpTimer: null,     // 长按定时器
+      lpStart: null,     // 长按起点（用于位移超阈值取消）
+    });
+
+    const clearLongPress = () => {
+      const ts = touchRef.current;
+      if (ts.lpTimer) { clearTimeout(ts.lpTimer); ts.lpTimer = null; }
+      ts.lpStart = null;
+    };
+
+    // 从事件目标向上找最近的图片节点 id（长按多选只对图片有意义——setSel 就是图片集合）
+    const findTouchImageId = (target) => {
+      let n = target;
+      while (n && typeof n.getStage === "function" && n !== n.getStage()) {
+        const id = typeof n.id === "function" ? n.id() : null;
+        if (id && id.startsWith("img")) return id;
+        n = typeof n.getParent === "function" ? n.getParent() : null;
+      }
+      return null;
+    };
+
+    const handleTouchStart = (e) => {
+      if (maskMode) return; // 蒙版涂抹走 pointer 事件（触屏可直接涂），别抢
+      const ts = touchRef.current;
+      const touches = e.evt.touches;
+      if (touches.length === 2) {
+        // 双指落下 = 捏合缩放。取消长按/平移，防手势互相打架
+        clearLongPress();
+        e.evt.preventDefault(); // 阻止浏览器自己的页面级捏合缩放
+        ts.mode = "pinch";
+        const [a, b] = [touches[0], touches[1]];
+        ts.lastDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        ts.lastCenter = { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
+        return;
+      }
+      if (touches.length !== 1) return;
+      const t0 = touches[0];
+      if (e.target === e.target.getStage()) {
+        // 单指按在空白处 = 平移画布
+        e.evt.preventDefault(); // 阻止页面滚动/回弹
+        setContextMenu(null);
+        ts.mode = "pan";
+        ts.panMoved = false;
+        ts.lastPan = { x: t0.clientX, y: t0.clientY };
+      } else {
+        // 按在对象上：拖拽/点选交给 Konva 原生 touch 支持（draggable/onTap 已生效），
+        // 这里只挂长按定时器：500ms 未动 = 切换该图的多选态
+        const imgId = findTouchImageId(e.target);
+        if (imgId) {
+          clearLongPress();
+          ts.lpStart = { x: t0.clientX, y: t0.clientY };
+          ts.lpTimer = setTimeout(() => {
+            ts.lpTimer = null;
+            toggleMultiSelect(imgId);
+            setSelectedId(null); // 多选与单选互斥（与桌面框选行为一致）
+            // 触感反馈：长按无 hover 态，振一下让「已进入多选」可感知
+            try { navigator.vibrate?.(30); } catch { /* 不支持就算了 */ }
+          }, 500);
+        }
+      }
+    };
+
+    const handleTouchMove = (e) => {
+      if (maskMode) return;
+      const ts = touchRef.current;
+      const touches = e.evt.touches;
+      // 长按判定：手指位移超过 10px = 用户在拖拽而非长按，取消
+      if (ts.lpTimer && ts.lpStart && touches.length === 1) {
+        const dx = touches[0].clientX - ts.lpStart.x;
+        const dy = touches[0].clientY - ts.lpStart.y;
+        if (Math.hypot(dx, dy) > 10) clearLongPress();
+      }
+      const stage = stageRef.current;
+      if (!stage) return;
+      if (ts.mode === "pinch" && touches.length === 2) {
+        e.evt.preventDefault();
+        const [a, b] = [touches[0], touches[1]];
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const center = { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
+        if (!ts.lastDist) { ts.lastDist = dist; ts.lastCenter = center; return; }
+        // 让「两指中点正下方的世界点」始终钉在中点上：缩放锚定 + 双指平移一并成立
+        const rect = stage.container().getBoundingClientRect();
+        const cx = center.x - rect.left, cy = center.y - rect.top;
+        const oldScale = stage.scaleX();
+        const newScale = Math.max(0.1, Math.min(5, oldScale * (dist / ts.lastDist)));
+        const pointTo = { x: (cx - stage.x()) / oldScale, y: (cy - stage.y()) / oldScale };
+        updateZoom(newScale, { x: cx - pointTo.x * newScale, y: cy - pointTo.y * newScale });
+        ts.lastDist = dist;
+        ts.lastCenter = center;
+        return;
+      }
+      if (ts.mode === "pan" && touches.length === 1 && ts.lastPan) {
+        e.evt.preventDefault();
+        const t0 = touches[0];
+        const dx = t0.clientX - ts.lastPan.x;
+        const dy = t0.clientY - ts.lastPan.y;
+        if (Math.hypot(dx, dy) > 2) ts.panMoved = true;
+        ts.lastPan = { x: t0.clientX, y: t0.clientY };
+        const np = { x: stage.x() + dx, y: stage.y() + dy };
+        stage.position(np);
+        stage.batchDraw();
+        // 点阵网格背景与画布同步平移（与滚轮/空格平移同一套 DOM 直写逻辑）
+        if (containerRef.current) containerRef.current.style.backgroundPosition = `${np.x}px ${np.y}px`;
+      }
+    };
+
+    const handleTouchEnd = (e) => {
+      if (maskMode) return;
+      clearLongPress();
+      const ts = touchRef.current;
+      const touches = e.evt.touches;
+      if (touches.length === 0) {
+        // 单指在空白处「按下即抬起、几乎没动」= 触屏版点空白 → 清空选择（对齐桌面行为）
+        if (ts.mode === "pan" && !ts.panMoved) clearSelection();
+        ts.mode = null; ts.lastPan = null; ts.lastDist = 0; ts.lastCenter = null; ts.panMoved = false;
+      } else if (touches.length === 1 && ts.mode === "pinch") {
+        // 捏合中抬起一指：无缝降级为单指平移，画面不跳
+        ts.mode = "pan";
+        ts.panMoved = true; // 刚捏合过，抬手时不要误触发「清空选择」
+        ts.lastPan = { x: touches[0].clientX, y: touches[0].clientY };
+        ts.lastDist = 0; ts.lastCenter = null;
+      }
+    };
 
     // ===== 局部编辑（蒙版涂抹）=====
     const [maskMode, setMaskMode] = useState(null); // 进入编辑的 image id
@@ -2809,7 +2978,9 @@ const CanvasArea = forwardRef(
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
       >
-        <div ref={stageWrapperRef} className="absolute inset-0">
+        {/* touchAction:none —— 把触摸手势全权交给画布（否则单指拖=页面滚动、
+            双指捏=浏览器缩放，画布手势根本轮不到）。对鼠标无任何影响。 */}
+        <div ref={stageWrapperRef} className="absolute inset-0" style={{ touchAction: "none" }}>
           <Stage
             width={canvasSize.width}
             height={canvasSize.height}
@@ -2825,6 +2996,11 @@ const CanvasArea = forwardRef(
             }}
             onMouseMove={maskMode ? undefined : () => { if (marqueeStartRef.current) marqueeMove(); }}
             onMouseUp={maskMode ? undefined : () => { if (marqueeStartRef.current) marqueeEnd(); }}
+            // 触屏手势（additive）：Konva 触屏只派发 touch/tap、不派发 mouse 事件，
+            // 与上面的 onMouse* 桌面路径并存不互扰。蒙版模式在 handler 内部直接 return。
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
             onPointerDown={maskMode ? () => { if (!paintingRef.current) maskPaintBegin(); } : undefined}
             onPointerMove={maskMode ? maskPaintMove : undefined}
             onPointerUp={maskMode ? maskPaintEnd : undefined}
@@ -3255,11 +3431,23 @@ const CanvasArea = forwardRef(
                     ? t("set_footer_single", setSel.size, t(SET_TEMPLATES[setTpl].ctaKey))
                     : t("set_footer_multi", setSel.size)}
                 </span>
-                <div className="flex gap-2">
-                  <button onClick={() => setShowSetPanel(false)} className="px-4 py-2 border border-divider text-secondary-text rounded text-[11px] font-bold hover:text-primary-text">{t("cancel")}</button>
-                  <button onClick={applySetTemplate} disabled={setSel.size === 0} className="px-5 py-2 bg-primary text-black rounded text-[11px] font-bold disabled:opacity-40 disabled:cursor-not-allowed">
-                    {SET_TEMPLATES[setTpl]?.single ? t("set_cta_single", t(SET_TEMPLATES[setTpl].ctaKey), SET_TEMPLATES[setTpl].count) : t("set_cta_multi", setSel.size)}
-                  </button>
+                <div className="flex items-center gap-3">
+                  {/* 预估消耗：出图前给用户一个量级预期（怕乱扣分是套图最大心理门槛）。
+                      出图张数 = 单图模板固定张数(6/7)，多图模式 = 勾选张数。 */}
+                  {setSel.size > 0 && (() => {
+                    const outCount = SET_TEMPLATES[setTpl]?.single ? (SET_TEMPLATES[setTpl].count || 1) : setSel.size;
+                    return (
+                      <span className="text-[11px] text-secondary-strong tabular-nums whitespace-nowrap">
+                        {t("set_estimated_cost", outCount * SET_EST_CREDITS_PER_IMAGE)}
+                      </span>
+                    );
+                  })()}
+                  <div className="flex gap-2">
+                    <button onClick={() => setShowSetPanel(false)} className="px-4 py-2 border border-divider text-secondary-text rounded text-[11px] font-bold hover:text-primary-text">{t("cancel")}</button>
+                    <button onClick={applySetTemplate} disabled={setSel.size === 0} className="px-5 py-2 bg-primary text-black rounded text-[11px] font-bold disabled:opacity-40 disabled:cursor-not-allowed">
+                      {SET_TEMPLATES[setTpl]?.single ? t("set_cta_single", t(SET_TEMPLATES[setTpl].ctaKey), SET_TEMPLATES[setTpl].count) : t("set_cta_multi", setSel.size)}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -3300,11 +3488,13 @@ const CanvasArea = forwardRef(
               <span className="text-[10px] text-secondary-strong font-mono w-6 text-center tabular-nums">{Math.round(sel.fontSize || 24)}</span>
               <button onClick={() => updateSelectedText({ fontSize: Math.min(200, (sel.fontSize || 24) + 4) })} className="w-7 h-7 rounded hover:bg-bg-page text-secondary-strong hover:text-primary-text text-sm" aria-label={t("zoom_in")}>A+</button>
               <div className="w-px h-5 bg-divider mx-0.5" />
-              {/* 加粗 */}
-              <button onClick={() => updateSelectedText({ fontStyle: bold ? "normal" : "bold" })} className={`w-7 h-7 rounded text-sm font-bold ${bold ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`} aria-label="Bold">B</button>
+              {/* 加粗。激活态用「白10%底+细白环」而非实心白（primary=纯白）：
+                  工具条里可同时激活多个开关，一排实心白块层次全平、噪音大；
+                  克制的半透明态才衬得出唯一实心白主 CTA（套图生成）。下同。 */}
+              <button onClick={() => updateSelectedText({ fontStyle: bold ? "normal" : "bold" })} className={`w-7 h-7 rounded text-sm font-bold ${bold ? "bg-white/10 text-primary-text ring-1 ring-white/20" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`} aria-label="Bold">B</button>
               {/* 对齐 */}
               {["left", "center", "right"].map((a) => (
-                <button key={a} onClick={() => updateSelectedText({ align: a })} className={`w-7 h-7 rounded text-[10px] ${sel.align === a ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`} aria-label={a}>{a === "left" ? "⬅" : a === "center" ? "⬌" : "➡"}</button>
+                <button key={a} onClick={() => updateSelectedText({ align: a })} className={`w-7 h-7 rounded text-[10px] ${sel.align === a ? "bg-white/10 text-primary-text ring-1 ring-white/20" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`} aria-label={a}>{a === "left" ? "⬅" : a === "center" ? "⬌" : "➡"}</button>
               ))}
               <div className="w-px h-5 bg-divider mx-0.5" />
               {/* 颜色 */}
@@ -3313,8 +3503,8 @@ const CanvasArea = forwardRef(
               ))}
               <div className="w-px h-5 bg-divider mx-0.5" />
               {/* 描边 / 阴影：杂乱产品图上的可读性处理 */}
-              <button onClick={() => updateSelectedText(hasStroke ? { strokeWidth: 0 } : { stroke: "#000000", strokeWidth: 2, fillAfterStrokeEnabled: true, lineJoin: "round" })} className={`px-2 h-7 rounded text-[10px] ${hasStroke ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`}>{t("text_stroke")}</button>
-              <button onClick={() => updateSelectedText(hasShadow ? { shadowBlur: 0 } : { shadowColor: "#000000", shadowBlur: 6, shadowOpacity: 0.45 })} className={`px-2 h-7 rounded text-[10px] ${hasShadow ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`}>{t("text_shadow")}</button>
+              <button onClick={() => updateSelectedText(hasStroke ? { strokeWidth: 0 } : { stroke: "#000000", strokeWidth: 2, fillAfterStrokeEnabled: true, lineJoin: "round" })} className={`px-2 h-7 rounded text-[10px] ${hasStroke ? "bg-white/10 text-primary-text ring-1 ring-white/20" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`}>{t("text_stroke")}</button>
+              <button onClick={() => updateSelectedText(hasShadow ? { shadowBlur: 0 } : { shadowColor: "#000000", shadowBlur: 6, shadowOpacity: 0.45 })} className={`px-2 h-7 rounded text-[10px] ${hasShadow ? "bg-white/10 text-primary-text ring-1 ring-white/20" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`}>{t("text_shadow")}</button>
               <div className="w-px h-5 bg-divider mx-0.5" />
               <button onClick={() => { setTexts((prev) => prev.filter((tx) => tx.id !== selectedId)); setSelectedId(null); }} className="w-7 h-7 rounded hover:bg-red-500/15 text-secondary-strong hover:text-red-400 text-sm" title={t("delete")} aria-label={t("delete")}>✕</button>
             </div>

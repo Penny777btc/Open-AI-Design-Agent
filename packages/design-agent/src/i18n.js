@@ -167,6 +167,16 @@ const dict = {
     credits_unit: "积分",
     steps_unit: (n) => `${n} 步`,
     node_processing: "处理中",
+    // 逐条预览：把每步的工具类型翻成人话（key = plan_tool_<tool>，与后端 tool 名对齐）
+    plan_tool_generate_image: "全新绘制一张图",
+    plan_tool_edit_image: "在现有素材上修改",
+    plan_tool_generate_video: "生成短视频",
+    plan_tool_cutout_layer: "抠出主体图层",
+    plan_tool_compose_subject: "锁定主体、合成新背景",
+    plan_tool_extract_text: "识别图中文字",
+    plan_tool_default: "AI 处理",
+    plan_seconds_unit: (s) => `${s} 秒`,
+    plan_after_steps: (steps) => `衔接第 ${steps} 步`,
 
     // ── 画布（CanvasArea）─────────────────────────────────────────
     image: "图片",
@@ -267,6 +277,8 @@ const dict = {
     set_footer_multi: (n) => `已选 ${n} 张 · 排版/字体/风格统一，每张消耗积分`,
     set_cta_single: (cta, count) => `${cta}（${count} 张）`,
     set_cta_multi: (n) => `生成套图（${n} 张）`,
+    // 出图前的积分预估（前端估算值，恒带 ≈；真实扣费以后端逐节点计价为准）
+    set_estimated_cost: (n) => `预计消耗 ≈ ${n} 积分`,
 
     // 文字样式面板
     font_title: "字体（Google Fonts 免费字体）",
@@ -489,6 +501,16 @@ const dict = {
     credits_unit: "credits",
     steps_unit: (n) => `${n} steps`,
     node_processing: "Processing",
+    // Per-node preview: human wording per tool (key = plan_tool_<tool>, matches backend tool names)
+    plan_tool_generate_image: "Paint a brand-new image",
+    plan_tool_edit_image: "Edit an existing asset",
+    plan_tool_generate_video: "Generate a short video",
+    plan_tool_cutout_layer: "Cut out the subject layer",
+    plan_tool_compose_subject: "Lock subject, compose a new background",
+    plan_tool_extract_text: "Recognize text in the image",
+    plan_tool_default: "AI processing",
+    plan_seconds_unit: (s) => `${s}s`,
+    plan_after_steps: (steps) => `after step ${steps}`,
 
     // ── Canvas (CanvasArea) ───────────────────────────────────────
     image: "Image",
@@ -589,6 +611,8 @@ const dict = {
     set_footer_multi: (n) => `${n} selected · unified layout/font/style, credits charged per image`,
     set_cta_single: (cta, count) => `${cta} (${count})`,
     set_cta_multi: (n) => `Generate set (${n})`,
+    // Pre-generation credit estimate (frontend approximation, always shown with ≈)
+    set_estimated_cost: (n) => `Est. cost ≈ ${n} credits`,
 
     // Text style panel
     font_title: "Font (free Google Fonts)",

@@ -547,7 +547,8 @@ export default function Landing() {
               <div key={p.id} onMouseMove={spotlightMove}
                 className={`spotlight reveal reveal-d${i} bg-bg-card border border-white/[0.08] rounded-sm p-7 flex flex-col gap-3 hover:border-white/20 transition-all`}>
                 <div className="micro-label">{p.label}</div>
-                <div className="font-data text-3xl">{p.credits}<span className="text-sm text-gray-500 ml-1 font-normal">credits</span></div>
+                {/* 单位走 copy.js 令牌：中文站「积分」/ 英文站 "credits"，与 Hero、FAQ、计费页术语一致 */}
+                <div className="font-data text-3xl">{p.credits}<span className="text-sm text-gray-500 ml-1 font-normal">{t.pricing.unit}</span></div>
                 <div className="text-secondary-text text-[13px]">{p.price}</div>
                 <Link href="/register"
                   className="mt-2 py-2.5 bg-white text-black rounded-sm text-[11px] font-bold text-center uppercase tracking-[0.15em] hover:bg-gray-200 transition-all">

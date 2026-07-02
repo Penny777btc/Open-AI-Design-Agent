@@ -106,12 +106,13 @@ export default function AccountPage() {
             href="/admin"
             className="bg-bg-card border border-white/[0.08] rounded-sm p-5 flex items-center justify-between hover:border-white/25 transition-all group"
           >
+            {/* 管理入口文案随 lang 走：原先写死中文，英文站会漏出中文标签 */}
             <div className="flex flex-col gap-1">
-              <div className="micro-label">// ADMIN · 运营控制台</div>
-              <span className="text-[14px] text-white">管理后台</span>
+              <div className="micro-label">{t.adminKicker}</div>
+              <span className="text-[14px] text-white">{t.adminTitle}</span>
             </div>
             <span className="text-gray-500 group-hover:text-white transition-colors text-[11px] font-bold uppercase tracking-[0.15em]">
-              进入 →
+              {t.adminEnter}
             </span>
           </Link>
         ) : null}
