@@ -958,6 +958,10 @@ export default function CreativeCanvas({
     if (sessionId) return sessionId;
     const { data } = await axios.post(`${API}/sessions`, {}, { headers: getHeaders() });
     justCreatedSessionRef.current = true;
+    // 立即同步 sessionIdRef：router.replace(?session=) 更新 searchParams→sessionId→ref 是异步的，
+    // 但 sendMessage 会紧接着同步调 resumePolling(job, newid)，其守卫 sessionIdRef.current !== newid
+    // 会因 ref 还没同步(仍为旧值/null)而误判"已切走"→ 立刻 return → 永不轮询、任务卡在待批准。
+    sessionIdRef.current = data.id;
     if (inEmbedMode) {
       setActiveEmbedSession(data.id);
     } else {
