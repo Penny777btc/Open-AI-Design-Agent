@@ -44,7 +44,9 @@ function RegisterForm() {
       localStorage.setItem("token", data.token);
       await fetchUserData();
       toast.success(t.welcome(data.user.balance));
-      router.push(searchParams.get("next") || "/dashboard");  // 保留注册前想去的意图(带 ?q= 的工作台)
+      // 保留注册前想去的意图(带 ?q= 的工作台)；只允许站内相对路径，防开放重定向钓鱼
+      const nxt = searchParams.get("next");
+      router.push(nxt && nxt.startsWith("/") && !nxt.startsWith("//") ? nxt : "/dashboard");
     } catch (err) {
       toast.error(err.response?.data?.detail || "Register failed");
       setBusy(false);

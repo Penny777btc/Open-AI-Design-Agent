@@ -550,15 +550,15 @@ export default function Landing() {
                 {/* 单位走 copy.js 令牌：中文站「积分」/ 英文站 "credits"，与 Hero、FAQ、计费页术语一致 */}
                 <div className="font-data text-3xl">{p.credits}<span className="text-sm text-gray-500 ml-1 font-normal">{t.pricing.unit}</span></div>
                 <div className="text-secondary-text text-[13px]">{p.price}</div>
-                <Link href="/register"
+                <Link href={authed ? "/billing" : "/register"}
                   className="mt-2 py-2.5 bg-white text-black rounded-sm text-[11px] font-bold text-center uppercase tracking-[0.15em] hover:bg-gray-200 transition-all">
-                  {t.pricing.buy}
+                  {authed ? t.pricing.buyAuthed : t.pricing.buy}
                 </Link>
               </div>
             ))}
           </div>
           <div className="text-center reveal">
-            <Link href="/register" className="micro-label hover:text-white transition-colors">→ {t.pricing.startFree}</Link>
+            <Link href={startHref(authed)} className="micro-label hover:text-white transition-colors">→ {t.pricing.startFree}</Link>
           </div>
         </div>
       </section>

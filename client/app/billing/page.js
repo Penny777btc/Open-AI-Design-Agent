@@ -99,7 +99,7 @@ export default function BillingPage() {
               <div className="text-secondary-text text-[13px]">${(p.amount_cents / 100).toFixed(2)}</div>
               <button
                 onClick={() => buy(p.id)}
-                disabled={buying === p.id}
+                disabled={!paymentsEnabled || buying === p.id}  // 支付未开通就真禁用，避免点了报「下单失败」与「开通中」文案自相矛盾
                 className={`mt-2 py-2.5 rounded-sm text-[11px] font-bold uppercase tracking-[0.15em] transition-all ${
                   paymentsEnabled
                     ? "bg-white text-black hover:bg-gray-200"

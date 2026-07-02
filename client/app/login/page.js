@@ -33,7 +33,9 @@ function LoginForm() {
       const { data } = await axios.post(`${API}/api/v1/auth/login`, { email, password });
       localStorage.setItem("token", data.token);
       await fetchUserData();
-      router.push(searchParams.get("next") || "/dashboard");
+      // 只允许站内相对路径，防开放重定向(?next=https://evil.com 登录后跳外站钓鱼)
+      const nxt = searchParams.get("next");
+      router.push(nxt && nxt.startsWith("/") && !nxt.startsWith("//") ? nxt : "/dashboard");
     } catch (err) {
       toast.error(err.response?.data?.detail || "Login failed");
       setBusy(false);

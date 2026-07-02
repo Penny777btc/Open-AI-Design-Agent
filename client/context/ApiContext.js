@@ -55,7 +55,9 @@ export function ApiProvider({ children }) {
         email: data.email,
       });
     } catch (err) {
-      setUserData(null);
+      // 只有 401(token 失效)才当「未登录」清空；网络错误/5xx 保留旧 userData，
+      // 否则一次抖动就让顶栏变「登录」按钮、余额消失，已登录用户误以为被登出。
+      if (err.response?.status === 401) setUserData(null);
     } finally {
       setLoading(false);
     }
