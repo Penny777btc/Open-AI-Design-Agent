@@ -935,6 +935,8 @@ const CanvasArea = forwardRef(
       colors = { textSecondary: "text-secondary-text", border: "border-divider" },
       activeTasks = [],
       chatBusy = false,  // 聊天任务(含规划期)进行中：空态起点卡让位，防误导「需要再输入」
+      hasConversation = false,  // 会话已有用户诉求：不弹起点卡（说了要小红书封面还被要求传产品图=答非所问）
+
       setActiveTasks = () => {},
       onZoomChange,
       // 局部编辑：用户在选中图片上涂抹蒙版后回调 { assetLabel, prompt, maskDataUrl }
@@ -3201,7 +3203,7 @@ const CanvasArea = forwardRef(
 
         {/* P0-4 画布空态起点：无任何元素时，中央引导卡（一句话 + 大按钮）。
             放画布中央、z 低于左上工具按钮，二者不打架（工具按钮固定左上角）。 */}
-        {!maskMode && !chatBusy &&
+        {!maskMode && !chatBusy && !hasConversation &&
           images.length === 0 && videos.length === 0 && audios.length === 0 && texts.length === 0 &&
           (!activeTasks || activeTasks.length === 0) && (
           <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">

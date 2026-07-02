@@ -1764,6 +1764,10 @@ export default function CreativeCanvas({
               theme={resolvedTheme}
               activeTasks={activeTasks}
               chatBusy={busy}  // 任务(含规划期)进行中 → 画布空态起点卡先让位，避免看着像「还要再输入一遍」
+              // 起点卡只服务「真正的冷启动」：会话里只要有过用户诉求（如从 dashboard 带话进来），
+              // 再弹「上传产品图」就是答非所问（用户实测：说了要小红书封面还被要求传产品图）。
+              // 历史未加载完(messages 为空)也先不弹，防闪现。
+              hasConversation={messages.length === 0 || messages.some((m) => m.role === "user")}
               setActiveTasks={setActiveTasks}
               onZoomChange={setZoomLevel}
               onRegionEdit={handleRegionEdit}
