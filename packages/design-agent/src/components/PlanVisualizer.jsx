@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { FiBox, FiArrowRight, FiZap } from "react-icons/fi";
+import { t } from "../i18n";
 
 /**
  * Renders a DAG (Directed Acyclic Graph) of plan nodes.
@@ -29,15 +30,15 @@ export default function PlanVisualizer({ plan, theme = "dark" }) {
       <div className="flex items-center justify-between mb-4">
         <div className="min-w-0">
           <h3 className="text-[13px] font-semibold text-primary-text flex items-center gap-1.5">
-            <FiZap size={13} className="text-primary" /> 即将为你制作
+            <FiZap size={13} className="text-primary" /> {t("plan_about_to_make")}
           </h3>
           <p className="text-[12px] text-secondary-strong mt-0.5 truncate">{plan.title}</p>
         </div>
         <div className="text-right shrink-0 ml-3">
           <div className="text-[13px] font-semibold text-primary-text">
-            {plan.total_credits} <span className="text-[11px] text-secondary-text font-normal">积分</span>
+            {plan.total_credits} <span className="text-[11px] text-secondary-strong font-normal">{t("credits_unit")}</span>
           </div>
-          <div className="text-[11px] text-secondary-strong">{plan.nodes.length} 步</div>
+          <div className="text-[11px] text-secondary-strong">{t("steps_unit", plan.nodes.length)}</div>
         </div>
       </div>
 
@@ -53,7 +54,7 @@ export default function PlanVisualizer({ plan, theme = "dark" }) {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <span className="text-[12px] font-medium text-primary-text leading-snug">
-                      {node.label || "处理中"}
+                      {node.label || t("node_processing")}
                     </span>
                     <span className="text-[10px] font-semibold text-secondary-strong bg-bg-page px-1.5 py-0.5 rounded shrink-0">
                       {node.est_credits || 0}

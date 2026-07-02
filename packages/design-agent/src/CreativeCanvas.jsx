@@ -78,8 +78,8 @@ export default function CreativeCanvas({
   // navLinks: array of { icon, label, path } to show in the user dropdown menu.
   // If not provided, defaults to the built-in links.
   navLinks = null,
-  // userBalanceLabel: string like "$ 5.00" or "1200 credits" to show in the dropdown.
-  // If not provided, falls back to "$ {user.balance}".
+  // userBalanceLabel: string like "1200 credits" / "1200 积分" to show in the dropdown.
+  // If not provided, falls back to "{user.balance} 积分/credits" (currency unit unified — no "$").
   userBalanceLabel = null,
   // onBalanceChange: 余额可能变化时回调（审批扣费/任务结束/失败退还），宿主用来刷新余额显示
   onBalanceChange = null,
@@ -559,7 +559,7 @@ export default function CreativeCanvas({
     setBusy(true);
     const userMsg = {
       role: "user",
-      content: `🎨 套图：${templateLabel}（${assetLabels.length} 张统一风格）`,
+      content: t("set_user_msg", templateLabel, assetLabels.length),
       timestamp: new Date().toISOString(),
     };
     let aIdx = -1;
@@ -595,11 +595,11 @@ export default function CreativeCanvas({
           </span>
         ), { duration: 8000 });
       } else {
-        toast.error(err.response?.data?.detail || "套图生成失败");
+        toast.error(err.response?.data?.detail || t("set_generate_failed"));
       }
       setMessages(prev => {
         const arr = [...prev];
-        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: "❌ 套图生成失败" };
+        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: t("set_generate_failed_msg") };
         return arr;
       });
     }
@@ -614,7 +614,7 @@ export default function CreativeCanvas({
     setBusy(true);
     const userMsg = {
       role: "user",
-      content: `✂️ AI 拆图：${assetLabel} → 背景层 + 主体层`,
+      content: t("split_user_msg", assetLabel),
       timestamp: new Date().toISOString(),
     };
     let aIdx = -1;
@@ -648,11 +648,11 @@ export default function CreativeCanvas({
           </span>
         ), { duration: 8000 });
       } else {
-        toast.error(err.response?.data?.detail || "AI 拆图失败");
+        toast.error(err.response?.data?.detail || t("split_failed"));
       }
       setMessages(prev => {
         const arr = [...prev];
-        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: "❌ AI 拆图失败" };
+        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: t("split_failed_msg") };
         return arr;
       });
     }
@@ -759,7 +759,7 @@ export default function CreativeCanvas({
               : e
           )
         })));
-        toast("该计划已失效（可能已处理、超时或被取消），如需可重新发起。", { icon: "ℹ️" });
+        toast(t("plan_expired"), { icon: "ℹ️" });
       } else {
         toast.error(err.response?.data?.detail || t("job_action_failed", action));
       }
@@ -1436,7 +1436,7 @@ export default function CreativeCanvas({
                     ) : (
                       <div className={`flex items-center gap-2 text-[13px] font-semibold transition-colors ${sessionId === s.id ? "text-primary" : "text-primary-text"}`}>
                         <span className="truncate flex-1">{s.name}</span>
-                        <span className="flex items-center gap-1 text-[10px] text-secondary-text opacity-70">
+                        <span className="flex items-center gap-1 text-[10px] text-secondary-strong">
                           <FiImage size={10} /> {s.asset_count}
                         </span>
                       </div>
@@ -1528,7 +1528,7 @@ export default function CreativeCanvas({
                     suppressHydrationWarning
                     className="font-bold text-xs flex items-center text-primary-text truncate"
                   >
-                    {userBalanceLabel ?? `$ ${user?.balance || "0.00"}`}
+                    {userBalanceLabel ?? `${user?.balance ?? 0} ${t("credits_unit")}`}
                   </span>
                 </div>
               )}
@@ -1542,8 +1542,10 @@ export default function CreativeCanvas({
                   }
                 }}
               >
-                <button 
+                <button
                   onClick={() => setOpenProfile(!openProfile)}
+                  aria-label={t("profile")}
+                  title={t("profile")}
                   className="w-8 h-8 rounded-full bg-primary/10 border border-primary flex items-center justify-center text-primary shadow-sm hover:bg-primary/20 transition-all overflow-hidden"
                 >
                   {user?.profile_photo ? (
@@ -1588,7 +1590,7 @@ export default function CreativeCanvas({
                       {user?.email}
                     </span>
                     <div className="mt-2 text-[13px] font-bold text-primary">
-                      {userBalanceLabel ?? `$ ${user?.balance || "0.00"}`} <span className="font-normal text-secondary-text">{t("available")}</span>
+                      {userBalanceLabel ?? `${user?.balance ?? 0} ${t("credits_unit")}`} <span className="font-normal text-secondary-text">{t("available")}</span>
                     </div>
                   </div>
                   
@@ -1600,26 +1602,31 @@ export default function CreativeCanvas({
                       {t("support")}
                     </a>
                   </div>
-                  <div className="h-px bg-divider w-full my-1" />
-                  <div className="py-1">
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setTheme(resolvedTheme === "dark" ? "light" : "dark");
-                      }}
-                      className="w-full flex items-center justify-between px-4 py-2 hover:bg-bg-page transition-colors text-[13px] font-semibold text-primary-text"
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-secondary-text">
-                          {resolvedTheme === "dark" ? <FiSun size={15} /> : <FiMoon size={15} />}
-                        </span>
-                        {t("dark_mode")}
+                  {/* 深色模式开关：仅当宿主未强制主题(forcedTheme)时可见——否则是死控件 */}
+                  {!forcedTheme && (
+                    <>
+                      <div className="h-px bg-divider w-full my-1" />
+                      <div className="py-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setTheme(resolvedTheme === "dark" ? "light" : "dark");
+                          }}
+                          className="w-full flex items-center justify-between px-4 py-2 hover:bg-bg-page transition-colors text-[13px] font-semibold text-primary-text"
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="text-secondary-text">
+                              {resolvedTheme === "dark" ? <FiSun size={15} /> : <FiMoon size={15} />}
+                            </span>
+                            {t("dark_mode")}
+                          </div>
+                          <div className={`w-8 h-4 rounded-full relative transition-colors ${resolvedTheme === "dark" ? "bg-primary" : "bg-bg-card-hover"}`}>
+                            <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-black dark:bg-white transition-all ${resolvedTheme === "dark" ? "left-4.5" : "left-0.5"}`} />
+                          </div>
+                        </button>
                       </div>
-                      <div className={`w-8 h-4 rounded-full relative transition-colors ${resolvedTheme === "dark" ? "bg-primary" : "bg-bg-card-hover"}`}>
-                        <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-black dark:bg-white transition-all ${resolvedTheme === "dark" ? "left-4.5" : "left-0.5"}`} />
-                      </div>
-                    </button>
-                  </div>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -1643,8 +1650,8 @@ export default function CreativeCanvas({
               <div className="flex items-center gap-3 px-3">
                 <span className="text-[10px] font-bold text-secondary-text uppercase tracking-widest">{zoomLevel}%</span>
                 <div className="flex items-center gap-1">
-                  <button onClick={() => canvasRef.current?.zoomOut()} className="w-5 h-5 rounded border border-divider flex items-center justify-center text-secondary-text hover:text-primary-text hover:border-primary transition-all">-</button>
-                  <button onClick={() => canvasRef.current?.zoomIn()} className="w-5 h-5 rounded border border-divider flex items-center justify-center text-secondary-text hover:text-primary-text hover:border-primary transition-all">+</button>
+                  <button onClick={() => canvasRef.current?.zoomOut()} aria-label={t("zoom_out")} title={t("zoom_out")} className="w-7 h-7 rounded border border-divider flex items-center justify-center text-secondary-strong hover:text-primary-text hover:border-primary transition-all">-</button>
+                  <button onClick={() => canvasRef.current?.zoomIn()} aria-label={t("zoom_in")} title={t("zoom_in")} className="w-7 h-7 rounded border border-divider flex items-center justify-center text-secondary-strong hover:text-primary-text hover:border-primary transition-all">+</button>
                 </div>
               </div>
             </div>
@@ -1930,7 +1937,7 @@ export default function CreativeCanvas({
                         </button>
                       ))}                      
                       {filteredSkills.length === 0 && filteredAssets.length === 0 && (
-                        <div className="px-4 py-8 text-center text-secondary-text text-xs italic opacity-50">{t("no_matches")}</div>
+                        <div className="px-4 py-8 text-center text-secondary-strong text-xs italic">{t("no_matches")}</div>
                       )}
                     </div>
                   </div>
@@ -2060,7 +2067,8 @@ export default function CreativeCanvas({
                     type="button"
                     onClick={toggleExpress}
                     className={`p-1.5 rounded transition-all ${expressMode ? "bg-primary/15 text-primary" : "hover:bg-bg-page text-secondary-text"}`}
-                    title={expressMode ? "极速模式：开（计划自动批准）" : "极速模式：关（需手动确认计划）"}
+                    title={expressMode ? t("express_on") : t("express_off")}
+                    aria-label={expressMode ? t("express_on") : t("express_off")}
                   >
                     <FiZap size={16} />
                   </button>
@@ -2109,7 +2117,7 @@ export default function CreativeCanvas({
                                 <div className={`font-bold capitalize text-[12px] transition-colors ${activeSkill?.name === skill.name ? "text-primary" : "text-primary-text group-hover:text-primary"}`}>
                                   {skill.name}
                                 </div>
-                                <div className="text-[10px] text-secondary-text mt-0.5 line-clamp-1 opacity-70 italic">{skill.description || t("specialized_workflow")}</div>
+                                <div className="text-[10px] text-secondary-strong mt-0.5 line-clamp-1 italic">{skill.description || t("specialized_workflow")}</div>
                               </div>
                             </button>
                           ))}
@@ -2190,6 +2198,7 @@ export default function CreativeCanvas({
                     type="button"
                     onClick={() => sendMessage()}
                     disabled={busy || (!input.trim() && attachments.length === 0)}
+                    aria-label={t("send")}
                     className={`w-8 h-8 rounded-full flex items-center justify-center transition-all shadow-sm ml-1
                       ${busy || (!input.trim() && attachments.length === 0)
                         ? "bg-[var(--bg-card-hover)] text-[var(--text-muted)] cursor-not-allowed"
@@ -2211,19 +2220,19 @@ export default function CreativeCanvas({
 
 // ── Event pills ────────────────────────────────────────────────────────────────
 // 用户友好的动作文案（不暴露内部工具名 edit_image / 模型名 GPT-IMAGE-2 等）
-const TOOL_LABELS = {
-  generate_image: "正在绘制画面", edit_image: "正在处理画面", enhance_image: "正在提升画质",
-  generate_video: "正在生成视频", image_to_video: "正在让图片动起来", edit_video: "正在处理视频",
-  lipsync_video: "正在对口型", concat_videos: "正在拼接视频", generate_audio: "正在生成音频",
-  extract_text: "正在识别文字", upload_file: "正在上传", ask_user: "等你确认",
+const TOOL_LABEL_KEYS = {
+  generate_image: "tool_generate_image", edit_image: "tool_edit_image", enhance_image: "tool_enhance_image",
+  generate_video: "tool_generate_video", image_to_video: "tool_image_to_video", edit_video: "tool_edit_video",
+  lipsync_video: "tool_lipsync_video", concat_videos: "tool_concat_videos", generate_audio: "tool_generate_audio",
+  extract_text: "tool_extract_text", upload_file: "tool_upload_file", ask_user: "tool_ask_user",
 };
-function friendlyAction(name) { return TOOL_LABELS[name] || "正在处理"; }
+function friendlyAction(name) { return t(TOOL_LABEL_KEYS[name] || "tool_processing"); }
 function friendlyDone(name, asset) {
-  if (name === "extract_text") return "文字已识别";
-  if (asset?.kind === "video") return "视频已生成";
-  if (asset?.split_role === "subject") return "主体已抠出";
-  if (asset?.split_role === "bg") return "背景已生成";
-  return "画面已生成";
+  if (name === "extract_text") return t("done_text_extracted");
+  if (asset?.kind === "video") return t("done_video");
+  if (asset?.split_role === "subject") return t("done_subject");
+  if (asset?.split_role === "bg") return t("done_bg");
+  return t("done_image");
 }
 
 // 已完成的 tool_call 不再显示转圈：把每个 tool_call 与它后面最近的一个 tool_result/error 配对，
@@ -2284,7 +2293,7 @@ function EventPill({ event }) {
         {ok ? <FiCheck size={13} /> : <FiX size={13} />}
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <span className="font-medium">
-            {ok ? friendlyDone(event.name, event.asset) : "这一步没成功，已自动跳过"}
+            {ok ? friendlyDone(event.name, event.asset) : t("step_skipped")}
           </span>
           {!ok && event.result?.error && (
             <span className="text-[11px] opacity-70 truncate max-w-[160px]" title={event.result.error}>
@@ -2338,15 +2347,17 @@ function EventPill({ event }) {
         </div>
         {isApproval && !event.handled && (
           <div className="flex items-center gap-1 ml-4">
-            <button 
+            <button
               onClick={() => event.onAction?.(event.job_id, "approve")}
-              className="px-2 py-1 rounded bg-primary text-black text-[10px] font-bold hover:brightness-110 transition-all"
+              aria-label={t("approve")}
+              className="px-3 h-7 rounded bg-primary text-black text-[10px] font-bold hover:brightness-110 transition-all"
             >
               {t("approve")}
             </button>
             <button
               onClick={() => event.onAction?.(event.job_id, "reject")}
-              className="px-2 py-1 rounded bg-bg-card border border-divider text-secondary-text text-[10px] hover:bg-bg-page transition-all"
+              aria-label={t("reject")}
+              className="px-3 h-7 rounded bg-bg-card border border-divider text-secondary-text text-[10px] hover:bg-bg-page transition-all"
             >
               {t("reject")}
             </button>

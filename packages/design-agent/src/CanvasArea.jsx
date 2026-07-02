@@ -20,26 +20,26 @@ import {
   Arc,
 } from "react-konva";
 import toast from "react-hot-toast";
-import { FiType, FiGrid, FiAlignJustify, FiLayers, FiScissors, FiTrash2 } from "react-icons/fi";
+import { FiType, FiGrid, FiAlignJustify, FiLayers, FiScissors, FiTrash2, FiX } from "react-icons/fi";
 import { t } from "./i18n";
 
 // 电商文字预设：AI 出背景，文字做成可编辑矢量图层叠加，导出精确不糊（扩散模型渲染文字必错）。
 // 统一带描边 + 阴影，保证在杂乱产品图上也清晰可读；fillAfterStrokeEnabled 让填充压在描边上、字形干净。
 const TEXT_PRESETS = {
   title: {
-    label: "大标题", text: "主标题",
+    labelKey: "preset_title", text: "主标题",
     style: { fontSize: 48, fontStyle: "bold", fill: "#ffffff", stroke: "#000000", strokeWidth: 2, fillAfterStrokeEnabled: true, lineJoin: "round", align: "center", shadowColor: "#000000", shadowBlur: 8, shadowOpacity: 0.5, fontFamily: "Inter, sans-serif" },
   },
   price: {
-    label: "价格", text: "¥99",
+    labelKey: "preset_price", text: "¥99",
     style: { fontSize: 56, fontStyle: "bold", fill: "#ffe24d", stroke: "#7a1f1f", strokeWidth: 3, fillAfterStrokeEnabled: true, lineJoin: "round", align: "left", shadowColor: "#000000", shadowBlur: 6, shadowOpacity: 0.45, fontFamily: "Inter, sans-serif" },
   },
   badge: {
-    label: "促销角标", text: "限时5折",
+    labelKey: "preset_badge", text: "限时5折",
     style: { fontSize: 30, fontStyle: "bold", fill: "#ffffff", stroke: "#dd1111", strokeWidth: 4, fillAfterStrokeEnabled: true, lineJoin: "round", align: "center", shadowColor: "#000000", shadowBlur: 4, shadowOpacity: 0.4, fontFamily: "Inter, sans-serif" },
   },
   body: {
-    label: "正文", text: "产品卖点描述",
+    labelKey: "preset_body", text: "产品卖点描述",
     style: { fontSize: 22, fontStyle: "normal", fill: "#ffffff", stroke: "#000000", strokeWidth: 1, fillAfterStrokeEnabled: true, lineJoin: "round", align: "left", shadowColor: "#000000", shadowBlur: 4, shadowOpacity: 0.4, fontFamily: "Inter, sans-serif" },
   },
 };
@@ -50,11 +50,11 @@ const TEXT_SWATCHES = ["#ffffff", "#000000", "#ffe24d", "#ff3b3b", "#19c37d", "#
 // 一组风格统一的「新图」——不是事后叠文字图层，而是约束生成本身。模板细节在后端
 // app/agents/set_templates.py；这里只用 key/label/desc 做选择。后端 key 必须一致。
 const SET_TEMPLATES = {
-  main6: { label: "电商主图六联", desc: "选 1 张产品图 → AI 出 6 张（白底/卖点/风味/工艺/场景/参数）", single: true, count: 6, cta: "生成主图六联" },
-  detail7: { label: "电商详情页七段", desc: "选 1 张产品图 → AI 出 7 段暗调详情页（封面/参数/风味/工艺/产区/餐配/规格）", single: true, count: 7, cta: "生成详情页七段" },
-  ecom: { label: "电商主图", desc: "白底影棚 · 标题居中 · 三条卖点" },
-  rednote: { label: "小红书封面", desc: "生活场景 · 大标题 · 竖版 3:4" },
-  minimal: { label: "极简画册", desc: "纯净留白 · 单标题 · 编辑感" },
+  main6: { labelKey: "tpl_main6", descKey: "tpl_main6_desc", single: true, count: 6, ctaKey: "tpl_main6_cta" },
+  detail7: { labelKey: "tpl_detail7", descKey: "tpl_detail7_desc", single: true, count: 7, ctaKey: "tpl_detail7_cta" },
+  ecom: { labelKey: "tpl_ecom", descKey: "tpl_ecom_desc" },
+  rednote: { labelKey: "tpl_rednote", descKey: "tpl_rednote_desc" },
+  minimal: { labelKey: "tpl_minimal", descKey: "tpl_minimal_desc" },
 };
 
 // 混合方案的【固定文字模板】：AI 出干净底图后，前端在每张图上叠这些槽位。
@@ -986,7 +986,7 @@ const CanvasArea = forwardRef(
     const [stitching, setStitching] = useState(false);
     const exportLongImage = async () => {
       const sel = images.filter((i) => setSel.has(i.id));
-      if (sel.length < 2) { toast.error("请至少选择 2 张图"); return; }
+      if (sel.length < 2) { toast.error(t("stitch_need_two")); return; }
       sel.sort((a, b) => (a.y - b.y) || (a.x - b.x)); // 阅读顺序 = 详情页段落顺序
       setStitching(true);
       try {
@@ -1010,12 +1010,12 @@ const CanvasArea = forwardRef(
         if (!blob) throw new Error("toBlob failed");
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = url; a.download = `详情页长图_${W}x${totalH}.jpg`;
+        a.href = url; a.download = t("long_image_filename", W, totalH);
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
-        toast.success(`已拼接 ${sel.length} 段 → 长图 ${W}×${totalH}`);
+        toast.success(t("stitch_done", sel.length, W, totalH));
       } catch (e) {
-        toast.error("拼图失败（可能是图片跨域）。可右键单张另存后再拼。");
+        toast.error(t("stitch_failed"));
       } finally {
         setStitching(false);
       }
@@ -1109,7 +1109,7 @@ const CanvasArea = forwardRef(
       let imgs = images.filter((i) => setSel.has(i.id) && !i.hidden);
       if (imgs.length === 0 && selectedId?.startsWith("img")) imgs = images.filter((i) => i.id === selectedId && !i.hidden);
       if (imgs.length === 0) imgs = images.filter((i) => !i.hidden);
-      if (imgs.length === 0) { toast.error("画布上没有图片可导出"); return; }
+      if (imgs.length === 0) { toast.error(t("psd_no_images")); return; }
       const minX = Math.min(...imgs.map((n) => n.x));
       const minY = Math.min(...imgs.map((n) => n.y));
       const maxX = Math.max(...imgs.map((n) => n.x + (n.width || 200)));
@@ -1120,7 +1120,7 @@ const CanvasArea = forwardRef(
         const cy = t.y + (t.fontSize || 24) / 2;
         return cx >= minX && cx <= maxX && cy >= minY && cy <= maxY;
       });
-      if (maxX - minX <= 0 || maxY - minY <= 0) { toast.error("导出区域无效"); return; }
+      if (maxX - minX <= 0 || maxY - minY <= 0) { toast.error(t("psd_invalid_region")); return; }
       setExportingPsd(true);
       try {
         const { writePsd } = await import("ag-psd");
@@ -1207,10 +1207,10 @@ const CanvasArea = forwardRef(
         a.href = url; a.download = `picsmith_分层_${W}x${H}_${ts}.psd`;
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
-        toast.success(`已导出分层 PSD（${rendered.length} 层 / ${children.length} 组）`);
+        toast.success(t("psd_done", rendered.length, children.length));
       } catch (e) {
         console.error(e);
-        toast.error("PSD 导出失败：" + (e.message || "").slice(0, 60));
+        toast.error(t("psd_failed", (e.message || "").slice(0, 60)));
       } finally {
         setExportingPsd(false);
       }
@@ -1568,15 +1568,28 @@ const CanvasArea = forwardRef(
     };
 
     const handleClearCanvas = () => {
-      if (window.confirm(t("confirm_clear_canvas"))) {
-        setImages([]);
-        setVideos([]);
-        setAudios([]);
-        setTexts([]);
-        setSelectedId(null);
-        toast.success(t("canvas_cleared"));
-      }
       setContextMenu(null);
+      toast((tt) => (
+        <span className="flex items-center gap-3 text-[12px]">
+          {t("clear_canvas_confirm")}
+          <button
+            onClick={() => {
+              setImages([]);
+              setVideos([]);
+              setAudios([]);
+              setTexts([]);
+              setSelectedId(null);
+              toast.dismiss(tt.id);
+              toast.success(t("canvas_cleared"));
+            }}
+            className="px-2 py-1 bg-red-500 text-white rounded-sm text-[10px] font-bold shrink-0"
+          >{t("confirm")}</button>
+          <button
+            onClick={() => toast.dismiss(tt.id)}
+            className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold shrink-0"
+          >{t("cancel")}</button>
+        </span>
+      ), { duration: 8000 });
     };
 
     const handleExportCanvas = () => {
@@ -1941,7 +1954,7 @@ const CanvasArea = forwardRef(
           setTimeout(redraw, 700);
         })
       );
-      toast.success(`已生成 ${blocks.length} 条可编辑文案`);
+      toast.success(t("text_blocks_done", blocks.length));
     };
 
     // 样式面板：改当前选中文字的属性
@@ -1957,10 +1970,10 @@ const CanvasArea = forwardRef(
       if (!tpl) return;
       const labels = images.filter((img) => setSel.has(img.id) && img.assetLabel).map((img) => img.assetLabel);
       if (labels.length === 0) {
-        toast.error("请选择带标签的生成图（上传的本地图暂不支持）");
+        toast.error(t("set_need_labeled"));
         return;
       }
-      onSetTemplate?.({ assetLabels: labels, template: setTpl, templateLabel: tpl.label, mode: setGenMode });
+      onSetTemplate?.({ assetLabels: labels, template: setTpl, templateLabel: t(tpl.labelKey), mode: setGenMode });
       setShowSetPanel(false);
       setSetSel(new Set());
     };
@@ -2935,9 +2948,10 @@ const CanvasArea = forwardRef(
             <button
               onClick={() => setShowTextMenu((v) => !v)}
               className="px-3.5 py-2.5 bg-bg-card border border-divider rounded-lg text-[12px] font-medium text-primary-text shadow-float hover:border-primary/60 transition-colors flex items-center gap-2"
-              title="在图上叠加文字（导出精确不糊）"
+              title={t("add_text_title")}
+              aria-label={t("add_text")}
             >
-              <FiType size={14} /> 添加文字
+              <FiType size={14} /> {t("add_text")}
             </button>
             {showTextMenu && (
               <div className="absolute top-full left-0 mt-1.5 w-36 bg-bg-card border border-divider rounded-xl shadow-pop overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150 ease-[var(--ease-out)]">
@@ -2947,7 +2961,7 @@ const CanvasArea = forwardRef(
                     onClick={() => addPresetText(key)}
                     className="w-full text-left px-3.5 py-2.5 text-[12px] text-primary-text hover:bg-bg-page transition-colors flex items-center justify-between"
                   >
-                    <span>{p.label}</span>
+                    <span>{t(p.labelKey)}</span>
                     <span className="text-secondary-strong text-[10px] truncate ml-2 max-w-[60px]">{p.text}</span>
                   </button>
                 ))}
@@ -2957,14 +2971,15 @@ const CanvasArea = forwardRef(
             <button
               onClick={() => { setShowSetPanel(true); setShowTextMenu(false); }}
               className="mt-2 px-3.5 py-2.5 bg-bg-card border border-divider rounded-lg text-[12px] font-medium text-primary-text shadow-float hover:border-primary/60 transition-colors flex items-center gap-2 w-full"
-              title="选多张图，套用统一的固定排版模板"
+              title={t("set_template_title")}
+              aria-label={t("set_template")}
             >
-              <FiGrid size={14} /> 套图模板
+              <FiGrid size={14} /> {t("set_template")}
             </button>
             {/* 操作提示（自然交互，无需按钮）：拖拽=框选，空格+拖拽=平移 */}
             <div className="mt-2 px-3 py-2 rounded-lg bg-bg-card/70 border border-divider/60 text-[11px] text-secondary-strong leading-relaxed select-none">
-              <div><span className="text-primary-text font-semibold">拖拽</span> 框选 · <span className="text-primary-text font-semibold">Shift+拖</span> 加选 · <span className="text-primary-text font-semibold">空格+拖</span> 平移</div>
-              <div><span className="text-primary-text font-semibold">滚轮</span> 平移 · <span className="text-primary-text font-semibold">⌘+滚轮</span> 缩放 · <span className="text-primary-text font-semibold">方向键</span> 微移</div>
+              <div><span className="text-primary-text font-semibold">{t("hint_drag")}</span> {t("hint_marquee")} · <span className="text-primary-text font-semibold">{t("hint_shift_drag")}</span> {t("hint_add_select")} · <span className="text-primary-text font-semibold">{t("hint_space_drag")}</span> {t("hint_pan")}</div>
+              <div><span className="text-primary-text font-semibold">{t("hint_wheel")}</span> {t("hint_pan")} · <span className="text-primary-text font-semibold">{t("hint_cmd_wheel")}</span> {t("hint_zoom")} · <span className="text-primary-text font-semibold">{t("hint_arrows")}</span> {t("hint_nudge")}</div>
             </div>
           </div>
         )}
@@ -2972,23 +2987,26 @@ const CanvasArea = forwardRef(
         {/* 浮动操作条：框选多张 或 单击选中一张图片 都出现（单张也能套图/导出/删除）*/}
         {!maskMode && !showSetPanel && (setSel.size > 0 || selectedId?.startsWith("img")) && (
           <div className="absolute bottom-6 inset-x-0 mx-auto w-fit max-w-[94%] overflow-x-auto z-30 flex items-center gap-1.5 whitespace-nowrap bg-bg-card border border-divider rounded-2xl shadow-pop px-2.5 py-2">
-            <span className="text-[12px] font-semibold text-primary-text px-2">已选 {setSel.size > 0 ? setSel.size : 1} 张</span>
+            <span className="text-[12px] font-semibold text-primary-text px-2">{t("selected_count", setSel.size > 0 ? setSel.size : 1)}</span>
             <button
               onClick={() => { if (setSel.size === 0 && selectedId?.startsWith("img")) setSetSel(new Set([selectedId])); setShowSetPanel(true); }}
               className="flex items-center gap-1.5 px-3.5 py-2 bg-primary text-black rounded-xl text-[12px] font-semibold hover:opacity-90 transition-opacity"
-            ><FiGrid size={13} /> 套图生成</button>
+              aria-label={t("set_generate")}
+            ><FiGrid size={13} /> {t("set_generate")}</button>
             <button
               onClick={exportLongImage}
               disabled={stitching || setSel.size < 2}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-primary-text hover:bg-bg-page disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="把选中的图按上下顺序拼成一张详情页长图导出（需选 ≥2 张）"
-            ><FiAlignJustify size={13} /> {stitching ? "拼接中…" : "拼长图"}</button>
+              title={t("stitch_title")}
+              aria-label={t("stitch_long")}
+            ><FiAlignJustify size={13} /> {stitching ? t("stitching") : t("stitch_long")}</button>
             <button
               onClick={exportPSD}
               disabled={exportingPsd}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-primary-text hover:bg-bg-page disabled:opacity-50 transition-colors"
-              title="导出分层 PSD：每张图一层、每段文字一层（PS/Photopea 可继续编辑）"
-            ><FiLayers size={13} /> {exportingPsd ? "导出中…" : "导出 PSD"}</button>
+              title={t("export_psd_title")}
+              aria-label={t("export_psd")}
+            ><FiLayers size={13} /> {exportingPsd ? t("exporting_psd") : t("export_psd")}</button>
             {onSplitImage && (() => {
               const srcImg = images.find((i) => (selectedId?.startsWith("img") ? i.id === selectedId : setSel.has(i.id)) && i.assetLabel);
               return (
@@ -2996,19 +3014,24 @@ const CanvasArea = forwardRef(
                   onClick={() => srcImg && onSplitImage({ assetLabel: srcImg.assetLabel })}
                   disabled={!srcImg}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-primary-text hover:bg-bg-page disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  title="AI 拆图：把这张 AI 图拆成 背景层 + 主体层(透明)，可分别移动/导出分层"
-                ><FiScissors size={13} /> AI 拆分</button>
+                  title={t("ai_split_title")}
+                  aria-label={t("ai_split")}
+                ><FiScissors size={13} /> {t("ai_split")}</button>
               );
             })()}
             <div className="w-px h-5 bg-divider mx-0.5" />
             <button
               onClick={handleDelete}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-red-400 hover:bg-red-500/15 transition-colors"
-            ><FiTrash2 size={13} /> 删除</button>
+              title={t("delete_title")}
+              aria-label={t("delete")}
+            ><FiTrash2 size={13} /> {t("delete")}</button>
             <button
               onClick={() => { setSetSel(new Set()); setSelectedId(null); }}
-              className="px-3 py-2 rounded-xl text-[12px] text-secondary-text hover:text-primary-text hover:bg-bg-page transition-colors"
-            >清空</button>
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] text-secondary-text hover:text-primary-text hover:bg-bg-page transition-colors"
+              title={t("deselect_title")}
+              aria-label={t("deselect")}
+            ><FiX size={13} /> {t("deselect")}</button>
           </div>
         )}
 
@@ -3018,10 +3041,10 @@ const CanvasArea = forwardRef(
             <div className="bg-bg-card border border-divider rounded-2xl shadow-pop w-[min(680px,92%)] max-h-[86%] flex flex-col animate-in fade-in zoom-in-95 duration-200 ease-[var(--ease-out)]" onClick={(e) => e.stopPropagation()}>
               <div className="px-5 py-3 border-b border-divider flex items-center justify-between">
                 <div className="flex flex-col">
-                  <div className="text-[13px] font-bold text-primary-text">套图 · AI 统一风格生成</div>
-                  <div className="text-[10px] text-secondary-text mt-0.5">选一批产品图，AI 按同一排版/字体/风格生成一组新图</div>
+                  <div className="text-[13px] font-bold text-primary-text">{t("set_panel_title")}</div>
+                  <div className="text-[10px] text-secondary-text mt-0.5">{t("set_panel_desc")}</div>
                 </div>
-                <button onClick={() => setShowSetPanel(false)} className="text-secondary-text hover:text-primary-text text-lg leading-none">✕</button>
+                <button onClick={() => setShowSetPanel(false)} className="text-secondary-text hover:text-primary-text text-lg leading-none" title={t("dismiss")} aria-label={t("dismiss")}>✕</button>
               </div>
               {/* 模板选择 */}
               <div className="px-5 pt-4 flex gap-2 flex-wrap">
@@ -3030,10 +3053,10 @@ const CanvasArea = forwardRef(
                     key={key}
                     onClick={() => setSetTpl(key)}
                     className={`px-3 py-1.5 rounded text-[12px] border transition-all text-left ${setTpl === key ? "bg-primary text-black border-primary font-bold" : "bg-bg-page text-secondary-text border-divider hover:text-primary-text"}`}
-                    title={tpl.desc}
+                    title={t(tpl.descKey)}
                   >
-                    {tpl.label}
-                    <span className={`ml-1.5 text-[10px] ${setTpl === key ? "opacity-70" : "opacity-50"}`}>{tpl.desc}</span>
+                    {t(tpl.labelKey)}
+                    <span className={`ml-1.5 text-[10px] ${setTpl === key ? "opacity-70" : "opacity-50"}`}>{t(tpl.descKey)}</span>
                   </button>
                 ))}
               </div>
@@ -3041,17 +3064,17 @@ const CanvasArea = forwardRef(
               {SET_TEMPLATES[setTpl]?.single ? (
                 <div className="px-5 pt-3">
                   <div className="text-[11px] leading-relaxed px-3 py-2 rounded-lg border border-primary/40 bg-primary/5 text-primary-text">
-                    🎨 AI 直出（好看优先）：一次渲染成整张设计图，光影融为一体、最好看 —— 但文字烤进画面、不可二次编辑。
+                    {t("set_mode_single_note")}
                   </div>
                 </div>
               ) : (
                 <div className="px-5 pt-3">
-                  <div className="text-[10px] text-secondary-text mb-1.5">出图方式（按需求选）：</div>
+                  <div className="text-[10px] text-secondary-text mb-1.5">{t("set_mode_label")}</div>
                   <div className="flex items-center gap-2">
                     {[
-                      { k: "ai", label: "AI 融合版", tag: "好看优先", hint: "一次渲染成整图 · 最融合 · 文字烤死不可编辑" },
-                      { k: "layered", label: "分层版", tag: "可编辑优先", hint: "背景/产品/文字 三层原生分开 · 可改可导 PSD" },
-                      { k: "editable", label: "可编辑版", tag: "可编辑优先", hint: "干净底图 + 可编辑文字层 · 可改可换字体" },
+                      { k: "ai", labelKey: "set_mode_ai", beauty: true, hintKey: "set_mode_ai_hint" },
+                      { k: "layered", labelKey: "set_mode_layered", beauty: false, hintKey: "set_mode_layered_hint" },
+                      { k: "editable", labelKey: "set_mode_editable", beauty: false, hintKey: "set_mode_editable_hint" },
                     ].map((m) => (
                       <button
                         key={m.k}
@@ -3060,10 +3083,10 @@ const CanvasArea = forwardRef(
                       >
                         <div className="text-[12px] font-bold flex items-center gap-1.5">
                           <span className={`w-3 h-3 rounded-full border ${setGenMode === m.k ? "border-primary bg-primary" : "border-secondary-text"}`} />
-                          {m.label}
-                          <span className={`ml-auto text-[9px] px-1.5 py-0.5 rounded-full ${m.tag === "好看优先" ? "bg-primary/15 text-primary" : "bg-success/15 text-success"}`}>{m.tag}</span>
+                          {t(m.labelKey)}
+                          <span className={`ml-auto text-[9px] px-1.5 py-0.5 rounded-full ${m.beauty ? "bg-primary/15 text-primary" : "bg-success/15 text-success"}`}>{m.beauty ? t("tag_beauty_first") : t("tag_editable_first")}</span>
                         </div>
-                        <div className="text-[10px] text-secondary-text mt-0.5 ml-[18px]">{m.hint}</div>
+                        <div className="text-[10px] text-secondary-text mt-0.5 ml-[18px]">{t(m.hintKey)}</div>
                       </button>
                     ))}
                   </div>
@@ -3072,7 +3095,7 @@ const CanvasArea = forwardRef(
               {/* 图片勾选 */}
               <div className="px-5 py-4 flex-1 overflow-y-auto scrollbar-subtle">
                 {images.length === 0 ? (
-                  <div className="py-10 text-center text-secondary-text text-[12px]">画布上还没有图片</div>
+                  <div className="py-10 text-center text-secondary-strong text-[12px]">{t("no_images_on_canvas")}</div>
                 ) : (
                   <div className="grid grid-cols-4 gap-2">
                     {images.map((img) => {
@@ -3092,15 +3115,15 @@ const CanvasArea = forwardRef(
                 )}
               </div>
               <div className="px-5 py-3 border-t border-divider flex items-center justify-between">
-                <span className="text-[11px] text-secondary-text">
+                <span className="text-[11px] text-secondary-strong">
                   {SET_TEMPLATES[setTpl]?.single
-                    ? `已选 ${setSel.size} 张 · 用第 1 张产品图，${SET_TEMPLATES[setTpl].cta}`
-                    : `已选 ${setSel.size} 张 · 排版/字体/风格统一，每张消耗积分`}
+                    ? t("set_footer_single", setSel.size, t(SET_TEMPLATES[setTpl].ctaKey))
+                    : t("set_footer_multi", setSel.size)}
                 </span>
                 <div className="flex gap-2">
-                  <button onClick={() => setShowSetPanel(false)} className="px-4 py-2 border border-divider text-secondary-text rounded text-[11px] font-bold hover:text-primary-text">取消</button>
+                  <button onClick={() => setShowSetPanel(false)} className="px-4 py-2 border border-divider text-secondary-text rounded text-[11px] font-bold hover:text-primary-text">{t("cancel")}</button>
                   <button onClick={applySetTemplate} disabled={setSel.size === 0} className="px-5 py-2 bg-primary text-black rounded text-[11px] font-bold disabled:opacity-40 disabled:cursor-not-allowed">
-                    {SET_TEMPLATES[setTpl]?.single ? `${SET_TEMPLATES[setTpl].cta}（${SET_TEMPLATES[setTpl].count} 张）` : `生成套图（${setSel.size} 张）`}
+                    {SET_TEMPLATES[setTpl]?.single ? t("set_cta_single", t(SET_TEMPLATES[setTpl].ctaKey), SET_TEMPLATES[setTpl].count) : t("set_cta_multi", setSel.size)}
                   </button>
                 </div>
               </div>
@@ -3130,34 +3153,35 @@ const CanvasArea = forwardRef(
                   setTimeout(redraw, 150);
                   setTimeout(redraw, 500);
                 }}
-                className="h-6 max-w-[88px] bg-bg-page border border-divider rounded text-[11px] text-primary-text px-1 focus:outline-none cursor-pointer"
-                title="字体（Google Fonts 免费字体）"
+                className="h-7 max-w-[88px] bg-bg-page border border-divider rounded text-[11px] text-primary-text px-1 focus:outline-none cursor-pointer"
+                title={t("font_title")}
+                aria-label={t("font_title")}
               >
                 {GOOGLE_FONTS.map((f) => <option key={f.family} value={f.family}>{f.label}</option>)}
               </select>
               <div className="w-px h-5 bg-divider mx-0.5" />
               {/* 字号 */}
-              <button onClick={() => updateSelectedText({ fontSize: Math.max(8, (sel.fontSize || 24) - 4) })} className="w-6 h-6 rounded hover:bg-bg-page text-secondary-text hover:text-primary-text text-sm">A−</button>
-              <span className="text-[10px] text-secondary-text font-mono w-6 text-center tabular-nums">{Math.round(sel.fontSize || 24)}</span>
-              <button onClick={() => updateSelectedText({ fontSize: Math.min(200, (sel.fontSize || 24) + 4) })} className="w-6 h-6 rounded hover:bg-bg-page text-secondary-text hover:text-primary-text text-sm">A+</button>
+              <button onClick={() => updateSelectedText({ fontSize: Math.max(8, (sel.fontSize || 24) - 4) })} className="w-7 h-7 rounded hover:bg-bg-page text-secondary-strong hover:text-primary-text text-sm" aria-label={t("zoom_out")}>A−</button>
+              <span className="text-[10px] text-secondary-strong font-mono w-6 text-center tabular-nums">{Math.round(sel.fontSize || 24)}</span>
+              <button onClick={() => updateSelectedText({ fontSize: Math.min(200, (sel.fontSize || 24) + 4) })} className="w-7 h-7 rounded hover:bg-bg-page text-secondary-strong hover:text-primary-text text-sm" aria-label={t("zoom_in")}>A+</button>
               <div className="w-px h-5 bg-divider mx-0.5" />
               {/* 加粗 */}
-              <button onClick={() => updateSelectedText({ fontStyle: bold ? "normal" : "bold" })} className={`w-6 h-6 rounded text-sm font-bold ${bold ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-text hover:text-primary-text"}`}>B</button>
+              <button onClick={() => updateSelectedText({ fontStyle: bold ? "normal" : "bold" })} className={`w-7 h-7 rounded text-sm font-bold ${bold ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`} aria-label="Bold">B</button>
               {/* 对齐 */}
               {["left", "center", "right"].map((a) => (
-                <button key={a} onClick={() => updateSelectedText({ align: a })} className={`w-6 h-6 rounded text-[10px] ${sel.align === a ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-text hover:text-primary-text"}`}>{a === "left" ? "⬅" : a === "center" ? "⬌" : "➡"}</button>
+                <button key={a} onClick={() => updateSelectedText({ align: a })} className={`w-7 h-7 rounded text-[10px] ${sel.align === a ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`} aria-label={a}>{a === "left" ? "⬅" : a === "center" ? "⬌" : "➡"}</button>
               ))}
               <div className="w-px h-5 bg-divider mx-0.5" />
               {/* 颜色 */}
               {TEXT_SWATCHES.map((c) => (
-                <button key={c} onClick={() => updateSelectedText({ fill: c })} title={c} className={`w-5 h-5 rounded-full border ${sel.fill === c ? "border-primary ring-1 ring-primary" : "border-white/20"}`} style={{ backgroundColor: c }} />
+                <button key={c} onClick={() => updateSelectedText({ fill: c })} title={c} aria-label={c} className={`w-5 h-5 rounded-full border ${sel.fill === c ? "border-primary ring-1 ring-primary" : "border-white/20"}`} style={{ backgroundColor: c }} />
               ))}
               <div className="w-px h-5 bg-divider mx-0.5" />
               {/* 描边 / 阴影：杂乱产品图上的可读性处理 */}
-              <button onClick={() => updateSelectedText(hasStroke ? { strokeWidth: 0 } : { stroke: "#000000", strokeWidth: 2, fillAfterStrokeEnabled: true, lineJoin: "round" })} className={`px-1.5 h-6 rounded text-[10px] ${hasStroke ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-text hover:text-primary-text"}`}>描边</button>
-              <button onClick={() => updateSelectedText(hasShadow ? { shadowBlur: 0 } : { shadowColor: "#000000", shadowBlur: 6, shadowOpacity: 0.45 })} className={`px-1.5 h-6 rounded text-[10px] ${hasShadow ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-text hover:text-primary-text"}`}>阴影</button>
+              <button onClick={() => updateSelectedText(hasStroke ? { strokeWidth: 0 } : { stroke: "#000000", strokeWidth: 2, fillAfterStrokeEnabled: true, lineJoin: "round" })} className={`px-2 h-7 rounded text-[10px] ${hasStroke ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`}>{t("text_stroke")}</button>
+              <button onClick={() => updateSelectedText(hasShadow ? { shadowBlur: 0 } : { shadowColor: "#000000", shadowBlur: 6, shadowOpacity: 0.45 })} className={`px-2 h-7 rounded text-[10px] ${hasShadow ? "bg-primary text-black" : "hover:bg-bg-page text-secondary-strong hover:text-primary-text"}`}>{t("text_shadow")}</button>
               <div className="w-px h-5 bg-divider mx-0.5" />
-              <button onClick={() => { setTexts((prev) => prev.filter((tx) => tx.id !== selectedId)); setSelectedId(null); }} className="w-6 h-6 rounded hover:bg-red-500/15 text-secondary-text hover:text-red-400 text-sm" title="删除">✕</button>
+              <button onClick={() => { setTexts((prev) => prev.filter((tx) => tx.id !== selectedId)); setSelectedId(null); }} className="w-7 h-7 rounded hover:bg-red-500/15 text-secondary-strong hover:text-red-400 text-sm" title={t("delete")} aria-label={t("delete")}>✕</button>
             </div>
           );
         })()}
