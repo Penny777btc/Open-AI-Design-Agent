@@ -442,7 +442,14 @@ async def _load_asset_bytes(session_id: str, asset_label: str) -> bytes:
         raise ValueError(f"找不到资产 {asset_label}")
     if asset.storage_key:
         return storage._safe_path(asset.storage_key).read_bytes()  # 用模块级 storage，过 _safe_path 防穿越
-    # 外链资产 → 安全拉取（SSRF 白名单 + 禁重定向），防止被诱导访问内网/云元数据
+    # 本站自链 /files/<key>：直接读本地盘，不走 HTTP。既省一次自请求，也避开 SSRF 白名单误伤——
+    # 上传图注册成资产时 url 是 http://{public_base_url}/files/...，dev 下 public_base_url 是本机
+    # 127.0.0.1，之前一律走 fetch_public_bytes 会被内网拦截规则拒掉，导致「以上传图为源」的编辑全失败。
+    files_prefix = f"{settings.public_base_url.rstrip('/')}/files/"
+    if asset.url and asset.url.startswith(files_prefix):
+        key = asset.url[len(files_prefix):].split("?")[0]
+        return storage._safe_path(key).read_bytes()
+    # 真·外链资产 → 安全拉取（SSRF 白名单 + 禁重定向），防止被诱导访问内网/云元数据
     from app.services.security import fetch_public_bytes
 
     return await fetch_public_bytes(asset.url)
