@@ -17,6 +17,10 @@ const dict = {
     home: "首页",
     toggle_sessions: "切换会话列表",
     no_previous_sessions: "暂无历史会话",
+    // 会话侧栏三态（P0-5）：别把网络错误显示成「暂无历史会话」
+    sessions_loading: "加载会话中…",
+    sessions_error: "会话加载失败",
+    retry: "重试",
     rename: "重命名",
     delete: "删除",
     total_sessions: "会话总数",
@@ -47,6 +51,20 @@ const dict = {
     qs_logo_prompt: "为一家手冲咖啡店设计 3 个 logo 方案，极简风格",
     qs_social: "📱 社媒封面",
     qs_social_prompt: "做 2 张小红书封面图，主题是居家收纳技巧，明亮治愈风",
+    // 一级快捷入口：直达套图/详情页流程（卖家上传产品图→一键出整套）
+    qs_main6: "🖼️ 主图六联",
+    qs_detail7: "📄 详情页七段",
+    qs_main6_sub: "上传产品图 → AI 出 6 张电商主图",
+    qs_detail7_sub: "上传产品图 → AI 出 7 段详情长图",
+    qs_upload_product: "📤 上传产品图",
+    qs_upload_product_sub: "拖入或选择本地产品图，立即可套图/拆图/局改",
+    // 触发套图/详情页时若画布没有可用产品图 → 引导先上传
+    need_product_first: "请先上传一张产品图，再一键生成整套",
+    // 上传后主动建议（P0-3c）
+    suggest_after_upload_title: "产品图已就绪 🎉 要不要一键生成整套？",
+    suggest_main6: "生成主图六联",
+    suggest_detail7: "生成详情页七段",
+    suggest_dismiss: "先不用",
 
     // ── 欢迎语 / 占位文案 ──────────────────────────────────────────
     welcome: (name) => `你好 ${name} —— 今天想创作点什么？`,
@@ -170,6 +188,19 @@ const dict = {
     export_failed: "导出失败：该图片来自外部源且未授予跨域权限。",
     canvas_export_failed: "画布导出失败：画布上有图片来自外部源且未授予跨域权限。",
     image_load_failed: "素材加载失败，已跳过（仅支持图片格式）",
+
+    // 本地图上传注册（P0-3a）：拖入/粘贴本地图 → 走上传管线注册成后端资产
+    registering_upload: "正在上传并注册产品图…",
+    upload_registered: "已注册产品图，可套图 / 拆图 / 局部编辑",
+    upload_register_failed: "上传注册失败：已落图但套图/拆图/局改暂不可用",
+
+    // 画布空态起点（P0-4）
+    empty_canvas_title: "从一张产品图开始",
+    empty_canvas_desc: "上传你的产品图，一键生成整套电商主图或详情页；也可以直接描述需求让 AI 来做。",
+    empty_upload_product: "上传产品图",
+    empty_main6: "主图六联",
+    empty_detail7: "详情页七段",
+    empty_describe: "描述需求",
 
     // 局部编辑（蒙版）
     edit_region: "🖌 局部编辑",
@@ -303,6 +334,10 @@ const dict = {
     home: "Home",
     toggle_sessions: "Toggle sessions",
     no_previous_sessions: "No previous sessions",
+    // Session sidebar tri-state (P0-5)
+    sessions_loading: "Loading sessions…",
+    sessions_error: "Failed to load sessions",
+    retry: "Retry",
     rename: "Rename",
     delete: "Delete",
     total_sessions: "Total sessions",
@@ -333,6 +368,18 @@ const dict = {
     qs_logo_prompt: "Design 3 minimal logo concepts for a pour-over coffee shop",
     qs_social: "📱 Social media cover",
     qs_social_prompt: "Create 2 social covers on the theme of home organization tips, bright and calming",
+    // First-class shortcuts: jump straight into the set / detail-page flow
+    qs_main6: "🖼️ 6-shot hero set",
+    qs_detail7: "📄 7-panel detail page",
+    qs_main6_sub: "Upload a product photo → AI makes 6 hero shots",
+    qs_detail7_sub: "Upload a product photo → AI makes a 7-panel detail page",
+    qs_upload_product: "📤 Upload product photo",
+    qs_upload_product_sub: "Drop or pick a local product photo — ready to set / split / edit",
+    need_product_first: "Please upload a product photo first, then generate the whole set",
+    suggest_after_upload_title: "Product photo ready 🎉 Generate a whole set?",
+    suggest_main6: "Generate 6-shot set",
+    suggest_detail7: "Generate 7-panel page",
+    suggest_dismiss: "Not now",
 
     // ── Greetings / placeholders ──────────────────────────────────
     welcome: (name) => `Hello ${name} — what shall we create today?`,
@@ -457,6 +504,19 @@ const dict = {
     export_failed: "Export failed: this image is from an external source without CORS permission.",
     canvas_export_failed: "Canvas export failed: one or more images are from an external source without CORS permission.",
     image_load_failed: "Asset failed to load and was skipped (images only)",
+
+    // Local image upload registration (P0-3a)
+    registering_upload: "Uploading and registering product photo…",
+    upload_registered: "Product photo registered — set / split / region-edit ready",
+    upload_register_failed: "Registration failed: placed on canvas, but set/split/region-edit unavailable",
+
+    // Empty canvas starting point (P0-4)
+    empty_canvas_title: "Start with a product photo",
+    empty_canvas_desc: "Upload your product photo to generate a full e-commerce hero set or detail page in one click — or just describe what you need.",
+    empty_upload_product: "Upload product photo",
+    empty_main6: "6-shot hero set",
+    empty_detail7: "7-panel detail page",
+    empty_describe: "Describe it",
 
     // Region edit (mask)
     edit_region: "🖌 Edit region",

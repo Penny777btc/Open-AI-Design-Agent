@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import axios from "axios";
@@ -13,7 +13,8 @@ import { COPY } from "@/lib/copy";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "";
 
-export default function RegisterPage() {
+// useSearchParams 必须包在 Suspense 内，否则 next build 预渲染 /register 会报错（对齐 login 的写法）
+function RegisterForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { fetchUserData } = useApi();
@@ -91,5 +92,13 @@ export default function RegisterPage() {
         <LangSwitch />
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={null}>
+      <RegisterForm />
+    </Suspense>
   );
 }

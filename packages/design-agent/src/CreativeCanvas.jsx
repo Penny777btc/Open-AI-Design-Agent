@@ -107,6 +107,10 @@ export default function CreativeCanvas({
   const [isDragging, setIsDragging] = useState(false);
 
   const [sessions, setSessions] = useState([]);
+  // 会话列表三态（P0-5）：loading / ready / error(带重试)。别把网络错误当「暂无历史会话」。
+  const [sessionsStatus, setSessionsStatus] = useState("loading");
+  // 上传产品图后的主动建议卡（P0-3c）：{ assetLabel } 或 null
+  const [uploadSuggestion, setUploadSuggestion] = useState(null);
   const [currentSessionName, setCurrentSessionName] = useState(t("creative_canvas"));
   const [isEditingName, setIsEditingName] = useState(false);
   const [newName, setNewName] = useState("");
@@ -296,14 +300,20 @@ export default function CreativeCanvas({
   }, [sessionId]); // Removed sessions from deps to avoid infinite loop if fetchSessions updates sessions
 
   const fetchSessions = async () => {
+    // 只有首次/空列表时进 loading 态；重新拉取（重命名/删除后）不清空已有列表避免闪烁
+    setSessionsStatus((prev) => (sessions.length === 0 ? "loading" : prev));
     try {
       const { data } = await axios.get(`${API}/sessions`, { headers: getHeaders() });
       setSessions(data);
+      setSessionsStatus("ready");
       if (sessionId) {
         const current = data.find(s => s.id === sessionId);
         if (current) setCurrentSessionName(current.name);
       }
-    } catch {}
+    } catch {
+      // 网络/鉴权失败 → error 态（带重试），而非静默显示「暂无历史会话」误导用户
+      setSessionsStatus("error");
+    }
   };
 
   const fetchSkills = async () => {
@@ -602,6 +612,17 @@ export default function CreativeCanvas({
         if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: t("set_generate_failed_msg") };
         return arr;
       });
+    }
+  };
+
+  // P0-3b 一级入口：从聊天首屏直达套图/详情页流程。
+  // 画布已有带 label 的产品图 → 直接开套图面板并预选该模板；否则引导先上传产品图。
+  const startSetFlow = (template) => {
+    const opened = canvasRef.current?.openSetPanel?.(template);
+    if (!opened) {
+      // 没有可用产品图：提示先上传，并弹出文件选择器降低门槛
+      toast(t("need_product_first"));
+      fileInputRef.current?.click();
     }
   };
 
@@ -905,6 +926,69 @@ export default function CreativeCanvas({
     }
   };
 
+  // 上传管线抽成可复用函数：签名URL → 二进制上传(经代理) → register-asset 拿 asset_label。
+  // 返回 { asset_label, url, kind }，供聊天区上传【和】画布本地拖入(P0-3a) 共用同一套注册逻辑，
+  // 避免各自发明。onProgress 可选（画布拖入无需进度条时可省）。失败向上抛，由调用方决定兜底。
+  const uploadFileAsAsset = async (file, onProgress) => {
+    // 0. Make sure we have a session — uploaded assets must belong to one.
+    const activeSessionId = await ensureSession();
+
+    // 1. Get signed URL
+    const { data: signData } = await axios.get("/api/v1/get_upload_url", {
+      params: { filename: file.name },
+      headers: getHeaders()
+    });
+
+    const { url, fields } = signData;
+
+    // Use the proxy for the actual binary upload to maintain consistency and avoid CORS issues
+    const formData = new FormData();
+    formData.append("x-proxy-target-url", url);
+    Object.entries(fields).forEach(([key, value]) => {
+      formData.append(key, value);
+    });
+    formData.append("file", file);
+
+    // 2. Upload via local proxy
+    await axios.post("/api/v1/upload-binary", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+      onUploadProgress: (pe) => {
+        if (onProgress && pe.total) onProgress(Math.round((pe.loaded * 100) / pe.total));
+      }
+    });
+
+    // 3. Final URL
+    const uploadedUrl = signData.public_url;
+
+    // 4. Register as a real session asset so the agent can address it as asset_N.
+    const kind = file.type?.startsWith("video/") ? "video"
+               : file.type?.startsWith("audio/") ? "audio"
+               : "image";
+    const { data: registered } = await axios.post(
+      `${API}/sessions/${activeSessionId}/assets`,
+      { url: uploadedUrl, kind, source_tool: "upload" },
+      { headers: getHeaders() },
+    );
+
+    // 让会话素材列表 / @提及立即可见（画布拖入也应能被 @ 引用）
+    setAssets(prev => [...prev, {
+      asset_label: registered.asset_label, url: uploadedUrl, kind,
+      source_tool: "upload", model: null, prompt: null,
+    }]);
+
+    return { asset_label: registered.asset_label, url: uploadedUrl, kind };
+  };
+
+  // 画布本地图注册（P0-3a）：CanvasArea 的 handleDrop/paste 拿到本地 File 后调这个。
+  // 成功返回 asset_label 让画布带 label 落图（立刻能套图/拆图/局改）；同时冒出主动建议(P0-3c)。
+  // 失败抛错 → 画布侧以 dataURL 兜底落图并提示「未注册」。
+  const registerCanvasImage = async (file) => {
+    const { asset_label, url, kind } = await uploadFileAsAsset(file);
+    // 仅对图片弹「一键出整套」建议——视频/音频不适用套图
+    if (kind === "image") setUploadSuggestion({ assetLabel: asset_label });
+    return { asset_label, url, kind };
+  };
+
   const processFile = async (file) => {
     if (!file) return;
     // 文档类型走解析通道（文字进上下文、图片登画布）
@@ -919,59 +1003,16 @@ export default function CreativeCanvas({
       return;
     }
 
-
     setUploading(true);
     setUploadProgress(0);
 
     try {
-      // 0. Make sure we have a session — uploaded assets must belong to one.
-      const activeSessionId = await ensureSession();
-
-      // 1. Get signed URL
-      const { data: signData } = await axios.get("/api/v1/get_upload_url", {
-        params: { filename: file.name },
-        headers: getHeaders()
-      });
-
-      const { url, fields } = signData;
-      
-      // Use the proxy for the actual binary upload to maintain consistency and avoid CORS issues
-      const formData = new FormData();
-      formData.append("x-proxy-target-url", url);
-      Object.entries(fields).forEach(([key, value]) => {
-        formData.append(key, value);
-      });
-      formData.append("file", file);
-
-      // 2. Upload via local proxy
-      await axios.post("/api/v1/upload-binary", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-        onUploadProgress: (pe) => {
-          setUploadProgress(Math.round((pe.loaded * 100) / pe.total));
-        }
-      });
-
-      // 3. Final URL
-      const uploadedUrl = signData.public_url;
-
-      // 4. Register as a real session asset so the agent can address it as asset_N.
-      const kind = file.type?.startsWith("video/") ? "video"
-                 : file.type?.startsWith("audio/") ? "audio"
-                 : "image";
-      const { data: registered } = await axios.post(
-        `${API}/sessions/${activeSessionId}/assets`,
-        { url: uploadedUrl, kind, source_tool: "upload" },
-        { headers: getHeaders() },
-      );
-
-      const att = { asset_label: registered.asset_label, url: uploadedUrl, kind };
+      const registered = await uploadFileAsAsset(file, setUploadProgress);
+      const att = { asset_label: registered.asset_label, url: registered.url, kind: registered.kind };
       setAttachments(prev => [...prev, att]);
-      // Reflect on the canvas immediately.
-      setAssets(prev => [...prev, {
-        asset_label: registered.asset_label, url: uploadedUrl, kind,
-        source_tool: "upload", model: null, prompt: null,
-      }]);
       toast.success(t("uploaded_as", registered.asset_label));
+      // 聊天区上传产品图后，同样主动建议「一键出整套」(P0-3c)
+      if (registered.kind === "image") setUploadSuggestion({ assetLabel: registered.asset_label });
     } catch (err) {
       console.error("Upload failed", err);
       toast.error(t("upload_failed"));
@@ -1407,7 +1448,21 @@ export default function CreativeCanvas({
             </button>
           </div>
           <div className="flex-1 overflow-y-auto scrollbar-subtle">
-            {sessions.length === 0 ? (
+            {/* 三态（P0-5）：加载中 / 出错(可重试) / 空 / 列表 */}
+            {sessionsStatus === "loading" && sessions.length === 0 ? (
+              <div className="px-4 py-8 text-center text-secondary-text text-[11px] flex items-center justify-center gap-2">
+                <span className="w-3 h-3 border-2 border-secondary-text/40 border-t-primary rounded-full animate-spin" />
+                {t("sessions_loading")}
+              </div>
+            ) : sessionsStatus === "error" && sessions.length === 0 ? (
+              <div className="px-4 py-8 text-center text-secondary-text text-[11px] flex flex-col items-center gap-2">
+                <span>{t("sessions_error")}</span>
+                <button
+                  onClick={fetchSessions}
+                  className="px-3 py-1.5 rounded-lg bg-bg-card border border-divider text-primary-text hover:border-primary/60 transition-colors text-[11px] font-medium"
+                >{t("retry")}</button>
+              </div>
+            ) : sessions.length === 0 ? (
               <div className="px-4 py-8 text-center text-secondary-text italic text-[11px]">{t("no_previous_sessions")}</div>
             ) : (
               sessions.map((s) => (
@@ -1643,6 +1698,10 @@ export default function CreativeCanvas({
               onRegionEdit={handleRegionEdit}
               onSetTemplate={handleSetTemplate}
               onSplitImage={handleSplitImage}
+              // P0-3a：画布本地图注册成后端资产（复用聊天区上传管线）
+              onUploadImage={registerCanvasImage}
+              // P0-4 空态「描述需求」：聚焦聊天输入框，让卖家直接说需求
+              onRequestDescribe={() => textareaRef.current?.focus()}
             />
 
             {/* 缩放工具条：放右下角，避免与画布底部居中的多选操作条(CanvasArea)同位重叠 */}
@@ -1844,24 +1903,52 @@ export default function CreativeCanvas({
               );
             })}
 
-            {/* 空会话快捷示例：三个垂直场景一键开始 */}
+            {/* 空会话快捷示例：垂直场景一键开始。
+                P0-3b：把「主图六联 / 详情页七段」提到一级入口（与电商主图并列），
+                点击直达套图流程（有产品图→开面板预选；无→引导上传），卖家不用懂框选/工具条。
+                另加「上传产品图」入口，把卖家最自然的动作放在最显眼处。 */}
             {!busy && messages.length === 1 && messages[0]?.role === "assistant" && (
               <div className="flex flex-col gap-2 px-1 animate-fade-in-up">
                 <div className="micro-label">{t("quick_start")}</div>
                 {[
-                  { label: t("qs_ecommerce"), prompt: t("qs_ecommerce_prompt") },
-                  { label: t("qs_logo"), prompt: t("qs_logo_prompt") },
-                  { label: t("qs_social"), prompt: t("qs_social_prompt") },
+                  { label: t("qs_upload_product"), sub: t("qs_upload_product_sub"), onClick: () => fileInputRef.current?.click() },
+                  { label: t("qs_main6"), sub: t("qs_main6_sub"), onClick: () => startSetFlow("main6") },
+                  { label: t("qs_detail7"), sub: t("qs_detail7_sub"), onClick: () => startSetFlow("detail7") },
+                  { label: t("qs_ecommerce"), sub: t("qs_ecommerce_prompt"), onClick: () => sendMessage(t("qs_ecommerce_prompt")) },
+                  { label: t("qs_logo"), sub: t("qs_logo_prompt"), onClick: () => sendMessage(t("qs_logo_prompt")) },
+                  { label: t("qs_social"), sub: t("qs_social_prompt"), onClick: () => sendMessage(t("qs_social_prompt")) },
                 ].map((s) => (
                   <button
                     key={s.label}
-                    onClick={() => sendMessage(s.prompt)}
+                    onClick={s.onClick}
                     className="text-left px-3 py-2 rounded bg-bg-page border border-divider text-[12px] text-secondary-text hover:border-primary/40 hover:text-primary-text transition-all"
                   >
                     {s.label}
-                    <span className="block text-[10px] opacity-60 mt-0.5">{s.prompt}</span>
+                    <span className="block text-[10px] opacity-60 mt-0.5">{s.sub}</span>
                   </button>
                 ))}
+              </div>
+            )}
+
+            {/* P0-3c 上传后主动建议：卖家上传/拖入产品图后，主动冒出「一键出整套」建议卡。
+                点按钮直达套图流程（openSetPanel 预选并预勾选刚上传的图）。这是 agent 主动性的体现。 */}
+            {uploadSuggestion && (
+              <div className="mx-1 p-3 rounded-xl bg-bg-card border border-primary/40 shadow-float animate-fade-in-up">
+                <div className="text-[12px] font-semibold text-primary-text mb-2">{t("suggest_after_upload_title")}</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => { canvasRef.current?.openSetPanel?.("main6", uploadSuggestion.assetLabel); setUploadSuggestion(null); }}
+                    className="px-3 py-1.5 rounded-lg bg-primary text-black text-[12px] font-semibold hover:opacity-90 transition-opacity"
+                  >{t("suggest_main6")}</button>
+                  <button
+                    onClick={() => { canvasRef.current?.openSetPanel?.("detail7", uploadSuggestion.assetLabel); setUploadSuggestion(null); }}
+                    className="px-3 py-1.5 rounded-lg bg-bg-page border border-divider text-[12px] font-medium text-primary-text hover:border-primary/60 transition-colors"
+                  >{t("suggest_detail7")}</button>
+                  <button
+                    onClick={() => setUploadSuggestion(null)}
+                    className="ml-auto px-2 py-1.5 text-[11px] text-secondary-text hover:text-primary-text transition-colors"
+                  >{t("suggest_dismiss")}</button>
+                </div>
               </div>
             )}
 

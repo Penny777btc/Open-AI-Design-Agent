@@ -899,6 +899,11 @@ const CanvasArea = forwardRef(
       onSetTemplate = null,
       // AI 拆图：选中一张 AI 图回调 { assetLabel } → 后端拆成 背景层 + 主体层(透明)
       onSplitImage = null,
+      // P0-3a 本地图注册：拖入/粘贴/选择本地图 → 走上传管线注册成后端资产。
+      // async (file) => { asset_label, url, kind }；失败抛错 → 画布以 dataURL 兜底落图。
+      onUploadImage = null,
+      // P0-4 空态「描述需求」：聚焦聊天输入框
+      onRequestDescribe = null,
     },
     ref,
   ) => {
@@ -1402,6 +1407,7 @@ const CanvasArea = forwardRef(
     const stageWrapperRef = useRef();
     const stageRef = useRef();
     const containerRef = useRef();
+    const fileInputRef = useRef();   // 空态「上传产品图」按钮触发的隐藏文件选择器
 
     // 视图适配内容（zoom-to-fit）：会话加载后把镜头对准内容中心
     const fitToContent = ({ paddingRatio = 0.8, maxZoom = 1 } = {}) => {
@@ -2070,12 +2076,26 @@ const CanvasArea = forwardRef(
       return moves.length;
     };
 
+    // P0-3b/3c：从聊天首屏/建议卡直达套图面板。preferLabel 指定要预选的图（刚上传那张）。
+    // 返回 true=已打开（画布有可用产品图）；false=无带 label 的图，调用方去引导上传。
+    const openSetPanel = (template = "main6", preferLabel = null) => {
+      const labeled = images.filter((i) => i.assetLabel);
+      if (labeled.length === 0) return false;
+      // 优先选指定 label 的图；否则用最近一张带 label 的图，让 single 模板(六联/详情)默认可用
+      const pick = (preferLabel && labeled.find((i) => i.assetLabel === preferLabel)) || labeled[labeled.length - 1];
+      if (SET_TEMPLATES[template]) setSetTpl(template);
+      setSetSel(new Set([pick.id]));
+      setShowSetPanel(true);
+      return true;
+    };
+
     useImperativeHandle(
       ref,
       () => ({
         addImage,
         addVideo,
         addAudio,
+        openSetPanel,
         getCanvasState,
         moveNode,
         placeNextToSource,
@@ -2107,9 +2127,8 @@ const CanvasArea = forwardRef(
           if (items[i].type.indexOf("image") !== -1) {
             e.preventDefault();
             const file = items[i].getAsFile();
-            const reader = new FileReader();
-            reader.onload = (event) => addImage(event.target.result);
-            reader.readAsDataURL(file);
+            // P0-3a：粘贴的本地图也走注册管线（拿 assetLabel 才能套图/拆图/局改）
+            handleLocalImageFile(file);
           } else if (items[i].type === "text/plain") {
             e.preventDefault();
             items[i].getAsString((text) => {
@@ -2707,23 +2726,60 @@ const CanvasArea = forwardRef(
       if (containerRef.current) containerRef.current.style.backgroundPosition = `${np.x}px ${np.y}px`;
     };
 
+    // P0-3a 命门：本地文件进画布必须注册成后端资产才能拿到 assetLabel，
+    // 否则套图/拆图/局改全部禁用（它们都判 !img.assetLabel）。
+    // 流程：先读 dataURL 立即落图（loading 占位，不卡 UI）→ 后台走上传管线拿 assetLabel
+    // → 用 assetLabel 回填该图。失败则保留 dataURL 图并提示「未注册，部分功能不可用」。
+    // 非图片（视频/音频）暂沿用 dataURL 直落（套图只针对图片）。
+    const handleLocalImageFile = async (file) => {
+      if (!file) return;
+      // 视频/音频：无需注册套图，dataURL 直落
+      if (file.type?.startsWith("video/")) {
+        const r = new FileReader(); r.onload = (ev) => addVideo(ev.target.result); r.readAsDataURL(file); return;
+      }
+      if (file.type?.startsWith("audio/")) {
+        const r = new FileReader(); r.onload = (ev) => addAudio(ev.target.result); r.readAsDataURL(file); return;
+      }
+      // 没有上传能力（未注入 onUploadImage）→ 退回旧行为：dataURL 落图（功能受限但不阻断）
+      if (!onUploadImage) {
+        const r = new FileReader(); r.onload = (ev) => addImage(ev.target.result); r.readAsDataURL(file); return;
+      }
+
+      // 1. 先用 dataURL 落一张图占位（用户立刻看到，不卡 UI）。dataURL 内容唯一 →
+      //    注册成功后靠它精确定位占位图回填 assetLabel（避免并发上传时张冠李戴）。
+      const dataUrl = await new Promise((resolve) => {
+        const r = new FileReader();
+        r.onload = (ev) => resolve(ev.target.result);
+        r.readAsDataURL(file);
+      });
+      addImage(dataUrl);
+
+      const toastId = toast.loading(t("registering_upload"));
+      try {
+        const { asset_label, url } = await onUploadImage(file);
+        // 注册成功：按 dataURL 精确定位占位图，回填 assetLabel + 换成后端 url（换 url 让跨会话/刷新后仍可用）
+        setImages((prev) => prev.map((im) =>
+          (im.src === dataUrl && !im.assetLabel) ? { ...im, assetLabel: asset_label, src: url } : im
+        ));
+        toast.success(t("upload_registered"), { id: toastId });
+      } catch (err) {
+        console.error("Canvas local image register failed:", err);
+        // 兜底：占位图保留（dataURL），只提示部分功能不可用，不阻断创作
+        toast.error(t("upload_register_failed"), { id: toastId });
+      }
+    };
+
     const handleDrop = (e) => {
       e.preventDefault();
       const url = e.dataTransfer.getData("text/plain");
       const files = e.dataTransfer.files;
       if (url) {
+        // 拖的是已有资产/远程 URL：非本地文件，无需注册（远程图多已是后端资产由 addAsset 落）
         if (url.match(/\.(mp4|webm|mov)$/i)) addVideo(url);
         else if (url.match(/\.(mp3|wav|ogg|m4a)$/i)) addAudio(url);
         else addImage(url);
       } else if (files && files.length > 0) {
-        const file = files[0];
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          if (file.type.startsWith("video/")) addVideo(ev.target.result);
-          else if (file.type.startsWith("audio/")) addAudio(ev.target.result);
-          else addImage(ev.target.result);
-        };
-        reader.readAsDataURL(file);
+        handleLocalImageFile(files[0]);
       }
     };
 
@@ -2939,6 +2995,50 @@ const CanvasArea = forwardRef(
             >
               {t("edit_region")}
             </button>
+          </div>
+        )}
+
+        {/* 隐藏文件选择器：空态「上传产品图」按钮触发。走 handleLocalImageFile 注册成资产 */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleLocalImageFile(f); e.target.value = ""; }}
+        />
+
+        {/* P0-4 画布空态起点：无任何元素时，中央引导卡（一句话 + 大按钮）。
+            放画布中央、z 低于左上工具按钮，二者不打架（工具按钮固定左上角）。 */}
+        {!maskMode &&
+          images.length === 0 && videos.length === 0 && audios.length === 0 && texts.length === 0 &&
+          (!activeTasks || activeTasks.length === 0) && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+            <div className="pointer-events-auto w-[min(440px,86%)] bg-bg-card border border-divider rounded-2xl shadow-pop px-6 py-7 text-center">
+              <div className="text-[16px] font-bold text-primary-text">{t("empty_canvas_title")}</div>
+              <div className="text-[12px] text-secondary-text mt-2 leading-relaxed">{t("empty_canvas_desc")}</div>
+              <div className="mt-5 flex flex-col gap-2">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-full px-4 py-2.5 bg-primary text-black rounded-xl text-[13px] font-semibold hover:opacity-90 transition-opacity"
+                >{t("empty_upload_product")}</button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { if (!openSetPanel("main6")) fileInputRef.current?.click(); }}
+                    className="flex-1 px-3 py-2 bg-bg-page border border-divider rounded-xl text-[12px] font-medium text-primary-text hover:border-primary/60 transition-colors"
+                  >{t("empty_main6")}</button>
+                  <button
+                    onClick={() => { if (!openSetPanel("detail7")) fileInputRef.current?.click(); }}
+                    className="flex-1 px-3 py-2 bg-bg-page border border-divider rounded-xl text-[12px] font-medium text-primary-text hover:border-primary/60 transition-colors"
+                  >{t("empty_detail7")}</button>
+                </div>
+                {onRequestDescribe && (
+                  <button
+                    onClick={() => onRequestDescribe()}
+                    className="w-full px-3 py-2 text-[12px] text-secondary-text hover:text-primary-text transition-colors"
+                  >{t("empty_describe")}</button>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
