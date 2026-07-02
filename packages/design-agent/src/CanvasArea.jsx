@@ -1020,7 +1020,16 @@ const CanvasArea = forwardRef(
     };
 
     const toggleMultiSelect = (id) => {
-      setSetSel((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+      // 双轨一致性修复：进入多选时，先把此前的「单选项」(selectedId，若与本次点击的不是同一张)
+      // 并入 setSel——否则会出现「setSel={B} 但 selectedId 仍是 A」的错位：A 还显示变换框、
+      // 方向键/删除却只作用于 B，浮动条也数不对。并入后清空 selectedId，单/多选统一由 setSel 表达。
+      setSetSel((prev) => {
+        const n = new Set(prev);
+        if (selectedId && selectedId !== id && selectedId.startsWith("img") && !n.has(selectedId)) n.add(selectedId);
+        n.has(id) ? n.delete(id) : n.add(id);
+        return n;
+      });
+      if (selectedId) setSelectedId(null);
     };
 
     const deleteMultiSelected = () => {
