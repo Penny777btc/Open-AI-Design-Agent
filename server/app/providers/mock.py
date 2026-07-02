@@ -73,9 +73,11 @@ class PlaceholderImage:
         return GeneratedImage(data=buf.getvalue(), mime="image/png", width=width, height=height, model="mock")
 
     async def edit(
-        self, prompt: str, image: bytes, aspect_ratio: str = "1:1", mask: bytes | None = None
+        self, prompt: str, image: bytes, aspect_ratio: str = "1:1", mask: bytes | None = None,
+        transparent: bool = False,
     ) -> GeneratedImage:
-        """mock 改图：整图编辑加色调蒙层；带 mask 时只给透明区域上色（验证局部性）。"""
+        """mock 改图：整图编辑加色调蒙层；带 mask 时只给透明区域上色（验证局部性）。
+        transparent 参数与真实 provider 对齐，否则 complete_object 在 mock 下会 TypeError。"""
         await asyncio.sleep(1.0)
         src = Image.open(BytesIO(image)).convert("RGB")
         hue = int(hashlib.md5(prompt.encode()).hexdigest()[:2], 16)

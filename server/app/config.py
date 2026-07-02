@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     codex_api_key: str = ""
     gemini_api_key: str = ""
     planner_model: str = "codex"
-    image_model: str = "gemini"
+    image_model: str = "gpt-image-2"  # 需支持带 mask 局部编辑（拆图背景/局部编辑/补全）；gemini 不支持 edit
     # 视频生成：供应商加白后给的 endpoint；为空 = 视频未开通（执行层优雅提示）
     video_api_base: str = ""
     video_api_key: str = ""
@@ -70,7 +70,8 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str = ""
 
 
-def tool_cost(tool: str, model: str | None = None, seconds: float | None = None) -> int:
+def tool_cost(tool: str, model: str | None = None, seconds: float | None = None,
+              complete: bool = False) -> int:
     """节点积分价。按模型差异化：高级图片模型/视频不能再走统一 10 积分（会亏）。
 
     向后兼容：旧调用 tool_cost(tool) 不传 model → 默认图片模型（gpt-image-2，10 积分）。
@@ -80,7 +81,9 @@ def tool_cost(tool: str, model: str | None = None, seconds: float | None = None)
     if tool == "edit_image":
         return model_catalog.EDIT_CREDITS
     if tool == "cutout_layer":
-        return 3  # 智能拆解·纯本地 rembg 抠图层（+ 可能 0-1 次 vision 校验）：不走 edit 中转，便宜
+        # 纯本地 rembg 抠图层便宜(3)；但带护栏式补全(complete=True)时会跑最多 2 次 edit + 2 次
+        # vision，成本≈一次 edit，须按 edit 计价，否则成本倒挂。
+        return 3 + model_catalog.EDIT_CREDITS if complete else 3
     if tool == "extract_text":
         return 3  # AI 拆图文字层：一次 OCR 视觉调用，便宜
     if tool == "generate_video":
@@ -94,7 +97,7 @@ def node_cost(node) -> int:
         tool, args = node.get("tool", ""), (node.get("args") or {})
     else:
         tool, args = getattr(node, "tool", ""), (getattr(node, "args", {}) or {})
-    return tool_cost(tool, args.get("model"), args.get("seconds"))
+    return tool_cost(tool, args.get("model"), args.get("seconds"), bool(args.get("complete")))
 
 
 def validate_production_config() -> list[str]:

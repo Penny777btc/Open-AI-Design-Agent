@@ -163,6 +163,10 @@ export default function CreativeCanvas({
   const initialFitDoneRef = useRef(false);
   const initialHandoffProcessed = useRef(false);
   const autoApprovedRef = useRef(new Set()); // 极速模式已自动批准过的 job，防重复批准
+  const mountedRef = useRef(true);           // 卸载后停止后台轮询
+  const sessionIdRef = useRef(sessionId);    // 切会话时让旧轮询自停，防串会话/锁死输入
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   // 极速开关持久化：初始读取 + 写回（localStorage 是自动批准判断的事实来源，避免闭包过期）
   useEffect(() => {
@@ -487,14 +491,16 @@ export default function CreativeCanvas({
     }
   };
 
-  const resumePolling = async (jobId, assistantIdx) => {
+  const resumePolling = async (jobId, assistantIdx, pollSessionId = sessionId) => {
     let cursor = 0;
     const POLL_INTERVAL = 1200;
     const MAX_DEAD_AIR = 6 * 60 * 1000;
     let lastProgress = Date.now();
-    
+
     setBusy(true);
     while (true) {
+      // 卸载 / 切换会话 → 停止本轮询（否则旧 job 事件会灌进新会话、并锁死新会话输入）
+      if (!mountedRef.current || sessionIdRef.current !== pollSessionId) return;
       try {
         const { data } = await axios.get(`${API}/jobs/${jobId}/events`, {
           params: { since: cursor },
@@ -508,6 +514,8 @@ export default function CreativeCanvas({
         if (data.done) break;
         if (Date.now() - lastProgress > MAX_DEAD_AIR) throw new Error("Stalled");
       } catch (err) {
+        // 致命 4xx（job 不存在/无权）→ 立即退出，不再空转 6 分钟锁着输入框
+        if ([403, 404, 410].includes(err.response?.status)) { setBusy(false); return; }
         if (Date.now() - lastProgress > MAX_DEAD_AIR) {
           // 长时间无进展时不再静默退出：告知用户任务仍在后台，刷新可重连
           setMessages(prev => {
@@ -525,13 +533,17 @@ export default function CreativeCanvas({
       }
       await new Promise(r => setTimeout(r, POLL_INTERVAL));
     }
+    // 会话已切走 → 交给新会话管理，别复位它的 busy
+    if (!mountedRef.current || sessionIdRef.current !== pollSessionId) return;
     setBusy(false);
     loadAssets();
     onBalanceChange?.();
-    // Persist final state
+    // Persist final state（用轮询启动时的 sessionId，避免新建会话时闭包里的 sessionId 为 null）
     setMessages(prev => {
       const next = [...prev];
-      axios.patch(`${API}/sessions/${sessionId}/messages`, { messages: next }, { headers: getHeaders() }).catch(() => {});
+      if (pollSessionId) {
+        axios.patch(`${API}/sessions/${pollSessionId}/messages`, { messages: next }, { headers: getHeaders() }).catch(() => {});
+      }
       return next;
     });
   };
@@ -569,7 +581,7 @@ export default function CreativeCanvas({
         { headers: getHeaders() }
       );
       sendingRef.current = false;
-      await resumePolling(data.job_id, aIdx);
+      await resumePolling(data.job_id, aIdx, activeSessionId);
     } catch (err) {
       sendingRef.current = false;
       setBusy(false);
@@ -622,7 +634,7 @@ export default function CreativeCanvas({
         { headers: getHeaders() }
       );
       sendingRef.current = false;
-      await resumePolling(data.job_id, aIdx);
+      await resumePolling(data.job_id, aIdx, activeSessionId);
     } catch (err) {
       sendingRef.current = false;
       setBusy(false);
@@ -677,7 +689,7 @@ export default function CreativeCanvas({
         { headers: getHeaders() }
       );
       sendingRef.current = false;
-      await resumePolling(data.job_id, aIdx);
+      await resumePolling(data.job_id, aIdx, activeSessionId);
     } catch (err) {
       sendingRef.current = false;
       setBusy(false);
@@ -876,7 +888,7 @@ export default function CreativeCanvas({
         return;
       }
       setBusy(true);
-      await resumePolling(data.job_id, aIdx);
+      await resumePolling(data.job_id, aIdx, activeSessionId);
     } catch (err) {
       sendingRef.current = false;
       setBusy(false);
@@ -1074,11 +1086,25 @@ export default function CreativeCanvas({
         (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 
       const enqueueRes = await axios.post(endpoint, payload, { headers: getHeaders() });
-      await resumePolling(enqueueRes.data.job_id, aIdx);
+      await resumePolling(enqueueRes.data.job_id, aIdx, activeSessionId);
     } catch (err) {
+      // 积分不足给充值直达入口（与套图/拆图/局部编辑一致），而不是抛 axios 英文原文
+      if (err.response?.status === 402) {
+        toast((tt) => (
+          <span className="flex items-center gap-3 text-[12px]">
+            {err.response?.data?.detail || t("insufficient_credits")}
+            <a href="/billing" className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider shrink-0" onClick={() => toast.dismiss(tt.id)}>
+              {t("top_up")}
+            </a>
+          </span>
+        ), { duration: 8000 });
+      }
+      const errText = err.response?.status === 402
+        ? (err.response?.data?.detail || t("insufficient_credits"))
+        : (err.response?.data?.detail || err.message || err);
       setMessages(prev => {
         const arr = [...prev];
-        if (aIdx >= 0) arr[aIdx] = { ...arr[aIdx], content: `❌ ${err.message || err}` };
+        if (aIdx >= 0) arr[aIdx] = { ...arr[aIdx], content: `❌ ${errText}` };
         return arr;
       });
     } finally {
@@ -2204,12 +2230,20 @@ function friendlyDone(name, asset) {
 // 配上的（已出结果）隐藏掉、只留结果勾；没配上的（仍在跑）才显示转圈。修「重进历史会话还在转圈」。
 function visibleEvents(events) {
   const arr = (events || []).filter(e => e && ["tool_call", "tool_result", "plan_propose", "error", "info"].includes(e.type));
-  const resultPositions = [];
-  arr.forEach((e, i) => { if (e.type === "tool_result" || e.type === "error") resultPositions.push(i); });
+  // 按 job_id 分组配对：一个 tool_call 只被「同一 job」后面的 result/error 消解，避免多任务事件交错
+  // 时把 A 的转圈用 B 的结果消掉（会出现 A 看似完成、B 永远转圈）。
+  const resultsByJob = {};
+  arr.forEach((e, i) => {
+    if (e.type === "tool_result" || e.type === "error") {
+      const jid = e.job_id || "_";
+      (resultsByJob[jid] = resultsByJob[jid] || []).push(i);
+    }
+  });
   const used = new Set();
   return arr.filter((e, i) => {
     if (e.type !== "tool_call") return true;
-    const r = resultPositions.find(j => j > i && !used.has(j));
+    const pool = resultsByJob[e.job_id || "_"] || [];
+    const r = pool.find(j => j > i && !used.has(j));
     if (r !== undefined) { used.add(r); return false; } // 已出结果 → 隐藏转圈
     return true;                                          // 仍在跑 → 保留转圈
   });

@@ -2387,22 +2387,39 @@ const CanvasArea = forwardRef(
     };
 
     const handleDelete = () => {
-      // 多选优先：方向键/Delete 一次删掉框选的多张
-      if (!contextMenu?.nodeId && setSel.size > 0) {
-        setImages((prev) => prev.filter((i) => !setSel.has(i.id)));
-        setSetSel(new Set());
-        setSelectedId(null);
-        return;
-      }
-      const id = contextMenu?.nodeId || selectedId;
-      if (id) {
-        setImages(images.filter((img) => img.id !== id));
-        setVideos(videos.filter((vid) => vid.id !== id));
-        setAudios(audios.filter((aud) => aud.id !== id));
-        setTexts(texts.filter((txt) => txt.id !== id));
-        if (selectedId === id) setSelectedId(null);
-      }
+      // 收集要删的节点（多选优先），删完给「撤销」toast——画布删除本是危险操作，之前裸删无挽回
+      const targetIds = (!contextMenu?.nodeId && setSel.size > 0)
+        ? setSel
+        : new Set([contextMenu?.nodeId || selectedId].filter(Boolean));
+      if (targetIds.size === 0) { setContextMenu(null); return; }
+      const delImgs = images.filter((i) => targetIds.has(i.id));
+      const delVids = videos.filter((v) => targetIds.has(v.id));
+      const delAuds = audios.filter((a) => targetIds.has(a.id));
+      const delTxts = texts.filter((tx) => targetIds.has(tx.id));
+      const total = delImgs.length + delVids.length + delAuds.length + delTxts.length;
+      if (total === 0) { setContextMenu(null); return; }
+      setImages((prev) => prev.filter((i) => !targetIds.has(i.id)));
+      setVideos((prev) => prev.filter((v) => !targetIds.has(v.id)));
+      setAudios((prev) => prev.filter((a) => !targetIds.has(a.id)));
+      setTexts((prev) => prev.filter((tx) => !targetIds.has(tx.id)));
+      setSetSel(new Set());
+      setSelectedId(null);
       setContextMenu(null);
+      toast((tt) => (
+        <span className="flex items-center gap-3 text-[12px]">
+          {t("canvas_deleted", total)}
+          <button
+            onClick={() => {
+              if (delImgs.length) setImages((prev) => [...prev, ...delImgs]);
+              if (delVids.length) setVideos((prev) => [...prev, ...delVids]);
+              if (delAuds.length) setAudios((prev) => [...prev, ...delAuds]);
+              if (delTxts.length) setTexts((prev) => [...prev, ...delTxts]);
+              toast.dismiss(tt.id);
+            }}
+            className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold shrink-0"
+          >{t("undo")}</button>
+        </span>
+      ), { duration: 5000 });
     };
 
     // Stage 尺寸跟随容器：必须可靠填满，否则会卡在默认 800×600 → 画布上出现一个

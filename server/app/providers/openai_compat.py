@@ -257,6 +257,12 @@ class Sub2ApiImage:
         self.client = client or OpenAICompatClient(api_key=settings.gemini_api_key)
         self.model = model or settings.image_model
 
+    async def edit(self, prompt: str, image: bytes, aspect_ratio: str = "1:1",
+                   mask: bytes | None = None, transparent: bool = False) -> GeneratedImage:
+        # Gemini adapter 不支持带 mask 的局部重绘（智能拆解背景/局部编辑/补全都依赖它）。
+        # 明确报错而非 AttributeError，提示改用支持 edit 的模型。
+        raise RuntimeError("当前图像模型不支持局部编辑（需 image_model=gpt-image-2）")
+
     async def generate(self, prompt: str, aspect_ratio: str = "1:1", input_images=None) -> GeneratedImage:
         content: list | str
         full_prompt = f"Generate an image. Aspect ratio {aspect_ratio}. {prompt}"
