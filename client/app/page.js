@@ -11,6 +11,22 @@ import { COPY } from "@/lib/copy";
 /* Picsmith（图匠）落地页 — 双语（zh/en）
    案例全部来自产品真实生成；brief 为发给 Agent 的中文提示词（两种语言下均可执行）。 */
 
+// 登录态判断（客户端）：未登录时"开始"类 CTA 指向注册而非工作台，避免撞 401 登录墙、
+// 且把注册钩子(送积分)兑现给冲动型试用者。挂载后才读 localStorage 防 SSR 水合不一致。
+function useAuthed() {
+  const [authed, setAuthed] = useState(false);
+  useEffect(() => {
+    setAuthed(typeof window !== "undefined" && !!localStorage.getItem("token"));
+  }, []);
+  return authed;
+}
+
+// 「开始」CTA 目标：已登录→工作台(可带 ?q= 预填)；未登录→注册(并用 ?next 保留意图，注册后直达)
+function startHref(authed, q) {
+  const dash = q ? `/dashboard?q=${encodeURIComponent(q)}` : "/dashboard";
+  return authed ? dash : (q ? `/register?next=${encodeURIComponent(dash)}` : "/register");
+}
+
 const ROTATING = {
   zh: [
     ["咖啡品牌", "小红书封面"],
@@ -287,6 +303,7 @@ function BeforeAfter({ before, after, beforeLabel, afterLabel }) {
 
 function CaseCard({ item, index }) {
   const { lang } = useLang();
+  const authed = useAuthed();
   const t = COPY[lang].cases;
   const label = lang === "zh" ? item.label : item.enLabel;
   const categoryLabel = lang === "zh" ? item.category : item.categoryEn;
@@ -326,7 +343,7 @@ function CaseCard({ item, index }) {
             {t.copyPrompt}
           </button>
           <Link
-            href={`/dashboard?q=${encodeURIComponent(item.brief)}`}
+            href={startHref(authed, item.brief)}
             className="flex-1 py-1.5 rounded-sm bg-white text-black text-[10px] font-bold uppercase tracking-wider text-center hover:bg-gray-200 transition-all"
           >
             {t.remake}
@@ -373,6 +390,7 @@ function UnifiedWall() {
 export default function Landing() {
   useReveal();
   const { lang } = useLang();
+  const authed = useAuthed();
   const t = COPY[lang];
 
   return (
@@ -391,7 +409,7 @@ export default function Landing() {
           <a href="#pricing" className="text-[11px] font-mono uppercase tracking-[0.15em] text-gray-500 hover:text-white transition-colors hidden sm:inline">{t.nav.pricing}</a>
           <a href="#faq" className="text-[11px] font-mono uppercase tracking-[0.15em] text-gray-500 hover:text-white transition-colors hidden sm:inline">{t.nav.faq}</a>
           <LangSwitch className="hidden sm:inline-flex" />
-          <Link href="/dashboard" className="px-5 py-2 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all shadow-[0_0_20px_rgba(255,255,255,0.1)]">
+          <Link href={startHref(authed)} className="px-5 py-2 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all shadow-[0_0_20px_rgba(255,255,255,0.1)]">
             {t.nav.enter}
           </Link>
         </nav>
@@ -410,7 +428,7 @@ export default function Landing() {
             {t.hero.sub}
           </p>
           <div className="flex items-center gap-4 mt-2 hero-in hero-in-4">
-            <Link href="/dashboard" className="px-8 py-3 bg-white text-black rounded-sm text-[12px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 hover:scale-[1.03] transition-all shadow-[0_0_30px_rgba(255,255,255,0.15)]">
+            <Link href={startHref(authed)} className="px-8 py-3 bg-white text-black rounded-sm text-[12px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 hover:scale-[1.03] transition-all shadow-[0_0_30px_rgba(255,255,255,0.15)]">
               {t.hero.cta}
             </Link>
             <a href="#how" className="px-6 py-3 rounded-sm text-[12px] font-bold uppercase tracking-[0.15em] border border-white/10 bg-white/5 text-gray-400 hover:border-white/20 hover:text-white transition-all">
@@ -572,7 +590,7 @@ export default function Landing() {
           <h2 className="font-display text-3xl sm:text-5xl font-extrabold tracking-tight">
             {t.cta.title1}<span className="shimmer">{t.cta.title2}</span>
           </h2>
-          <Link href="/dashboard" className="px-10 py-4 bg-white text-black rounded-sm text-[13px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 hover:scale-[1.03] transition-all shadow-[0_0_30px_rgba(255,255,255,0.15)]">
+          <Link href={startHref(authed)} className="px-10 py-4 bg-white text-black rounded-sm text-[13px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 hover:scale-[1.03] transition-all shadow-[0_0_30px_rgba(255,255,255,0.15)]">
             {t.cta.button}
           </Link>
         </div>

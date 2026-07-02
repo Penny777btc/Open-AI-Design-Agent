@@ -18,16 +18,23 @@ import { useTheme } from "next-themes";
 import Link from "next/link";
 import toast from "react-hot-toast";
 import Navbar from "@/components/Navbar";
+import { useLang } from "@/context/LanguageContext";
+import { COPY } from "@/lib/copy";
 
 const API = "/api/v1/creative-agent";
 
 export default function AssistantDashboard() {
   const router = useRouter();
   const { userData } = useApi();
+  // 国际化：与落地页同一套 COPY[lang] 体系，中文站不再出现硬编码英文
+  const { lang } = useLang();
+  const t = COPY[lang].dashboard;
   const [mounted, setMounted] = useState(false);
   const [input, setInput] = useState("");
   const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // 会话列表三态：loading / error / ready。
+  // 之前 catch 只 console.error，断网时和「真没历史」显示一样，用户会误以为项目全丢了
+  const [sessionsState, setSessionsState] = useState("loading");
   const [skills, setSkills] = useState([]);
   const [showSkillsMenu, setShowSkillsMenu] = useState(false);
   const [activeSkill, setActiveSkill] = useState(null);
@@ -42,12 +49,8 @@ export default function AssistantDashboard() {
   const fileInputRef = React.useRef(null);
   const [placeholderText, setPlaceholderText] = useState("");
 
-  const placeholders = React.useMemo(() => [
-    "Ask the agent to generate an image...",
-    "Ask the agent to create a video...",
-    "Ask the agent to edit an image...",
-    "Ask the agent to plan a social campaign..."
-  ], []);
+  // 占位符跟随语言切换（打字机效果的素材源），文案见 copy.js dashboard.placeholders
+  const placeholders = React.useMemo(() => t.placeholders, [t]);
 
   useEffect(() => {
     let currentPlaceholderIdx = 0;
@@ -99,14 +102,17 @@ export default function AssistantDashboard() {
   }, []);
 
   const fetchSessions = async () => {
+    // 重试入口也走这里：先回到 loading，让骨架屏重新出现
+    setSessionsState("loading");
     try {
       // 缩略图已随列表一次性返回（thumbnails 字段），无需再为每个会话单独拉 assets（消除 N+1）
       const { data } = await axios.get(`${API}/sessions`);
       setSessions(data.map((s) => ({ ...s, assets: s.thumbnails || [] })));
+      setSessionsState("ready");
     } catch (err) {
+      // 失败进入 error 态并给重试按钮，而不是静默地假装「暂无历史」
       console.error("Failed to fetch sessions:", err);
-    } finally {
-      setLoading(false);
+      setSessionsState("error");
     }
   };
 
@@ -125,27 +131,28 @@ export default function AssistantDashboard() {
     try {
       await axios.delete(`${API}/sessions/${sessionId}`);
       setSessions(prev => prev.filter(s => s.id !== sessionId));
-      toast((t) => (
+      // 注意：toast 回调参数不能叫 t，会遮蔽外层的文案对象 t
+      toast((tst) => (
         <span className="flex items-center gap-3 text-[12px]">
-          Deleted “{(sessionName || "Untitled").slice(0, 20)}”
+          {t.deleted((sessionName || t.untitled).slice(0, 20))}
           <button
             className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider"
             onClick={async () => {
-              toast.dismiss(t.id);
+              toast.dismiss(tst.id);
               try {
                 await axios.post(`${API}/sessions/${sessionId}/restore`);
                 fetchSessions();
               } catch {
-                toast.error("Restore failed");
+                toast.error(t.restoreFailed);
               }
             }}
           >
-            Undo
+            {t.undo}
           </button>
         </span>
       ), { duration: 5000 });
     } catch (err) {
-      toast.error("Failed to delete chat");
+      toast.error(t.deleteFailed);
     }
   };
 
@@ -180,17 +187,17 @@ export default function AssistantDashboard() {
         const { data: session } = await axios.post(`${API}/sessions`, {});
         const formData = new FormData();
         formData.append("file", file);
-        formData.append("lang", localStorage.getItem("lang") || "zh"); // 解析回执跟随站点语言
+        formData.append("lang", lang); // 解析回执跟随站点语言（直接用 context，避免绕 localStorage）
         await axios.post(`/api/v1/sessions/${session.id}/reference-docs`, formData, {
           headers: { "Content-Type": "multipart/form-data" },
           onUploadProgress: (pe) => setUploadProgress(Math.round((pe.loaded * 100) / pe.total)),
         });
-        toast.success("📄 文档已上传，正在打开项目（解析进度见聊天区）…");
+        toast.success(t.docUploaded);
         // 输入框里已有的需求一并带入（画布会自动发送）
         const q = input.trim();
         router.push(`/canvas?session=${session.id}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
       } catch (err) {
-        toast.error(err.response?.data?.detail || "文档解析失败");
+        toast.error(err.response?.data?.detail || t.docParseFailed);
       } finally {
         setUploading(false);
         setUploadProgress(0);
@@ -201,7 +208,7 @@ export default function AssistantDashboard() {
     // 媒体类型校验
     const okType = /^(image|video|audio)\//.test(file.type || "");
     if (!okType) {
-      toast.error(`暂不支持「${docExt}」格式，请上传图片、视频或音频`);
+      toast.error(t.unsupported(docExt));
       return;
     }
 
@@ -237,10 +244,10 @@ export default function AssistantDashboard() {
       
       const att = { url: uploadedUrl, kind };
       setAttachments(prev => [...prev, att]);
-      toast.success("File uploaded successfully");
+      toast.success(t.uploaded);
     } catch (err) {
       console.error("Upload failed", err);
-      toast.error("Upload failed");
+      toast.error(t.uploadFailed);
     } finally {
       setUploading(false);
       setUploadProgress(0);
@@ -277,7 +284,7 @@ export default function AssistantDashboard() {
 
       router.push(url);
     } catch (err) {
-      toast.error("Failed to start session");
+      toast.error(t.startFailed);
       submittingRef.current = false;
     }
   };
@@ -304,15 +311,13 @@ export default function AssistantDashboard() {
         <div className="flex-1 flex flex-col gap-6 sm:gap-8 items-center w-full max-w-7xl pt-6 sm:pt-8 pb-12 px-4 sm:px-8 lg:px-0">
           {/* 不用 flex 排标题：窄屏会逐词竖排（H4） */}
           <h1 className="font-display text-3xl sm:text-5xl font-extrabold tracking-tight text-center">
-            From brief to <span className="brand-gradient-text">finished designs</span>
+            {t.title1}<span className="brand-gradient-text">{t.title2}</span>
           </h1>
           <p className="text-secondary-text text-base sm:text-lg text-center px-4">
-            AI design agent for e-commerce visuals, logos &amp; social covers
+            {t.sub}
           </p>
           <div className="flex items-center gap-2 micro-label">
-            <span>// E-COMMERCE</span>
-            <span>// LOGO</span>
-            <span>// SOCIAL</span>
+            {t.labels.map((label) => <span key={label}>{label}</span>)}
           </div>
           <div className="w-full max-w-3xl relative">
             <div className="bg-bg-card border border-divider rounded-md shadow-float p-2 focus-within:shadow-pop transition-all ease-[var(--ease-standard)]">
@@ -351,10 +356,10 @@ export default function AssistantDashboard() {
                     className="hidden" 
                     onChange={handleFileUpload}
                   />
-                  <button 
+                  <button
                     onClick={() => fileInputRef.current?.click()}
                     className="p-2 hover:bg-bg-page rounded-full text-secondary-text transition-colors relative"
-                    title="Upload File"
+                    title={t.uploadFile}
                   >
                     {uploading ? (
                       <div className="w-12 h-12 rounded border border-divider border-dashed flex flex-col items-center justify-center bg-bg-page/50">
@@ -368,7 +373,7 @@ export default function AssistantDashboard() {
                   <button 
                     onClick={() => setShowSkillsMenu(!showSkillsMenu)}
                     className={`p-2 hover:bg-bg-page rounded-full transition-colors ${activeSkill || showSkillsMenu ? "text-primary bg-primary/10" : "text-secondary-text"}`}
-                    title="Skills"
+                    title={t.skillsBtn}
                   >
                     <GoBook size={20} />
                   </button>
@@ -438,11 +443,11 @@ export default function AssistantDashboard() {
                     <div className="absolute bottom-full left-0 mb-2 flex items-end gap-3 z-50">
                       <div className="w-64 bg-bg-card border border-divider rounded shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
                         <div className="p-2 border-b border-divider/30 text-[10px] font-bold text-secondary-strong uppercase tracking-widest bg-bg-page/50">
-                          Mentions
+                          {t.mentions}
                         </div>
                         <div className="max-h-60 overflow-y-auto scrollbar-subtle py-1">
                           {filteredSkills.length > 0 && (
-                            <div className="px-3 py-1.5 text-[9px] font-bold text-primary uppercase opacity-60">Skills</div>
+                            <div className="px-3 py-1.5 text-[9px] font-bold text-primary uppercase opacity-60">{t.skillsGroup}</div>
                           )}
                           {filteredSkills.map(skill => (
                             <button
@@ -455,7 +460,7 @@ export default function AssistantDashboard() {
                             </button>
                           ))}
                           {filteredSkills.length === 0 && (
-                            <div className="px-4 py-8 text-center text-secondary-text text-xs italic opacity-50">No matches found</div>
+                            <div className="px-4 py-8 text-center text-secondary-text text-xs italic opacity-50">{t.noMatches}</div>
                           )}
                         </div>
                       </div>
@@ -474,8 +479,8 @@ export default function AssistantDashboard() {
                                 <GoBook size={24} />
                               </div>
                               <div>
-                                <h3 className="text-xl font-bold text-primary-text tracking-tight">Agent Skills</h3>
-                                <p className="text-xs text-secondary-text font-medium opacity-70">Power up your creative workflow with specialized AI experts.</p>
+                                <h3 className="text-xl font-bold text-primary-text tracking-tight">{t.skillsTitle}</h3>
+                                <p className="text-xs text-secondary-text font-medium opacity-70">{t.skillsSub}</p>
                               </div>
                             </div>
                             <button 
@@ -483,7 +488,7 @@ export default function AssistantDashboard() {
                               className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-bg-page border border-divider rounded text-xs font-bold text-secondary-text hover:text-primary hover:border-primary/30 transition-all ease-[var(--ease-standard)]"
                             >
                               <CgTerminal size={14} />
-                              Dismiss
+                              {t.dismiss}
                             </button>
                           </div>
                           <div className="p-2 max-h-[60vh] overflow-y-auto scrollbar-subtle grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -502,20 +507,20 @@ export default function AssistantDashboard() {
                                   </div>
                                   {activeSkill?.name === s.name && <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />}
                                 </div>
-                                <div className="text-[11px] text-secondary-strong line-clamp-2 leading-relaxed opacity-80 h-8">{s.description || "Expert agent workflow for high-quality generation."}</div>
+                                <div className="text-[11px] text-secondary-strong line-clamp-2 leading-relaxed opacity-80 h-8">{s.description || t.skillDefaultDesc}</div>
                               </button>
                             ))}
                           </div>
                           <div className="px-4 py-2 bg-bg-page/50 border-t border-divider flex items-center justify-between">
                             <div className="flex items-center gap-2 text-[10px] font-bold text-secondary-strong uppercase tracking-widest opacity-60">
                               <RiRobot2Line size={14} />
-                              Design Protocol v1.2
+                              {t.protocol}
                             </div>
-                            <button 
+                            <button
                               onClick={() => setShowSkillsMenu(false)}
                               className="px-4 py-2 text-xs font-bold text-primary-text hover:bg-bg-page rounded transition-colors border border-transparent hover:border-divider"
                             >
-                              Dismiss
+                              {t.dismiss}
                             </button>
                           </div>
                         </div>
@@ -546,8 +551,8 @@ export default function AssistantDashboard() {
                   <button
                     onClick={() => (input.trim() || attachments.length > 0) && startNewSession(input.trim(), activeSkill, attachments)}
                     disabled={!input.trim() && attachments.length === 0}
-                    aria-label="Send"
-                    title="Send"
+                    aria-label={t.send}
+                    title={t.send}
                     className={`p-2 rounded-full transition-all ease-[var(--ease-standard)] ${input.trim() || attachments.length > 0 ? "bg-primary text-black shadow-lg shadow-primary/20 hover:scale-105" : "bg-bg-page text-secondary-text/30"}`}
                   >
                     <FiSend size={18} />
@@ -555,9 +560,30 @@ export default function AssistantDashboard() {
                 </div>
               </div>
             </div>
+
+            {/* 空态起点卡（P0-4）：新用户面对空输入框不知道写什么——给 4 张电商化示例，
+                点击只预填 + 聚焦（不直接发送，和 ?q= 预填一致：发送前留给用户确认/替换产品名，避免误创建会话） */}
+            <div className="mt-3">
+              <div className="micro-label text-secondary-text/60 mb-2 px-1">{t.startersHint}</div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {t.starters.map((s) => (
+                  <button
+                    key={s.label}
+                    onClick={() => {
+                      setInput(s.prompt);
+                      setTimeout(() => textareaRef.current?.focus(), 10);
+                    }}
+                    className="group text-left px-3 py-2.5 bg-bg-card border border-divider rounded hover:border-primary/50 hover:bg-primary/5 hover:shadow-md transition-all ease-[var(--ease-standard)]"
+                  >
+                    <div className="text-xs font-bold text-primary-text group-hover:text-primary transition-colors truncate">{s.label}</div>
+                    <div className="text-[10px] text-secondary-text/70 line-clamp-2 mt-1 leading-relaxed">{s.prompt}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
           <div className="w-full">
-            <h2 className="text-xl font-bold mb-6">Recent Projects</h2>
+            <h2 className="text-xl font-bold mb-6">{t.recent}</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
               {/* New Project Card */}
               <button 
@@ -567,8 +593,34 @@ export default function AssistantDashboard() {
                 <div className="w-10 h-10 rounded-full bg-bg-page border border-divider flex items-center justify-center text-secondary-text group-hover:text-primary group-hover:border-primary group-hover:scale-110 transition-all ease-[var(--ease-standard)]">
                   <FiPlus size={24} />
                 </div>
-                <span className="text-xs font-bold text-secondary-text group-hover:text-primary">New Project</span>
+                <span className="text-xs font-bold text-secondary-text group-hover:text-primary">{t.newProject}</span>
               </button>
+
+              {/* 三态（P0-5）之 error：请求失败 ≠ 没有历史，给出明确的失败提示 + 重试入口 */}
+              {sessionsState === "error" && (
+                <div className="col-span-full sm:col-span-2 lg:col-span-3 flex flex-col items-center justify-center gap-3 py-10 bg-bg-card border border-divider rounded-lg">
+                  <div className="text-sm font-bold text-primary-text">{t.errorTitle}</div>
+                  <button
+                    onClick={fetchSessions}
+                    className="px-4 py-2 text-xs font-bold text-primary border border-primary/30 rounded hover:bg-primary/10 transition-colors"
+                  >
+                    {t.retry}
+                  </button>
+                </div>
+              )}
+
+              {/* 三态之 empty：确认加载成功且确实没有历史，引导开始第一个项目（聚焦输入框） */}
+              {sessionsState === "ready" && sessions.length === 0 && (
+                <div className="col-span-full sm:col-span-2 lg:col-span-3 flex flex-col items-center justify-center gap-3 py-10 bg-bg-card border border-divider rounded-lg">
+                  <div className="text-sm text-secondary-text">{t.emptyTitle}</div>
+                  <button
+                    onClick={() => textareaRef.current?.focus()}
+                    className="px-4 py-2 text-xs font-bold text-primary border border-primary/30 rounded hover:bg-primary/10 transition-colors"
+                  >
+                    {t.emptyCta}
+                  </button>
+                </div>
+              )}
 
               {/* Session Cards */}
               {sessions.map((session) => (
@@ -601,23 +653,24 @@ export default function AssistantDashboard() {
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteSession(session.id, session.name); }}
                     className="absolute top-2 right-2 z-10 p-1.5 rounded bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-all ease-[var(--ease-standard)]"
-                    title="Delete chat"
+                    title={t.deleteChat}
                   >
                     <FiTrash2 size={14} />
                   </button>
 
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-4">
-                    <div className="text-white font-bold text-sm truncate">{session.name || "Untitled"}</div>
-                    <div className="text-white/60 text-[10px] mt-1">{session.assets?.length || 0} assets</div>
+                    <div className="text-white font-bold text-sm truncate">{session.name || t.untitled}</div>
+                    <div className="text-white/60 text-[10px] mt-1">{t.assetsCount(session.assets?.length || 0)}</div>
                   </div>
                   
                   <div className="absolute bottom-0 left-0 right-0 p-3 bg-bg-card/90 backdrop-blur-sm border-t border-divider opacity-100 group-hover:opacity-0 transition-opacity">
-                    <div className="text-primary-text font-bold text-xs truncate">{session.name || "Untitled Session"}</div>
+                    <div className="text-primary-text font-bold text-xs truncate">{session.name || t.untitled}</div>
                   </div>
                 </div>
               ))}
 
-              {loading && Array.from({ length: 3 }).map((_, i) => (
+              {/* 三态之 loading：复用原有骨架屏 */}
+              {sessionsState === "loading" && Array.from({ length: 3 }).map((_, i) => (
                 <div key={`skeleton-${i}`} className="aspect-[16/10] bg-bg-card border border-divider rounded-md animate-pulse" />
               ))}
             </div>

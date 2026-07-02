@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import axios from "axios";
 import toast from "react-hot-toast";
@@ -15,6 +15,7 @@ const API = process.env.NEXT_PUBLIC_API_BASE || "";
 
 export default function RegisterPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { fetchUserData } = useApi();
   const { lang } = useLang();
   const t = COPY[lang].auth;
@@ -42,7 +43,7 @@ export default function RegisterPage() {
       localStorage.setItem("token", data.token);
       await fetchUserData();
       toast.success(t.welcome(data.user.balance));
-      router.push("/dashboard");
+      router.push(searchParams.get("next") || "/dashboard");  // 保留注册前想去的意图(带 ?q= 的工作台)
     } catch (err) {
       toast.error(err.response?.data?.detail || "Register failed");
       setBusy(false);
