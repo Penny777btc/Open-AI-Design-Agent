@@ -10,6 +10,18 @@ from app.deps import get_current_user
 _buckets: dict[str, deque] = defaultdict(deque)
 
 
+def _client_ip(request: Request) -> str:
+    """取限流用的客户端 IP。默认用 request.client.host（不可伪造）；仅当明确部署在可信反代
+    后面（settings.trust_proxy=True）才信任 X-Forwarded-For，否则攻击者可换 XFF 绕过限流。"""
+    from app.config import settings
+
+    if settings.trust_proxy:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            return xff.split(",")[0].strip()
+    return request.client.host if request.client else "?"
+
+
 def _retry_hint(seconds: int) -> str:
     """把窗口长度说成「何时可重试」，给前端可直接展示的中文文案。"""
     if seconds % 86400 == 0:
@@ -42,8 +54,7 @@ def rate_limit(scope: str, times: int, seconds: int, by: str = "ip", override_at
         return dependency
 
     async def dependency(request: Request):
-        ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
-        key = f"{scope}:{ip}"
+        key = f"{scope}:{_client_ip(request)}"
         _check(key, times, seconds, detail="请求太频繁，请稍后再试")
 
     return dependency

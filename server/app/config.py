@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite+aiosqlite:///{BASE_DIR / 'dev.db'}"
     storage_dir: Path = BASE_DIR / "storage"
     public_base_url: str = "http://127.0.0.1:8000"
+    # 仅当部署在可信反代（会注入真实客户端 IP 的 X-Forwarded-For）后面时设 True；
+    # 否则限流按 request.client.host，防攻击者伪造 XFF 绕过登录爆破/刷量限速。
+    trust_proxy: bool = False
     cors_origins: list[str] = [
         "http://localhost:3100", "http://localhost:3000",
         "http://127.0.0.1:3100", "http://127.0.0.1:3000",

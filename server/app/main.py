@@ -103,6 +103,17 @@ app.include_router(billing.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 
 settings.storage_dir.mkdir(parents=True, exist_ok=True)
+
+
+@app.get("/files/docs/{path:path}", include_in_schema=False)
+async def _block_public_docs(path: str):
+    # 上传的参考文档含专有资料（品名/卖点/定价），仅服务端解析、前端从不直取 →
+    # 不经公开静态挂载暴露（防 UUID 泄漏后被任意人拉取）。此路由先于 /files 挂载匹配。
+    from fastapi import HTTPException
+
+    raise HTTPException(status_code=403, detail="forbidden")
+
+
 app.mount("/files", StaticFiles(directory=settings.storage_dir), name="files")
 
 

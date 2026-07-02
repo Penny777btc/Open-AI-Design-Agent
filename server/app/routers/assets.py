@@ -59,6 +59,16 @@ async def register_asset(session_id: str, request: Request, db: AsyncSession = D
     from fastapi import HTTPException
 
     url = str(body.get("url", ""))
+    # SSRF 防护（注册期，纵深）：外部 URL（非本站）必须解析到公网，拒绝内网/回环/云元数据地址
+    from app.config import settings as _cfg
+
+    if url.startswith(("http://", "https://")) and not url.startswith(_cfg.public_base_url):
+        from app.services.security import assert_public_url
+
+        try:
+            assert_public_url(url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"不允许的资产 URL：{exc}")
     ext = url.split("?")[0].rsplit(".", 1)[-1].lower() if "." in url.split("?")[0] else ""
     allowed = {"png", "jpg", "jpeg", "webp", "gif", "avif", "mp4", "webm", "mov", "mp3", "wav", "ogg", "m4a"}
     if ext and ext not in allowed:

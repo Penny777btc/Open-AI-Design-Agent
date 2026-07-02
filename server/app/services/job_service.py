@@ -397,15 +397,13 @@ async def _load_asset_bytes(session_id: str, asset_label: str) -> bytes:
     if asset is None:
         raise ValueError(f"找不到资产 {asset_label}")
     if asset.storage_key:
-        from app.config import settings as cfg
+        from app.services import storage
 
-        return (cfg.storage_dir / asset.storage_key).read_bytes()
-    import httpx
+        return storage._safe_path(asset.storage_key).read_bytes()  # 过 _safe_path 防路径穿越
+    # 外链资产 → 安全拉取（SSRF 白名单 + 禁重定向），防止被诱导访问内网/云元数据
+    from app.services.security import fetch_public_bytes
 
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        resp = await client.get(asset.url)
-        resp.raise_for_status()
-        return resp.content
+    return await fetch_public_bytes(asset.url)
 
 
 async def _video_node(job_id: str, session_id: str, user_id: str, node, planner: PlacementPlanner) -> bool:
@@ -586,7 +584,9 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                 mask = await loop.run_in_executor(None, lambda: build_bg_hole_mask_from_layers(
                     source, layer_pngs, node.args.get("text_blocks") or []))
             elif mask_key := node.args.get("mask_key"):
-                mask = (settings.storage_dir / mask_key).read_bytes()
+                from app.services import storage
+
+                mask = storage._safe_path(mask_key).read_bytes()  # 过 _safe_path 防路径穿越
         last_exc = None
         for _ in range(2):  # 节点级重试
             try:

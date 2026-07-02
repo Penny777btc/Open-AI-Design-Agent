@@ -168,10 +168,13 @@ async def upload_binary(request: Request, user=Depends(get_current_user)):
     from app.db import SessionLocal
 
     form = await request.form()
-    key = form.get("key")
+    key = str(form.get("key") or "")
     file = form.get("file")
     if not key or file is None or not hasattr(file, "read"):
         raise HTTPException(status_code=400, detail="Missing key or file in form data")
+    # 越权防护：key 必须落在该用户命名空间（防客户端提交任意 key 覆盖他人资产/写入公开目录）
+    if not key.startswith(f"uploads/{user.id}/"):
+        raise HTTPException(status_code=403, detail="非法的上传路径")
 
     # 类型闸（审计补充）：非媒体文件会以 broken image 形态破坏画布渲染
     ext = str(key).rsplit(".", 1)[-1].lower() if "." in str(key) else ""
