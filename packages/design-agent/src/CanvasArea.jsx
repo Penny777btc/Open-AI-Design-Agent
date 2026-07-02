@@ -803,6 +803,19 @@ const URLText = ({
   );
 };
 
+// L2：画布占位 Loader 别显示原始工具名（generate_image）——翻成用户友好文案。
+// key 与 i18n 的 tool_* 对齐（与聊天区 friendlyAction 同一套词表）；未知工具回落到通用「处理中」。
+const LOADER_TOOL_LABEL = {
+  generate_image: "tool_generate_image", edit_image: "tool_edit_image", enhance_image: "tool_enhance_image",
+  generate_video: "tool_generate_video", image_to_video: "tool_image_to_video", edit_video: "tool_edit_video",
+  lipsync_video: "tool_lipsync_video", concat_videos: "tool_concat_videos", generate_audio: "tool_generate_audio",
+  extract_text: "tool_extract_text", upload_file: "tool_upload_file",
+};
+function friendlyModelName(name) {
+  const key = LOADER_TOOL_LABEL[name];
+  return key ? t(key) : (name || t("tool_processing"));
+}
+
 const LoaderNode = ({ task, isSelected, onSelect, onChange, theme }) => {
   const shapeRef = useRef();
   const trRef = useRef();
@@ -889,8 +902,8 @@ const LoaderNode = ({ task, isSelected, onSelect, onChange, theme }) => {
           y={45}
           text={
             task.status === "completed"
-              ? `${t("rendering")}\n\n${task.modelName}`
-              : `${t("generating")}\n\n${task.modelName}`
+              ? `${t("rendering")}\n\n${friendlyModelName(task.modelName)}`
+              : `${t("generating")}\n\n${friendlyModelName(task.modelName)}`
           }
           fontSize={14}
           fontFamily="sans-serif"
@@ -1301,6 +1314,28 @@ const CanvasArea = forwardRef(
 
     // Esc：清空所有选择
     const clearSelection = () => { setSelectedId(null); setSetSel(new Set()); };
+
+    // H2 命令式重置：切到另一个已存在会话时由宿主调用，清空画布本地 state，
+    // 避免旧会话的图残留 / 来回切叠图翻倍。宿主已确保只在「真实切换」时调用
+    // （新建会话 null→newid 的发送途中不调用，故不会丢正在发送/落图的内容）。
+    // 覆盖所有本地视觉与交互 state：媒体、选择、蒙版模式、套图面板。
+    const resetCanvas = () => {
+      setImages([]);
+      setVideos([]);
+      setAudios([]);
+      setTexts([]);
+      setSelectedId(null);
+      setSetSel(new Set());
+      setShowSetPanel(false);
+      setShowTextMenu(false);
+      setMarquee(null);
+      marqueeStartRef.current = null;
+      // 退出蒙版模式（内联，避免依赖声明顺序）
+      setMaskMode(null);
+      setMaskStrokes([]);
+      setMaskPrompt("");
+      paintingRef.current = false;
+    };
 
     // 以视口中心为锚点设定缩放（Shift+0 = 100%），内容不跳变
     const zoomKeepingCenter = (z) => {
@@ -1777,6 +1812,8 @@ const CanvasArea = forwardRef(
               setAudios([]);
               setTexts([]);
               setSelectedId(null);
+              // M5：清空画布也要清多选，否则空画布还挂着「已选 N 张」浮动操作条。
+              setSetSel(new Set());
               toast.dismiss(tt.id);
               toast.success(t("canvas_cleared"));
             }}
@@ -2288,6 +2325,7 @@ const CanvasArea = forwardRef(
         addVideo,
         addAudio,
         openSetPanel,
+        resetCanvas, // H2：宿主切会话时清空画布本地 state
         getCanvasState,
         moveNode,
         placeNextToSource,
@@ -3302,13 +3340,21 @@ const CanvasArea = forwardRef(
               aria-label={t("export_psd")}
             ><FiLayers size={13} /> {exportingPsd ? t("exporting_psd") : t("export_psd")}</button>
             {onSplitImage && (() => {
-              const srcImg = images.find((i) => (selectedId?.startsWith("img") ? i.id === selectedId : setSel.has(i.id)) && i.assetLabel);
+              // M9：拆图只能作用于一张——旧逻辑对「多选」取数组序第一张，会拆错图、白扣费。
+              // 与局部编辑一致：恰好选中一张带 assetLabel 的图才可点；否则禁用并在 title 说明。
+              const oneId = setSel.size === 1
+                ? [...setSel][0]
+                : (setSel.size === 0 && selectedId?.startsWith("img") ? selectedId : null);
+              const srcImg = oneId ? images.find((i) => i.id === oneId && i.assetLabel) : null;
+              const reason = (setSel.size > 1)
+                ? t("ai_split_need_one")
+                : (!srcImg ? t("edit_region_need_asset") : t("ai_split_title"));
               return (
                 <button
                   onClick={() => srcImg && onSplitImage({ assetLabel: srcImg.assetLabel })}
                   disabled={!srcImg}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-primary-text hover:bg-bg-page disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  title={t("ai_split_title")}
+                  title={reason}
                   aria-label={t("ai_split")}
                 ><FiScissors size={13} /> {t("ai_split")}</button>
               );

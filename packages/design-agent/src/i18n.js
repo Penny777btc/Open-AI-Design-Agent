@@ -132,6 +132,11 @@ const dict = {
     set_generate_failed_msg: "❌ 套图生成失败",
     split_failed: "AI 拆图失败",
     split_failed_msg: "❌ AI 拆图失败",
+    // H1 历史加载失败三态：网络抖动时别静默降级成「全新会话」误弹新手引导
+    history_load_failed: "历史消息加载失败",
+    history_load_retry: "重试加载",
+    // M9 多选时禁用 AI 拆图：拆图只能作用于一张，避免拆错扣费
+    ai_split_need_one: "拆图请只选一张图片",
     plan_expired: "该计划已失效（可能已处理、超时或被取消），如需可重新发起。",
     set_user_msg: (label, n) => `🎨 套图：${label}（${n} 张统一风格）`,
     split_user_msg: (label) => `✂️ AI 拆图：${label} → 背景层 + 主体层`,
@@ -177,6 +182,8 @@ const dict = {
     plan_tool_default: "AI 处理",
     plan_seconds_unit: (s) => `${s} 秒`,
     plan_after_steps: (steps) => `衔接第 ${steps} 步`,
+    // M8：依赖成环/缺失时兜底渲染的节点标注
+    plan_dep_anomaly: "依赖异常",
 
     // ── 画布（CanvasArea）─────────────────────────────────────────
     image: "图片",
@@ -466,6 +473,11 @@ const dict = {
     set_generate_failed_msg: "❌ Batch generation failed",
     split_failed: "AI split failed",
     split_failed_msg: "❌ AI split failed",
+    // H1 history-load error triad: don't silently fall back to a "brand new session" on a network blip
+    history_load_failed: "Failed to load message history",
+    history_load_retry: "Retry",
+    // M9 disable AI split on multi-select: split works on exactly one image, avoids splitting the wrong one (billed)
+    ai_split_need_one: "Select just one image to split",
     plan_expired: "This plan is no longer valid (it may have been handled, timed out, or cancelled). Start a new one if needed.",
     set_user_msg: (label, n) => `🎨 Batch: ${label} (${n} images, unified style)`,
     split_user_msg: (label) => `✂️ AI split: ${label} → background + subject layers`,
@@ -511,6 +523,8 @@ const dict = {
     plan_tool_default: "AI processing",
     plan_seconds_unit: (s) => `${s}s`,
     plan_after_steps: (steps) => `after step ${steps}`,
+    // M8: label for nodes rendered via the cycle/missing-dependency fallback
+    plan_dep_anomaly: "dependency issue",
 
     // ── Canvas (CanvasArea) ───────────────────────────────────────
     image: "Image",

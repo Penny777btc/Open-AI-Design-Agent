@@ -103,6 +103,11 @@ export default function CreativeCanvas({
 
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
+  // H1 历史加载三态：loading / ready / error。
+  // why：旧逻辑 loadHistory 的 catch 把 messages 重置成只有「会话已就绪」问候，
+  // 与真空会话同形 → 老会话遇网络抖动就误判「全新会话」、弹出快速开始卡 + 画布起点卡，
+  // 让用户以为历史丢了、还被当新用户引导。三态把「加载失败」与「真的是空会话」区分开。
+  const [historyStatus, setHistoryStatus] = useState("ready");
   const [assets, setAssets] = useState([]);
   const [activeTasks, setActiveTasks] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -284,13 +289,30 @@ export default function CreativeCanvas({
 
   useEffect(() => {
     if (justCreatedSessionRef.current) {
+      // 新建会话路径（null → ?session=newid，由 ensureSession 触发）：
+      // 此时可能正有一条消息在发送途中（sendMessage/套图/拆图先 ensureSession 再轮询），
+      // 绝不能清画布/清消息，否则会丢掉正在发的内容。直接放行。
       justCreatedSessionRef.current = false;
       return;
     }
+    // 走到这里 = 初次带 sessionId 挂载，或真正切到「另一个已存在会话」。
+    // H2 命令式清画布：切会话只改 URL、CanvasArea 不重挂也没人清它的本地 state，
+    // 旧会话的图会残留、来回切叠图翻倍。这里在真正切会话时命令画布重置。
+    // （没走 key={sessionId} 重挂：那样会在新建会话 null→newid 的发送途中把 CanvasArea
+    //  连同正在上传/落图的内容一起重挂丢掉——justCreatedSessionRef 短路的正是这条路径，
+    //  而此处只对「真实切换」触发，故对新建流程零影响。）
+    canvasRef.current?.resetCanvas?.();
     // Clear the sync-tracking set whenever the session changes so assets from
     // the new session are always painted to canvas (prevents stale URL leakage).
     syncedUrlsRef.current.clear();
     initialFitDoneRef.current = false;
+    // M6/M7 跨会话残留清理：附件 chips、最近指令 ref、上传建议卡都归属旧会话，
+    // 切会话必须清掉——否则新会话带着旧附件发送、或「重试」重发上个会话的指令。
+    setAttachments([]);
+    lastUserMsgRef.current = "";
+    setUploadSuggestion(null);
+    // M3：切会话时清掉旧会话遗留的画布占位 Loader（activeTasks），否则永久转圈。
+    setActiveTasks([]);
     if (sessionId) {
       loadHistory();
       loadAssets();
@@ -303,6 +325,7 @@ export default function CreativeCanvas({
       }
     } else {
       setMessages([{ role: "assistant", content: t("welcome", user?.username || t("user")), timestamp: new Date().toISOString() }]);
+      setHistoryStatus("ready"); // 真空新会话：非错误态，允许起点卡/快速开始卡正常出现
       setAssets([]);
       setCurrentSessionName(t("new_session"));
     }
@@ -465,6 +488,8 @@ export default function CreativeCanvas({
       setActiveTasks(prev => [...prev, {
         taskId: `task-${Date.now()}-${Math.random()}`,
         modelName: flat.name,
+        // M3：记住 job_id，好让「以 error 事件(无 name)结束」的 job 也能定位到它的占位 Loader。
+        job_id: flat.job_id,
         status: "processing",
         x, y,
       }]);
@@ -472,7 +497,13 @@ export default function CreativeCanvas({
     
     if (flat.type === "tool_result" || flat.type === "error") {
       setActiveTasks(prev => {
-        const idx = prev.findIndex(t => t.modelName === flat.name);
+        // 优先按 name 配对（tool_result 带 name）；
+        // M3：error 事件常无 name → 回落到「同 job_id 且仍 processing」的占位 Loader，
+        // 否则 loader 会在 job 以 error 结束后永久转圈。
+        let idx = flat.name ? prev.findIndex(t => t.modelName === flat.name) : -1;
+        if (idx === -1 && flat.job_id) {
+          idx = prev.findIndex(t => t.job_id === flat.job_id && t.status === "processing");
+        }
         if (idx !== -1) {
           const next = [...prev];
           next.splice(idx, 1);
@@ -542,9 +573,16 @@ export default function CreativeCanvas({
         if (Date.now() - lastProgress > MAX_DEAD_AIR) throw new Error("Stalled");
       } catch (err) {
         // 致命 4xx（job 不存在/无权）→ 立即退出，不再空转 6 分钟锁着输入框
-        if ([403, 404, 410].includes(err.response?.status)) { setBusy(false); return; }
+        // M3：退出前清掉本 job 的占位 Loader，否则它会永久转圈（没有结果事件来消解）。
+        if ([403, 404, 410].includes(err.response?.status)) {
+          setActiveTasks(prev => prev.filter(t => t.job_id !== jobId));
+          setBusy(false);
+          return;
+        }
         if (Date.now() - lastProgress > MAX_DEAD_AIR) {
           // 长时间无进展时不再静默退出：告知用户任务仍在后台，刷新可重连
+          // M3：轮询超时也清本 job 的占位 Loader（任务转后台，前台不该再挂着转圈）。
+          setActiveTasks(prev => prev.filter(t => t.job_id !== jobId));
           setMessages(prev => {
             const arr = [...prev];
             if (assistantIdx >= 0 && assistantIdx < arr.length) {
@@ -594,8 +632,11 @@ export default function CreativeCanvas({
       aIdx = prev.length + 1;
       return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
     });
+    // H3：记住本操作启动时的会话，复位 busy/sendingRef 前比对，避免误复位「已切走的新会话」的 busy。
+    let opSessionId = sessionIdRef.current;
     try {
       const activeSessionId = await ensureSession();
+      opSessionId = activeSessionId;
       const { data } = await axios.post(
         `${API}/sessions/${activeSessionId}/set-template`,
         {
@@ -610,8 +651,6 @@ export default function CreativeCanvas({
       sendingRef.current = false;
       await resumePolling(data.job_id, aIdx, activeSessionId);
     } catch (err) {
-      sendingRef.current = false;
-      setBusy(false);
       if (err.response?.status === 402) {
         toast((tt) => (
           <span className="flex items-center gap-3 text-[12px]">
@@ -629,6 +668,13 @@ export default function CreativeCanvas({
         if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: t("set_generate_failed_msg") };
         return arr;
       });
+    } finally {
+      // H3：无论成功/失败/中途异常都复位 busy，避免「进行中切会话→busy 卡死 true→新会话输入锁死」。
+      // 仅当仍停在本操作的会话时才复位——切走了就交给新会话自己管理（不误清它的 busy）。
+      if (sessionIdRef.current === opSessionId) {
+        sendingRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
@@ -660,8 +706,11 @@ export default function CreativeCanvas({
       aIdx = prev.length + 1;
       return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
     });
+    // H3：见 handleSetTemplate —— 记住启动会话，复位前比对，避免误清新会话 busy / 卡死输入。
+    let opSessionId = sessionIdRef.current;
     try {
       const activeSessionId = await ensureSession();
+      opSessionId = activeSessionId;
       const { data } = await axios.post(
         `${API}/sessions/${activeSessionId}/split-image`,
         {
@@ -674,8 +723,6 @@ export default function CreativeCanvas({
       sendingRef.current = false;
       await resumePolling(data.job_id, aIdx, activeSessionId);
     } catch (err) {
-      sendingRef.current = false;
-      setBusy(false);
       if (err.response?.status === 402) {
         toast((tt) => (
           <span className="flex items-center gap-3 text-[12px]">
@@ -693,6 +740,11 @@ export default function CreativeCanvas({
         if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: t("split_failed_msg") };
         return arr;
       });
+    } finally {
+      if (sessionIdRef.current === opSessionId) {
+        sendingRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
@@ -713,8 +765,11 @@ export default function CreativeCanvas({
       aIdx = prev.length + 1;
       return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
     });
+    // H3：见 handleSetTemplate —— 记住启动会话，复位前比对，避免误清新会话 busy / 卡死输入。
+    let opSessionId = sessionIdRef.current;
     try {
       const activeSessionId = await ensureSession();
+      opSessionId = activeSessionId;
       const { data } = await axios.post(
         `${API}/sessions/${activeSessionId}/region-edit`,
         {
@@ -729,8 +784,6 @@ export default function CreativeCanvas({
       sendingRef.current = false;
       await resumePolling(data.job_id, aIdx, activeSessionId);
     } catch (err) {
-      sendingRef.current = false;
-      setBusy(false);
       if (err.response?.status === 402) {
         toast((tt) => (
           <span className="flex items-center gap-3 text-[12px]">
@@ -748,6 +801,11 @@ export default function CreativeCanvas({
         if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: t("region_edit_failed_msg") };
         return arr;
       });
+    } finally {
+      if (sessionIdRef.current === opSessionId) {
+        sendingRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
@@ -812,7 +870,9 @@ export default function CreativeCanvas({
               : e
           )
         })));
-        toast(t("plan_expired"), { icon: "ℹ️" });
+        // L4：自动批准（silent）在刷新重放时会对早已处理的 job 再点一次 approve → 409。
+        // 这属于预期内的重放，不该弹「计划已失效」惊扰用户；卡片照常标已处理即可。
+        if (!opts.silent) toast(t("plan_expired"), { icon: "ℹ️" });
       } else {
         revertAutoApproved(jobId);
         toast.error(err.response?.data?.detail || t("job_action_failed", action));
@@ -821,9 +881,14 @@ export default function CreativeCanvas({
   };
 
   const loadHistory = async () => {
+    const loadingSessionId = sessionId; // 加载期间可能切会话，回来时用它判断结果是否还归属当前会话
+    setHistoryStatus("loading");
     try {
       const { data } = await axios.get(`${API}/sessions/${sessionId}/messages`, { headers: getHeaders() });
       if (sendingRef.current) return; // 发送中：不要用旧历史覆盖正在构建的消息流
+      // 加载途中已切走 → 丢弃这次结果，交给新会话的 loadHistory
+      if (sessionIdRef.current !== loadingSessionId) return;
+      setHistoryStatus("ready");
       if (data && data.length > 0) {
         // Cleanup: Hide approval cards that already have results or are for inactive jobs
         const cleaned = data.map(m => ({
@@ -844,6 +909,11 @@ export default function CreativeCanvas({
         setMessages([{ role: "assistant", content: t("session_ready"), timestamp: new Date().toISOString() }]);
       }
     } catch {
+      // 加载途中已切走 → 别把错误态泼给新会话
+      if (sessionIdRef.current !== loadingSessionId) return;
+      // H1：加载失败 ≠ 空会话。置 error 态、渲染「历史加载失败 + 重试」，
+      // 并强制 hasConversation=true（不弹起点卡）、不渲染快速开始卡——避免把老会话当新用户引导。
+      setHistoryStatus("error");
       setMessages([{ role: "assistant", content: t("session_ready"), timestamp: new Date().toISOString() }]);
     }
   };
@@ -916,8 +986,11 @@ export default function CreativeCanvas({
       aIdx = prev.length + 1;
       return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
     });
+    // H3：见 handleSetTemplate —— 记住启动会话，复位前比对，避免误清新会话 busy / 卡死输入。
+    let opSessionId = sessionIdRef.current;
     try {
       const activeSessionId = await ensureSession();
+      opSessionId = activeSessionId;
       const formData = new FormData();
       formData.append("file", file);
       // 回执语言跟随站点语言设置（LanguageContext 持久化在 localStorage）
@@ -944,8 +1017,6 @@ export default function CreativeCanvas({
       setBusy(true);
       await resumePolling(data.job_id, aIdx, activeSessionId);
     } catch (err) {
-      sendingRef.current = false;
-      setBusy(false);
       toast.error(err.response?.data?.detail || t("doc_upload_failed"));
       setMessages(prev => {
         const arr = [...prev];
@@ -956,6 +1027,11 @@ export default function CreativeCanvas({
       setUploading(false);
       setUploadProgress(0);
       if (fileInputRef.current) fileInputRef.current.value = "";
+      // H3：仅在仍停留于本操作会话时复位 busy/sendingRef，避免误清已切走的新会话状态。
+      if (sessionIdRef.current === opSessionId) {
+        sendingRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
@@ -1767,7 +1843,8 @@ export default function CreativeCanvas({
               // 起点卡只服务「真正的冷启动」：会话里只要有过用户诉求（如从 dashboard 带话进来），
               // 再弹「上传产品图」就是答非所问（用户实测：说了要小红书封面还被要求传产品图）。
               // 历史未加载完(messages 为空)也先不弹，防闪现。
-              hasConversation={messages.length === 0 || messages.some((m) => m.role === "user")}
+              // H1：加载出错时强制 true —— error 态下画布不该弹「上传产品图」起点卡（老会话被当新用户）。
+              hasConversation={historyStatus === "error" || messages.length === 0 || messages.some((m) => m.role === "user")}
               setActiveTasks={setActiveTasks}
               onZoomChange={setZoomLevel}
               onRegionEdit={handleRegionEdit}
@@ -2012,7 +2089,22 @@ export default function CreativeCanvas({
                 P0-3b：把「主图六联 / 详情页七段」提到一级入口（与电商主图并列），
                 点击直达套图流程（有产品图→开面板预选；无→引导上传），卖家不用懂框选/工具条。
                 另加「上传产品图」入口，把卖家最自然的动作放在最显眼处。 */}
-            {!busy && messages.length === 1 && messages[0]?.role === "assistant" && (
+            {/* H1 历史加载失败：显式「加载失败 + 重试」，而非静默降级成新手引导。
+                error 态下不渲染下方快速开始卡（老会话不该被当新用户）。 */}
+            {historyStatus === "error" && (
+              <div className="mx-1 p-3 rounded-xl bg-[var(--color-error-bg)] border border-[var(--color-error)] flex items-center justify-between gap-3 animate-fade-in-up">
+                <div className="flex items-center gap-2 text-[12px] text-[var(--color-error)]">
+                  <FiAlertCircle size={14} className="shrink-0" />
+                  <span>{t("history_load_failed")}</span>
+                </div>
+                <button
+                  onClick={loadHistory}
+                  className="shrink-0 px-3 py-1.5 rounded-lg bg-bg-card border border-divider text-primary-text hover:border-primary/60 transition-colors text-[11px] font-medium"
+                >{t("history_load_retry")}</button>
+              </div>
+            )}
+
+            {historyStatus !== "error" && !busy && messages.length === 1 && messages[0]?.role === "assistant" && (
               <div className="flex flex-col gap-2 px-1 animate-fade-in-up">
                 <div className="micro-label">{t("quick_start")}</div>
                 {[
@@ -2042,11 +2134,19 @@ export default function CreativeCanvas({
                 <div className="text-[12px] font-semibold text-primary-text mb-2">{t("suggest_after_upload_title")}</div>
                 <div className="flex flex-wrap items-center gap-2">
                   <button
-                    onClick={() => { canvasRef.current?.openSetPanel?.("main6", uploadSuggestion.assetLabel); setUploadSuggestion(null); }}
+                    onClick={() => {
+                      // M2：openSetPanel 返回 false（画布已无那张带 label 的图，如切过会话/清过画布）
+                      // 时别静默无效，回落到 startSetFlow 引导重新上传。
+                      if (!canvasRef.current?.openSetPanel?.("main6", uploadSuggestion.assetLabel)) startSetFlow("main6");
+                      setUploadSuggestion(null);
+                    }}
                     className="px-3 py-1.5 rounded-lg bg-primary text-black text-[12px] font-semibold hover:opacity-90 transition-opacity"
                   >{t("suggest_main6")}</button>
                   <button
-                    onClick={() => { canvasRef.current?.openSetPanel?.("detail7", uploadSuggestion.assetLabel); setUploadSuggestion(null); }}
+                    onClick={() => {
+                      if (!canvasRef.current?.openSetPanel?.("detail7", uploadSuggestion.assetLabel)) startSetFlow("detail7");
+                      setUploadSuggestion(null);
+                    }}
                     className="px-3 py-1.5 rounded-lg bg-bg-page border border-divider text-[12px] font-medium text-primary-text hover:border-primary/60 transition-colors"
                   >{t("suggest_detail7")}</button>
                   <button

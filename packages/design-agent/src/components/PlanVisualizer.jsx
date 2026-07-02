@@ -19,7 +19,14 @@ export default function PlanVisualizer({ plan, theme = "dark" }) {
     const layer = remaining.filter(n =>
       !n.depends || n.depends.length === 0 || n.depends.every(d => processed.has(d))
     );
-    if (layer.length === 0) break; // cycle or missing dep
+    if (layer.length === 0) {
+      // M8：依赖成环 / 依赖指向不存在的节点 → 拓扑排不动。旧逻辑直接 break，
+      // 把剩余节点静默丢掉 → 头部「X 步」与实际渲染的节点数对不上、用户看到的图缺步。
+      // 兜底：把剩余节点整体作为最后一层渲染（标「依赖异常」），保证节点不丢、步数吻合。
+      layers.push(remaining.map(n => ({ ...n, _depAnomaly: true })));
+      remaining = [];
+      break;
+    }
     layers.push(layer);
     layer.forEach(n => processed.add(n.id));
     remaining = remaining.filter(n => !processed.has(n.id));
@@ -60,7 +67,8 @@ export default function PlanVisualizer({ plan, theme = "dark" }) {
         </div>
         <div className="text-right shrink-0 ml-3">
           <div className="text-[13px] font-semibold text-primary-text">
-            {plan.total_credits} <span className="text-[11px] text-secondary-strong font-normal">{t("credits_unit")}</span>
+            {/* L3：总消耗未知（后端没给数字）时显示「—」，而非留白或误导性的 0/undefined */}
+            {typeof plan.total_credits === "number" ? plan.total_credits : "—"} <span className="text-[11px] text-secondary-strong font-normal">{t("credits_unit")}</span>
           </div>
           <div className="text-[11px] text-secondary-strong">{t("steps_unit", plan.nodes.length)}</div>
         </div>
@@ -81,9 +89,14 @@ export default function PlanVisualizer({ plan, theme = "dark" }) {
                       {/* 步骤序号：desc 里的「衔接第 N 步」需要一个可对照的锚点 */}
                       <span className="text-secondary-strong font-semibold mr-1">{stepNoById.get(node.id)}.</span>
                       {node.label || t("node_processing")}
+                      {/* M8：依赖异常兜底渲染的节点显式标注，避免用户误以为顺序正常 */}
+                      {node._depAnomaly && (
+                        <span className="ml-1.5 text-[9px] font-semibold text-[var(--color-error)] bg-[var(--color-error-bg)] px-1 py-0.5 rounded">{t("plan_dep_anomaly")}</span>
+                      )}
                     </span>
                     <span className="text-[10px] font-semibold text-secondary-strong bg-bg-page px-1.5 py-0.5 rounded shrink-0">
-                      {node.est_credits || 0}
+                      {/* L3：单步消耗未知时显示「—」而非 0 */}
+                      {typeof node.est_credits === "number" ? node.est_credits : "—"}
                     </span>
                   </div>
                   {/* 逐条预览：这一步的性质（新绘/改图/视频）+ 画幅时长 + 依赖关系 */}
