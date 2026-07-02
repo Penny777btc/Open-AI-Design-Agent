@@ -34,8 +34,29 @@ MODELS = {
     },
 }
 
-# 编辑用图片模型的 edits 端点，成本与生图同量级，单独计价（保留原 15 积分）
+# 编辑用图片模型的 edits 端点，成本与生图同量级，单独计价（默认 gpt-image edits，保留原 15 积分）
 EDIT_CREDITS = 15
+
+# 按模型分价的编辑积分：nano-banana（gemini）edit 拿货 ¥0.8/张，若沿用 15 积分毛利仅 ~25%（远低于地板）。
+# 含真人的编辑路由到 nano（人物一致性优先），须按其真实成本单独定价，避免 node_cost 对 has_person 节点倒挂。
+# 每个模型：max(该模型生图价 + 编辑加成, EDIT_CREDITS)——编辑通道成本≈生图，另摊图文往返开销。
+_EDIT_CREDITS_BY_MODEL = {
+    "nano-banana-2": 45,  # 生图 40 + 5；45 积分毛利 = 1 - (0.8/7.2)/(45*0.0099) ≈ 75%，达标
+}
+
+
+def edit_credits(model: str | None = None) -> int:
+    """单次编辑的积分价（未指定或未知模型 → 默认 gpt-image edits 的 EDIT_CREDITS）。"""
+    return _EDIT_CREDITS_BY_MODEL.get(model or "", EDIT_CREDITS)
+
+
+# 护栏：编辑分价也要过毛利地板（复用生图成本口径），改价写错当场暴露
+for _mid, _ec in _EDIT_CREDITS_BY_MODEL.items():
+    _rev = _ec * CREDIT_USD
+    _cost = MODELS[_mid]["cost_rmb"] / RMB_PER_USD
+    assert _rev > 0 and (1 - _cost / _rev) >= MIN_MARGIN, (
+        f"编辑模型 {_mid} 积分 {_ec} 毛利低于地板 {MIN_MARGIN:.0%}，需上调"
+    )
 
 
 def margin(model_id: str) -> float:

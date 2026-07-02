@@ -16,7 +16,7 @@ from app.config import settings, tool_cost, node_cost
 from app.db import SessionLocal
 from app.services import credit_service
 from app.models import Asset, CreditLedger, Job, JobEvent
-from app.providers import get_image_provider, get_video_provider
+from app.providers import get_image_provider, get_person_edit_provider, get_video_provider
 from app.services import storage
 from app.services.placement import PlacementPlanner, display_size
 
@@ -673,11 +673,43 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                 # 用模块级 storage（顶部已 import）。绝不能在此再 local import——那会让 storage
                 # 在整个 _generate_node 变函数局部，导致 compose_subject 等更早引用它的分支 UnboundLocalError。
                 mask = storage._safe_path(mask_key).read_bytes()  # 过 _safe_path 防路径穿越
+        # 按任务路由编辑模型：含真人且无 mask 的整图编辑 → nano-banana（gemini 系，人物一致性最强），
+        # 修 gpt-image 整图重绘导致人脸/身材明显变形。其余（所有带 mask 的：拆图背景/局部编辑/护栏补全，
+        # 以及无人物的普通编辑）→ 保持 gpt-image（唯一支持 mask 局部重绘的通道）。
+        use_person = (
+            node.tool == "edit_image"
+            and bool(node.args.get("has_person"))
+            and mask is None
+            and settings.provider_mode == "sub2api"  # mock 下路由无意义（占位图），不改动既有 mock 流程
+        )
+        edit_model = None  # 供计价：本节点 edit 实际走的模型（None=默认 EDIT_CREDITS）
+        edit_prompt = prompt
+        if use_person:
+            # 身份保持双保险：与 planner 的身份锁互补，在指令最前置再压一句硬约束。
+            edit_prompt = (
+                "CRITICAL: preserve the person's face, facial features, hairstyle, skin tone and body "
+                "proportions EXACTLY as in the source image — do NOT redraw, restyle or alter the person. "
+            ) + prompt
+
         last_exc = None
+        person_failed = False  # nano 抛错/解析失败 → 降级 gpt-image 重试一次（宁可变形也别整节点失败）
         for _ in range(2):  # 节点级重试
             try:
                 if node.tool == "edit_image":
-                    image = await provider.edit(prompt, source, node.args.get("aspect_ratio", "1:1"), mask=mask)
+                    if use_person and not person_failed:
+                        try:
+                            provider_p = get_person_edit_provider()
+                            image = await provider_p.edit(
+                                edit_prompt, source, node.args.get("aspect_ratio", "1:1"))
+                            edit_model = settings.person_edit_model
+                        except Exception as exc:  # nano 失败 → 本次及之后都回落 gpt-image
+                            last_exc = exc
+                            person_failed = True
+                            logger.warning("nano-banana edit 失败，降级 gpt-image：%s", str(exc)[:160])
+                            image = await provider.edit(prompt, source, node.args.get("aspect_ratio", "1:1"), mask=mask)
+                            edit_model = None
+                    else:
+                        image = await provider.edit(prompt, source, node.args.get("aspect_ratio", "1:1"), mask=mask)
                 else:
                     image = await provider.generate(prompt, node.args.get("aspect_ratio", "1:1"))
                 break

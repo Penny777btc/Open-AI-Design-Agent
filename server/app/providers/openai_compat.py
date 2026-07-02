@@ -259,9 +259,39 @@ class Sub2ApiImage:
 
     async def edit(self, prompt: str, image: bytes, aspect_ratio: str = "1:1",
                    mask: bytes | None = None, transparent: bool = False) -> GeneratedImage:
-        # Gemini adapter 不支持带 mask 的局部重绘（智能拆解背景/局部编辑/补全都依赖它）。
-        # 明确报错而非 AttributeError，提示改用支持 edit 的模型。
-        raise RuntimeError("当前图像模型不支持局部编辑（需 image_model=gpt-image-2）")
+        """Gemini 系（nano-banana）图生图：走 /v1/chat/completions 图文输入。
+
+        why：gpt-image 的 /images/edits 是「整图重绘」，对真人脸/身材会明显漂移变形；
+        nano-banana（gemini 图像）人物一致性业界最强，故含真人的编辑改由它做。
+        通道与 generate 完全一致（源图 base64 + 编辑指令 → 复用 parse_image_response 解析返图）。
+
+        硬约束：**不支持 mask 局部重绘**。gemini adapter 无 mask 语义，若传 mask 只会被忽略 →
+        用户以为在局部编辑、实际整图重画，是隐蔽的正确性 bug。故 mask 非空直接报错，
+        由调用侧路由保证「带 mask 的编辑（拆图背景/局部编辑/护栏补全）永远不走这里」。
+        """
+        if mask is not None:
+            raise RuntimeError("该模型不支持蒙版局部重绘")
+        # 编辑 = 图文输入的一种：把源图作为 image_url、编辑指令作为 text 一起喂给 chat 模型。
+        # 复用 generate 的响应解析链（parse_image_response 覆盖多种返图形态）。
+        content = [
+            {"type": "text", "text": f"Edit this image. {prompt}"},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{base64.b64encode(image).decode()}"},
+            },
+        ]
+        data = await self.client.chat(self.model, [{"role": "user", "content": content}])
+        parsed = await parse_image_response(data)
+        if parsed is None:
+            snippet = json.dumps(data, ensure_ascii=False)[:300]
+            raise RuntimeError(f"无法从模型响应中解析图片: {snippet}")
+        raw, mime = parsed
+        from PIL import Image
+        from io import BytesIO
+
+        with Image.open(BytesIO(raw)) as img:
+            width, height = img.size
+        return GeneratedImage(data=raw, mime=mime, width=width, height=height, model=self.model)
 
     async def generate(self, prompt: str, aspect_ratio: str = "1:1", input_images=None) -> GeneratedImage:
         content: list | str

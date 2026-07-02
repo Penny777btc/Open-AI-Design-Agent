@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     planner_model: str = "codex"
     image_model: str = "gpt-image-2"  # 需支持带 mask 局部编辑（拆图背景/局部编辑/补全）；gemini 不支持 edit
+    # 含真人的编辑专用模型：gemini 系（nano-banana）人物一致性业界最强，避免 gpt-image 整图重绘导致人脸/身材变形。
+    # 仅用于「has_person 且无 mask」的 edit_image 节点（见 job_service 路由）；其余仍走 image_model。
+    person_edit_model: str = "nano-banana-2"
     # 视频生成：供应商加白后给的 endpoint；为空 = 视频未开通（执行层优雅提示）
     video_api_base: str = ""
     video_api_key: str = ""
@@ -71,15 +74,17 @@ class Settings(BaseSettings):
 
 
 def tool_cost(tool: str, model: str | None = None, seconds: float | None = None,
-              complete: bool = False) -> int:
+              complete: bool = False, has_person: bool = False) -> int:
     """节点积分价。按模型差异化：高级图片模型/视频不能再走统一 10 积分（会亏）。
 
     向后兼容：旧调用 tool_cost(tool) 不传 model → 默认图片模型（gpt-image-2，10 积分）。
+    has_person=True 的 edit_image 走 nano-banana（人物一致性），须按其真实成本单独计价，防倒挂。
     """
     from app.services import model_catalog
 
     if tool == "edit_image":
-        return model_catalog.EDIT_CREDITS
+        # 含真人编辑会路由到 person_edit_model（nano-banana，拿货更贵）→ 按该模型 edit 分价。
+        return model_catalog.edit_credits(settings.person_edit_model if has_person else None)
     if tool == "cutout_layer":
         # 纯本地 rembg 抠图层便宜(3)；但带护栏式补全(complete=True)时会跑最多 2 次 edit + 2 次
         # vision，成本≈一次 edit，须按 edit 计价，否则成本倒挂。
@@ -102,7 +107,8 @@ def node_cost(node) -> int:
         tool, args = node.get("tool", ""), (node.get("args") or {})
     else:
         tool, args = getattr(node, "tool", ""), (getattr(node, "args", {}) or {})
-    return tool_cost(tool, args.get("model"), args.get("seconds"), bool(args.get("complete")))
+    return tool_cost(tool, args.get("model"), args.get("seconds"), bool(args.get("complete")),
+                     has_person=bool(args.get("has_person")))
 
 
 def validate_production_config() -> list[str]:
