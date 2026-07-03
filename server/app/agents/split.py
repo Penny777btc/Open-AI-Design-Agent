@@ -29,6 +29,12 @@ from app.config import settings
 
 _rembg_session = None
 _human_session = None  # u2net_human_seg：人像专用分割（只抠人，不带桌子/餐盘/食物）
+# pymatting(alpha matting) 底层 Numba workqueue 线程层【不允许任何并发访问】——两个抠图
+# 同时进线程池会把整个进程干崩（实测：Numba 'Concurrent access has been detected' 后
+# terminating，后端死、任务永远卡 running）。全局锁强制串行；抠图每节点仅一次，代价可忽略。
+import threading as _threading
+
+_matting_lock = _threading.Lock()
 
 # 单张拆图的模型调用上限（§7.2）——operator 真实成本护栏
 MAX_ELEMENTS = 6   # 装饰元素数上限（识别 prompt 限 + _normalize_layout 截断）
@@ -169,13 +175,15 @@ def cut_person_soft(src: bytes, *, feather: float = 1.6, keep_only_largest: bool
 
     if _human_session is None:
         _human_session = new_session("u2net_human_seg")
-    # alpha_matting：柔化发丝/边缘，去白边（pymatting 已装）；失败自动回落普通 remove
-    try:
-        png = remove(src, session=_human_session, post_process_mask=True,
-                     alpha_matting=True, alpha_matting_foreground_threshold=240,
-                     alpha_matting_background_threshold=15, alpha_matting_erode_size=3)
-    except Exception:
-        png = remove(src, session=_human_session, post_process_mask=True)
+    # alpha_matting：柔化发丝/边缘，去白边（pymatting 已装）；失败自动回落普通 remove。
+    # 必须持 _matting_lock 串行：pymatting 的 Numba 线程层并发访问会干崩整个进程。
+    with _matting_lock:
+        try:
+            png = remove(src, session=_human_session, post_process_mask=True,
+                         alpha_matting=True, alpha_matting_foreground_threshold=240,
+                         alpha_matting_background_threshold=15, alpha_matting_erode_size=3)
+        except Exception:
+            png = remove(src, session=_human_session, post_process_mask=True)
 
     im = Image.open(io.BytesIO(png)).convert("RGBA")
     arr = np.array(im)
