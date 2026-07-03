@@ -218,13 +218,21 @@ class GptImageProvider:
         files = {"image": ("source.png", image, "image/png")}
         if mask:
             files["mask"] = ("mask.png", mask, "image/png")
-        form = {"model": self.model, "prompt": prompt}
+        # 必须显式传 size：否则站点按自身默认出图，把竖版源图（如 3:4 人像）重排到不匹配的画幅，
+        # 人物比例被压扁/拉长（用户实测「人变扁」的直接诱因）。与 generate 同一映射，同一 400 回退。
+        form = {"model": self.model, "prompt": prompt,
+                "size": self._SIZES.get(aspect_ratio, "1024x1024")}
         if transparent:
             form["background"] = "transparent"
         client = _img_client()  # 复用连接池
         resp = await _post_retry(
             client, f"{self.base_url}/v1/images/edits", data=form, files=files, headers=headers
         )
+        if resp.status_code == 400 and form["size"] != "1024x1024":
+            form["size"] = "1024x1024"  # 尺寸不被支持 → 回退方图（与 generate 一致）
+            resp = await _post_retry(
+                client, f"{self.base_url}/v1/images/edits", data=form, files=files, headers=headers
+            )
         resp.raise_for_status()
         return self._to_generated(resp.json())
 
