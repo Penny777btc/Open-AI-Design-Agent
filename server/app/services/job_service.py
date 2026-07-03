@@ -555,7 +555,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
     # why：约束式重生成让扩散模型每张重画产品 → logo/形态跨图漂移；锁主体后 6 张共用同一像素 → 一致。
     # 主体抠图由 plan 构造期一次性完成并落盘（subject_key），这里只读盘 + 生背景 + 合成（不再抠图）。
     if node.tool == "compose_subject":
-        from app.agents.split import place_subject_on_bg, resize_cover
+        from app.agents.split import place_subject_on_bg
         from app.providers.base import GeneratedImage
         from app.providers.openai_compat import _png_dims
 
@@ -578,11 +578,11 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         if bg is None:
             raise last_exc or RuntimeError("背景生成失败")
 
-        # 2) 主体尺寸对齐到背景画幅（cover 不变形），再按槽位 scale/anchor 合成同一主体
-        subj_fit = await loop.run_in_executor(
-            None, lambda: resize_cover(subject_png, bg.width, bg.height))
+        # 2) 直接把主体透明层交给 place_subject_on_bg（它自己裁透明边→按背景帧等比缩放→落位）。
+        # 切勿先 resize_cover 到背景画幅：cover 的中心裁切会把贴近源帧边缘的主体(出血构图/全身人物)
+        # 头脚裁掉——合成数据实测 3:4 源→1:1 背景时主体顶部被切 13%。
         composed = await loop.run_in_executor(None, lambda: place_subject_on_bg(
-            bg.data, subj_fit,
+            bg.data, subject_png,
             scale=float(node.args.get("subject_scale", 0.62)),
             anchor=node.args.get("subject_anchor", "center")))
         cw, ch = _png_dims(composed) or (bg.width, bg.height)
@@ -695,7 +695,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             # 优雅降级回 gpt-image edit(原 prompt)，绝不硬失败（下方 person_lock 置 False 走原路由）。
             try:
                 from app.agents.split import (
-                    cut_locked_subject, place_subject_on_bg, resize_cover,
+                    cut_locked_subject, place_subject_on_bg,
                     rewrite_bg_prompt_no_person,
                 )
                 from app.providers.base import GeneratedImage
@@ -722,11 +722,11 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                 if bg is None:
                     raise bg_exc or RuntimeError("背景生成失败")
 
-                # 人物尺寸对齐到背景画幅（cover 不变形）→ 封面场景人物占比大、居中偏下合成
-                person_fit = await loop.run_in_executor(
-                    None, lambda: resize_cover(person_png, bg.width, bg.height))
+                # 人物层直接交给 place_subject_on_bg（自带裁透明边+按背景帧等比缩放）。
+                # 切勿先 resize_cover：cover 中心裁切会把贴近源帧上下沿的人物头/脚裁掉
+                # （合成数据实测 3:4 人像→1:1 背景时头顶被切）。封面场景人物占比大、居中偏下。
                 composed = await loop.run_in_executor(None, lambda: place_subject_on_bg(
-                    bg.data, person_fit, scale=0.78, anchor="center-lower"))
+                    bg.data, person_png, scale=0.78, anchor="center-lower"))
                 cw, ch = _png_dims(composed) or (bg.width, bg.height)
                 image = GeneratedImage(data=composed, mime="image/png", width=cw, height=ch,
                                        model=bg.model)
@@ -743,7 +743,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             and person_mode == "fuse"
             and settings.provider_mode == "sub2api"  # mock 下路由无意义（占位图），不改动既有 mock 流程
         )
-        edit_model = None  # 供计价：本节点 edit 实际走的模型（None=默认 EDIT_CREDITS）
+        edit_model = None  # 记录本节点 edit 实际走的模型（预留给日志/资产标注；计价按 plan args 预扣）
         edit_prompt = prompt
         if use_person:
             # 身份保持双保险：与 planner 的身份锁互补，在指令最前置再压一句硬约束。
