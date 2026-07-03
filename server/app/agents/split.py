@@ -28,9 +28,66 @@ from app.agents.planner import Plan, PlanNode
 from app.config import settings
 
 _rembg_session = None
+_human_session = None  # u2net_human_seg：人像专用分割（只抠人，不带桌子/餐盘/食物）
 
 # 单张拆图的模型调用上限（§7.2）——operator 真实成本护栏
 MAX_ELEMENTS = 6   # 装饰元素数上限（识别 prompt 限 + _normalize_layout 截断）
+
+
+def cut_person_soft(src: bytes, *, feather: float = 1.6, keep_only_largest: bool = True) -> bytes:
+    """人像专用抠图 → 柔边透明 PNG（解决「拉伸」+「强抠图感」两个病根）。
+
+    与 cutout_subject（isnet 通用前景 + 硬二值化）的关键差异：
+    - 用 **u2net_human_seg** 人像专用模型：只分割「人」，不会把桌子/餐盘/纸杯当前景一起带走。
+      → 主体框里只有人 → 后续等比缩放/落位不再被桌子撑歪 = 根治「拉伸」。
+    - 用 **alpha matting** 出柔和的发丝/边缘（而非产品用的硬阈值二值化）+ 轻高斯羽化边缘，
+      叠背景时没有「贴纸硬边」= 大幅削弱「抠图感」。
+    - keep_only_largest：只留最大连通块（人），丢掉零星误检（远处第二个人/桌上反光碎块）。
+
+    纯本地（rembg + PIL + scipy），无外部调用；异常/抠空回退整帧透明（调用方判空降级）。
+    """
+    global _human_session
+
+    import numpy as np
+    from PIL import Image, ImageFilter
+    from rembg import new_session, remove
+
+    if _human_session is None:
+        _human_session = new_session("u2net_human_seg")
+    # alpha_matting：柔化发丝/边缘，去白边（pymatting 已装）；失败自动回落普通 remove
+    try:
+        png = remove(src, session=_human_session, post_process_mask=True,
+                     alpha_matting=True, alpha_matting_foreground_threshold=240,
+                     alpha_matting_background_threshold=15, alpha_matting_erode_size=3)
+    except Exception:
+        png = remove(src, session=_human_session, post_process_mask=True)
+
+    im = Image.open(io.BytesIO(png)).convert("RGBA")
+    arr = np.array(im)
+    a = arr[:, :, 3]
+
+    if keep_only_largest:
+        # 只保留最大连通块（人本体）——u2net_human_seg 偶尔会漏检出零星小块，一并清掉
+        try:
+            from scipy import ndimage
+            mask = a > 40
+            lbl, n = ndimage.label(mask)
+            if n > 1:
+                sizes = ndimage.sum(mask, lbl, range(1, n + 1))
+                keep = int(np.argmax(sizes)) + 1
+                arr[lbl != keep, 3] = 0
+                a = arr[:, :, 3]
+        except Exception:
+            pass
+
+    # 轻羽化：只柔化 alpha 通道边缘（RGB 不动），消除「贴纸硬边」，又不至于糊成半透明
+    if feather and feather > 0:
+        alpha_im = Image.fromarray(a, "L").filter(ImageFilter.GaussianBlur(feather))
+        arr[:, :, 3] = np.array(alpha_im)
+
+    out = io.BytesIO()
+    Image.fromarray(arr).save(out, "PNG")
+    return out.getvalue()
 
 
 def cutout_subject(src: bytes, *, lift_lo: int = 25, lift_scale: int = 4) -> bytes:
@@ -444,6 +501,32 @@ def _blank_frame(W: int, H: int) -> bytes:
     out = io.BytesIO()
     Image.new("RGBA", (max(1, W), max(1, H)), (0, 0, 0, 0)).save(out, "PNG")
     return out.getvalue()
+
+
+async def cut_locked_person(src: bytes) -> bytes | None:
+    """锁人物前置：把含人物的图抠成「只有人、柔边」的人物透明层，供锁人物合成叠背景。
+
+    与 cut_locked_subject（产品版）分开，因为病根不同：
+    - 用 cut_person_soft（u2net_human_seg 人像模型）→ 只抠人，不带桌子/餐盘 → 治「拉伸」。
+    - 柔边 alpha matting + 羽化 → 治「强抠图感」。
+    - 不做 complete_object（产品补全）：人被前景挡住不该 AI 脑补身体，保留原样更安全。
+    - dislocation_guard 判空：抠空/几乎全透明 → 返回 None（调用方降级 gpt-image 重绘）。
+
+    纯本地、同步 CPU 密集 → 调用方应丢线程池执行。
+    """
+    if not src:
+        return None
+    try:
+        cut = cut_person_soft(src)
+        # 判空：人像抠图不做 bbox 错位校验（人可在画面任意位置），只查是否几乎全透明
+        import numpy as np
+        from PIL import Image
+        a = np.array(Image.open(io.BytesIO(cut)).convert("RGBA"))[:, :, 3]
+        if int((a > 40).sum()) < (a.size * 0.01):  # 前景不足 1% → 视为抠空
+            return None
+        return cut
+    except Exception:
+        return None  # 任何异常 → 降级重绘，绝不硬失败
 
 
 async def cut_locked_subject(src: bytes) -> bytes | None:

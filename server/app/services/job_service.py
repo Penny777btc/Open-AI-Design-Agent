@@ -681,15 +681,17 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         #   | 带 mask / 无 has_person                           | gpt-image（不变）           |
         # why：默认「锁人物合成」——本地抠出人物原始像素零变形 + AI 只生成背景/排版 + 合成，
         # 彻底规避扩散模型整图重绘造成的人脸/身材变形；仅当用户明确要把人融进画面/风格化时才 fuse。
-        # 用户实测反转默认：抠贴(lock)在复杂场景抠不干净(人+桌面食物整块带入、灰桌板穿帮)、
-        # 拼贴感重，效果不如重绘 → 默认 fuse(重绘+身份锁)，lock 仅当用户明确要"原图抠贴/拼贴风"。
-        person_mode = str(node.args.get("person_mode", "fuse")).lower()
+        # 默认锁人物合成(lock)：已换人像专用抠图(u2net_human_seg 只抠人不带桌子)+柔边合成，
+        # 治好了「拉伸」(桌子不再撑歪主体)和「强抠图感」(柔边无贴纸感)。且 nano key 不可用时
+        # fuse 会降级 gpt-image 整图重绘→人脸变形，故 lock 是当前最可靠的零变形默认。
+        # 仅当用户明确要把人物风格化/画成插画时 planner 才置 fuse。
+        person_mode = str(node.args.get("person_mode", "lock")).lower()
         has_person = bool(node.args.get("has_person"))
         person_lock = (
             node.tool == "edit_image"
             and has_person
             and mask is None
-            and person_mode == "lock"  # 仅显式 lock 才走抠贴合成
+            and person_mode != "fuse"  # 默认(lock)及非 fuse 都走锁人物合成
             and settings.provider_mode == "sub2api"
         )
         if person_lock:
@@ -697,13 +699,14 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             # 优雅降级回 gpt-image edit(原 prompt)，绝不硬失败（下方 person_lock 置 False 走原路由）。
             try:
                 from app.agents.split import (
-                    cut_locked_subject, place_subject_on_bg,
+                    cut_locked_person, place_subject_on_bg,
                     rewrite_bg_prompt_no_person,
                 )
                 from app.providers.base import GeneratedImage
                 from app.providers.openai_compat import _png_dims
 
-                person_png = await cut_locked_subject(source)  # 抠人物透明层（零变形原始像素）
+                # 人像专用抠图（u2net_human_seg 只抠人不带桌子 + 柔边）→ 治拉伸+抠图感。
+                person_png = await cut_locked_person(source)  # 抠空/异常返回 None → 降级 gpt-image
                 if not person_png:
                     raise RuntimeError("人物抠图失败")  # → 降级 gpt-image edit
                 # 人物层沿用 masks/ 落盘 pattern（与套图锁主体一致：可追溯、可复用）
