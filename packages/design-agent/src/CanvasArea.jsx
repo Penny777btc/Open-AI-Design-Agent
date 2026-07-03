@@ -1868,6 +1868,12 @@ const CanvasArea = forwardRef(
       const commitImage = (loadedImg) => {
         let finalWidth = width;
         let finalHeight = height;
+        // 只给了一边 → 另一边按图片自身纵横比推导（绝不拉伸变形）。
+        // placeNextToSource 只传宽度就是靠这里保持新图比例——修「编辑结果被塞进源图框显示拉宽」。
+        if (loadedImg.width && loadedImg.height) {
+          if (finalWidth && !finalHeight) finalHeight = (loadedImg.height / loadedImg.width) * finalWidth;
+          else if (!finalWidth && finalHeight) finalWidth = (loadedImg.width / loadedImg.height) * finalHeight;
+        }
         if (!finalWidth && !finalHeight && loadedImg.width) {
           const maxDim = 400;
           if (loadedImg.width > loadedImg.height) {
@@ -2286,7 +2292,10 @@ const CanvasArea = forwardRef(
       } else if (newKind === "audio") {
         addAudio(newUrl, x, y, undefined, newAssetLabel);
       } else {
-        addImage(newUrl, x, y, sw, sh, undefined, newAssetLabel);
+        // 只传宽度（与源图同宽对齐），高度由 commitImage 按新图自身纵横比推导。
+        // 绝不能把源图框的 sw×sh 硬套给新图：源图与生成结果画幅常不同（如 0.716 vs 0.667），
+        // 硬套=显示层拉伸——此前「人物看着变扁」的隐形根源之一。
+        addImage(newUrl, x, y, sw, undefined, undefined, newAssetLabel);
       }
     };
 

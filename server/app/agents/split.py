@@ -80,13 +80,16 @@ def pad_to_aspect(src: bytes, ar_label: str) -> bytes:
         W, H = max(w, int(round(h * target))), h
     else:                # 源更宽 → 往上下垫高
         W, H = w, max(h, int(round(w / target)))
-    # 背景：cover 放大源图铺满目标画布 + 高糊（经典 blur-letterbox）
-    scale = max(W / w, H / h)
-    bg = im.resize((int(w * scale) + 1, int(h * scale) + 1), Image.LANCZOS)
-    bg = bg.crop(((bg.width - W) // 2, (bg.height - H) // 2,
-                  (bg.width - W) // 2 + W, (bg.height - H) // 2 + H))
-    bg = bg.filter(ImageFilter.GaussianBlur(40))
-    bg.paste(im, ((W - w) // 2, (H - h) // 2))  # 原图原像素居中，零缩放零变形
+    # 垫边填充用「边缘延展 + 高糊」而非 cover 放大自身：cover 高糊里含放大的人影/物影，
+    # 扩图/重绘时模型会把幽灵人影「还原」成第二个人（用户实测出现人物重叠）。
+    # 边缘行/列外扩只带颜色氛围、不带任何形体先验。
+    import numpy as np
+
+    arr = np.array(im)
+    px, py = (W - w) // 2, (H - h) // 2
+    padded = np.pad(arr, ((py, H - h - py), (px, W - w - px), (0, 0)), mode="edge")
+    bg = Image.fromarray(padded).filter(ImageFilter.GaussianBlur(25))
+    bg.paste(im, (px, py))  # 原图原像素居中，零缩放零变形
     out = io.BytesIO()
     bg.save(out, "PNG")
     return out.getvalue()
@@ -125,6 +128,9 @@ async def outpaint_person_locked(provider, prompt: str, src: bytes, ar_label: st
 
     directive = (
         "The person in the image is FINAL and PROTECTED — do not repaint, resize or move them. "
+        "Do NOT add, paint or render ANY other person, human figure, silhouette or body part — "
+        "exactly ONE person must appear in the final image. If the person is holding an object "
+        "(a plate, cup, product), redraw that object cleanly and completely in their hands. "
         "Redesign EVERYTHING ELSE around the person (background, scenery, decorations, text layout) "
         "to fulfill this brief, blending naturally with the person's edges and lighting: "
     )
