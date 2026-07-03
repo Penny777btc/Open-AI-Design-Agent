@@ -782,13 +782,25 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                             provider_p = get_person_edit_provider()
                             image = await provider_p.edit(edit_prompt, edit_source, edit_ar)
                             edit_model = settings.person_edit_model
-                        except Exception as exc:  # nano 失败 → 本次及之后都回落 gpt-image
+                        except Exception as exc:  # nano 失败 → 本次及之后都回落 gpt 系
                             last_exc = exc
                             person_failed = True
-                            logger.warning("nano-banana edit 失败，降级 gpt-image：%s", str(exc)[:160])
-                            image = await provider.edit(prompt, edit_source, edit_ar, mask=mask)
+                            logger.warning("nano-banana edit 失败，降级扩图锁人：%s", str(exc)[:160])
+                    if image is None and use_person:
+                        # gpt 系人物路径首选「扩图锁人」：人物区蒙版保护+原像素回贴，
+                        # 模型只画人物以外（拉伸/变形物理不可能）；失败才裸整图重绘（最后兜底）。
+                        try:
+                            from app.agents.split import outpaint_person_locked
+                            from app.providers.base import GeneratedImage
+                            data, w, h, m = await outpaint_person_locked(provider, prompt, source, edit_ar)
+                            image = GeneratedImage(data=data, mime="image/png", width=w, height=h, model=m)
                             edit_model = None
-                    else:
+                        except Exception as exc:
+                            last_exc = exc
+                            logger.warning("扩图锁人失败，降级整图重绘：%s", str(exc)[:160])
+                            image = await provider.edit(edit_prompt, edit_source, edit_ar, mask=mask)
+                            edit_model = None
+                    elif image is None:
                         image = await provider.edit(prompt, edit_source, edit_ar, mask=mask)
                 else:
                     image = await provider.generate(prompt, node.args.get("aspect_ratio", "1:1"))

@@ -92,6 +92,57 @@ def pad_to_aspect(src: bytes, ar_label: str) -> bytes:
     return out.getvalue()
 
 
+async def outpaint_person_locked(provider, prompt: str, src: bytes, ar_label: str):
+    """扩图锁人：人物区域像素级锁定，模型只重绘人物以外的一切（纯 gpt-image 实现）。
+
+    与「整图重绘」的本质区别：重绘时人物是模型笔下之物（画宽画扁全凭它）；这里人物是
+    **蒙版保护区**——模型贴着人物真实轮廓画海报（有光影/构图上下文，不是硬贴），完成后
+    再把原始人物像素等比回贴（双保险：即使模型碰了保留区也被原像素盖回）。
+    人物 100% 原像素原比例 → 拉伸/变形物理上不可能发生；融合感来自模型围绕轮廓作画。
+
+    流程：pad_to_aspect(原像素垫到画布比例) → cut_person_soft(人物轮廓) → 蒙版(人物=保留,
+    其余=重绘) → provider.edit 带蒙版 → 原人物层等比回贴（垫图与输出同比例=均匀缩放零变形）。
+    返回 (png_bytes, w, h, model)；人物抠空/任一环节失败则 raise（调用方降级整图重绘）。
+    """
+    import asyncio
+
+    import numpy as np
+    from PIL import Image
+
+    loop = asyncio.get_running_loop()
+    padded = await loop.run_in_executor(None, lambda: pad_to_aspect(src, ar_label))
+    person = await loop.run_in_executor(None, lambda: cut_person_soft(padded))
+    pa = np.array(Image.open(io.BytesIO(person)).convert("RGBA"))[:, :, 3]
+    if int((pa > 40).sum()) < pa.size * 0.01:
+        raise RuntimeError("人物抠图为空（<1% 前景）")
+
+    # 蒙版语义（与拆图/补全一致）：alpha=0 的区域=允许重绘；人物区 alpha=255=锁定保留。
+    pim = Image.open(io.BytesIO(padded)).convert("RGBA")
+    marr = np.array(pim)
+    marr[:, :, 3] = np.where(pa > 128, 255, 0).astype("uint8")
+    mbuf = io.BytesIO()
+    Image.fromarray(marr).save(mbuf, "PNG")
+
+    directive = (
+        "The person in the image is FINAL and PROTECTED — do not repaint, resize or move them. "
+        "Redesign EVERYTHING ELSE around the person (background, scenery, decorations, text layout) "
+        "to fulfill this brief, blending naturally with the person's edges and lighting: "
+    )
+    out = await provider.edit(directive + prompt, padded, ar_label, mask=mbuf.getvalue())
+
+    def _repaste():
+        o = Image.open(io.BytesIO(out.data)).convert("RGBA")
+        # 垫图与输出画幅同比例 → resize 是均匀缩放，人物比例严格不变
+        pl = Image.open(io.BytesIO(person)).convert("RGBA").resize(o.size, Image.LANCZOS)
+        o.alpha_composite(pl)
+        b = io.BytesIO()
+        o.convert("RGB").save(b, "PNG")
+        return b.getvalue(), o.size
+
+    data, (w, h) = await loop.run_in_executor(None, _repaste)
+    return data, w, h, out.model
+
+
 def cut_person_soft(src: bytes, *, feather: float = 1.6, keep_only_largest: bool = True) -> bytes:
     """人像专用抠图 → 柔边透明 PNG（解决「拉伸」+「强抠图感」两个病根）。
 
