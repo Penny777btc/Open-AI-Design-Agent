@@ -681,17 +681,16 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         #   | 带 mask / 无 has_person                           | gpt-image（不变）           |
         # why：默认「锁人物合成」——本地抠出人物原始像素零变形 + AI 只生成背景/排版 + 合成，
         # 彻底规避扩散模型整图重绘造成的人脸/身材变形；仅当用户明确要把人融进画面/风格化时才 fuse。
-        # 默认锁人物合成(lock)：已换人像专用抠图(u2net_human_seg 只抠人不带桌子)+柔边合成，
-        # 治好了「拉伸」(桌子不再撑歪主体)和「强抠图感」(柔边无贴纸感)。且 nano key 不可用时
-        # fuse 会降级 gpt-image 整图重绘→人脸变形，故 lock 是当前最可靠的零变形默认。
-        # 仅当用户明确要把人物风格化/画成插画时 planner 才置 fuse。
-        person_mode = str(node.args.get("person_mode", "lock")).lower()
+        # 默认整图重绘(fuse)：用户实测重绘出图人物比例/融合远好于锁人物合成——合成的贴图观感生硬、
+        # 占比难控(盖标题/裁断)，重绘则把人自然嵌入海报排版。身份锁 prompt 守住人脸一致。
+        # lock 仅当用户明确要「原图抠贴/拼贴风」时用（人像专用抠图+柔边仍保留，供该场景）。
+        person_mode = str(node.args.get("person_mode", "fuse")).lower()
         has_person = bool(node.args.get("has_person"))
         person_lock = (
             node.tool == "edit_image"
             and has_person
             and mask is None
-            and person_mode != "fuse"  # 默认(lock)及非 fuse 都走锁人物合成
+            and person_mode == "lock"  # 仅显式 lock 才走抠贴合成
             and settings.provider_mode == "sub2api"
         )
         if person_lock:

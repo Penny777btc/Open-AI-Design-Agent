@@ -75,7 +75,7 @@ class Settings(BaseSettings):
 
 def tool_cost(tool: str, model: str | None = None, seconds: float | None = None,
               complete: bool = False, has_person: bool = False,
-              person_mode: str = "lock") -> int:
+              person_mode: str = "fuse") -> int:
     """节点积分价。按模型差异化：高级图片模型/视频不能再走统一 10 积分（会亏）。
 
     向后兼容：旧调用 tool_cost(tool) 不传 model → 默认图片模型（gpt-image-2，10 积分）。
@@ -118,7 +118,7 @@ def node_cost(node) -> int:
         tool, args = getattr(node, "tool", ""), (getattr(node, "args", {}) or {})
     return tool_cost(tool, args.get("model"), args.get("seconds"), bool(args.get("complete")),
                      has_person=bool(args.get("has_person")),
-                     person_mode=str(args.get("person_mode", "lock")))  # 默认与 planner/路由一致：lock 合成
+                     person_mode=str(args.get("person_mode", "fuse")))  # 默认与 planner/路由一致：fuse 重绘
 
 
 def validate_production_config() -> list[str]:
