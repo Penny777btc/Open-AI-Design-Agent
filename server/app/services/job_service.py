@@ -749,12 +749,20 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         )
         edit_model = None  # 记录本节点 edit 实际走的模型（预留给日志/资产标注；计价按 plan args 预扣）
         edit_prompt = prompt
-        if use_person:
-            # 身份保持双保险：与 planner 的身份锁互补，在指令最前置再压一句硬约束。
-            edit_prompt = (
-                "CRITICAL: preserve the person's face, facial features, hairstyle, skin tone and body "
-                "proportions EXACTLY as in the source image — do NOT redraw, restyle or alter the person. "
-            ) + prompt
+        if has_person and node.tool == "edit_image":
+            # 【执行层人物防变形注入】只要节点标了 has_person，一律在指令最前置压上硬约束——
+            # 不依赖 planner 是否记得写身份锁（它被 system prompt 要求但偶尔会漏），这里是确定性兜底。
+            # 覆盖所有人物路径：nano / 扩图锁人的裸重绘兜底 / 非 fuse 的常规 edit。
+            # planner 已写过同义句时跳过（省 token，避免指令重复稀释权重）。
+            if "preserve the person" not in prompt.lower():
+                edit_prompt = (
+                    "CRITICAL: preserve the person's face, facial features, hairstyle, skin tone and body "
+                    "proportions EXACTLY as in the source image — do NOT redraw, restyle or alter the person. "
+                    "Do NOT widen, flatten, round, squash or stretch the face or body; keep the exact "
+                    "head-to-body ratio and natural, undistorted human proportions. "
+                ) + prompt
+            else:
+                edit_prompt = prompt
 
         # ── 抗拉伸（只靠 gpt-image 就能治）：源图/输出画布比例对齐 ──
         # 形变量 = 源图比例与输出画布比例之差（模型把源图重排进不同比例画布时整体压/拉最省力）。
@@ -801,7 +809,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                             image = await provider.edit(edit_prompt, edit_source, edit_ar, mask=mask)
                             edit_model = None
                     elif image is None:
-                        image = await provider.edit(prompt, edit_source, edit_ar, mask=mask)
+                        image = await provider.edit(edit_prompt, edit_source, edit_ar, mask=mask)
                 else:
                     image = await provider.generate(prompt, node.args.get("aspect_ratio", "1:1"))
                 break
