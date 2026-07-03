@@ -34,6 +34,64 @@ _human_session = None  # u2net_human_seg：人像专用分割（只抠人，不�
 MAX_ELEMENTS = 6   # 装饰元素数上限（识别 prompt 限 + _normalize_layout 截断）
 
 
+# gpt-image edits 实际支持的三档输出画布（比例值 → 传给接口的 label）。
+# 用于：aspect 缺省时按源图就近推断 + pad_to_aspect 的目标比例。
+EDIT_AR_CHOICES = [("1:1", 1.0), ("16:9", 1.5), ("9:16", 2 / 3)]
+_AR_VALUE = {"1:1": 1.0, "4:3": 1.5, "16:9": 1.5, "3:4": 2 / 3, "9:16": 2 / 3, "2:3": 2 / 3}
+
+
+def pick_edit_ar(requested: str | None, src: bytes | None) -> str:
+    """选 edit 输出画布：显式给了就映射到最近支持档；没给就按源图比例就近推断。
+
+    why：gpt-image edits 的输出画布与源图比例不一致时，模型会把整图（含人物）压/拉去
+    适配画布——「人变扁」的形变量 = 比例差。缺省一律 1:1 方图是最坏解（竖版人像压扁最狠），
+    按源图就近选档能把比例差压到最小。
+    """
+    if requested and requested in _AR_VALUE:
+        target = _AR_VALUE[requested]
+    elif src:
+        try:
+            from PIL import Image
+            with Image.open(io.BytesIO(src)) as im:
+                target = im.width / max(im.height, 1)
+        except Exception:
+            return "1:1"
+    else:
+        return "1:1"
+    return min(EDIT_AR_CHOICES, key=lambda c: abs(c[1] - target))[0]
+
+
+def pad_to_aspect(src: bytes, ar_label: str) -> bytes:
+    """把源图**无变形**地垫成目标画布比例（blur-letterbox），供 edit 输入。
+
+    原图像素原样居中放置、一像素不缩放；短出来的边用「自身 cover 放大 + 高糊」填充
+    （比纯色垫自然，模型会把这些区域理解成可重绘的背景，正好用来排标题/贴纸）。
+    输入输出比例一致后，模型没有任何拉伸源图内容（尤其人物）的动机——治「人变扁」的根。
+    比例差 < 2% 时原样返回（不做无谓的重编码）。纯 PIL、纯本地。
+    """
+    from PIL import Image, ImageFilter
+
+    target = _AR_VALUE.get(ar_label, 1.0)
+    im = Image.open(io.BytesIO(src)).convert("RGB")
+    w, h = im.size
+    if h < 1 or abs(w / h - target) < 0.02:
+        return src
+    if w / h < target:   # 源更窄 → 往两侧垫宽
+        W, H = max(w, int(round(h * target))), h
+    else:                # 源更宽 → 往上下垫高
+        W, H = w, max(h, int(round(w / target)))
+    # 背景：cover 放大源图铺满目标画布 + 高糊（经典 blur-letterbox）
+    scale = max(W / w, H / h)
+    bg = im.resize((int(w * scale) + 1, int(h * scale) + 1), Image.LANCZOS)
+    bg = bg.crop(((bg.width - W) // 2, (bg.height - H) // 2,
+                  (bg.width - W) // 2 + W, (bg.height - H) // 2 + H))
+    bg = bg.filter(ImageFilter.GaussianBlur(40))
+    bg.paste(im, ((W - w) // 2, (H - h) // 2))  # 原图原像素居中，零缩放零变形
+    out = io.BytesIO()
+    bg.save(out, "PNG")
+    return out.getvalue()
+
+
 def cut_person_soft(src: bytes, *, feather: float = 1.6, keep_only_largest: bool = True) -> bytes:
     """人像专用抠图 → 柔边透明 PNG（解决「拉伸」+「强抠图感」两个病根）。
 

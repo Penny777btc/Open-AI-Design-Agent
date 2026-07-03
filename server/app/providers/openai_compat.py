@@ -184,7 +184,9 @@ class GptImageProvider:
     M0 实测：返回 {"data": [{"b64_json": ...}]}，样本见 scripts/samples/。
     """
 
-    _SIZES = {"1:1": "1024x1024", "16:9": "1536x1024", "9:16": "1024x1536", "4:3": "1536x1024"}
+    # gpt-image 只有三档画布；3:4/2:3 竖版就近映射到 1024x1536（0.667），比落 1:1 方图形变小得多
+    _SIZES = {"1:1": "1024x1024", "16:9": "1536x1024", "9:16": "1024x1536", "4:3": "1536x1024",
+              "3:4": "1024x1536", "2:3": "1024x1536"}
 
     def __init__(self, model: str | None = None):
         self.base_url = settings.sub2api_base_url.rstrip("/")

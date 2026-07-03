@@ -756,6 +756,21 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                 "proportions EXACTLY as in the source image — do NOT redraw, restyle or alter the person. "
             ) + prompt
 
+        # ── 抗拉伸（只靠 gpt-image 就能治）：源图/输出画布比例对齐 ──
+        # 形变量 = 源图比例与输出画布比例之差（模型把源图重排进不同比例画布时整体压/拉最省力）。
+        # 两步归零：①画布档按「显式 aspect → 就近映射；缺省 → 按源图比例就近推断」（planner 的
+        # edit 节点常不带 aspect，旧默认 1:1 方图是竖版人像压扁最狠的选择）；②mask 为空的 edit
+        # 把源图 blur-letterbox 垫成该画布比例（原像素零缩放）→ 输入输出同比例，模型没有拉伸动机。
+        # 带 mask 的编辑（拆图背景/局部重绘）不垫（mask 与源图坐标必须逐像素对齐），只做①。
+        edit_source = source
+        edit_ar = node.args.get("aspect_ratio", "1:1")
+        if node.tool == "edit_image" and source:
+            from app.agents.split import pad_to_aspect, pick_edit_ar
+            edit_ar = pick_edit_ar(node.args.get("aspect_ratio"), source)
+            if mask is None:
+                edit_source = await loop.run_in_executor(
+                    None, lambda: pad_to_aspect(source, edit_ar))
+
         last_exc = None
         person_failed = False  # nano 抛错/解析失败 → 降级 gpt-image 重试一次（宁可变形也别整节点失败）
         # image 已由「锁人物合成」产出时跳过重试循环；否则按路由走 nano/gpt/generate。
@@ -765,17 +780,16 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                     if use_person and not person_failed:
                         try:
                             provider_p = get_person_edit_provider()
-                            image = await provider_p.edit(
-                                edit_prompt, source, node.args.get("aspect_ratio", "1:1"))
+                            image = await provider_p.edit(edit_prompt, edit_source, edit_ar)
                             edit_model = settings.person_edit_model
                         except Exception as exc:  # nano 失败 → 本次及之后都回落 gpt-image
                             last_exc = exc
                             person_failed = True
                             logger.warning("nano-banana edit 失败，降级 gpt-image：%s", str(exc)[:160])
-                            image = await provider.edit(prompt, source, node.args.get("aspect_ratio", "1:1"), mask=mask)
+                            image = await provider.edit(prompt, edit_source, edit_ar, mask=mask)
                             edit_model = None
                     else:
-                        image = await provider.edit(prompt, source, node.args.get("aspect_ratio", "1:1"), mask=mask)
+                        image = await provider.edit(prompt, edit_source, edit_ar, mask=mask)
                 else:
                     image = await provider.generate(prompt, node.args.get("aspect_ratio", "1:1"))
                 break

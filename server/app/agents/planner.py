@@ -19,7 +19,7 @@ SYSTEM_PROMPT = """你是一个 AI 设计 Agent 的规划器，专长电商设�
 
 可用工具：
 1. generate_image —— 全新生成。args: {"prompt": "<英文提示词，具体、含风格/构图/配色/文字内容>", "aspect_ratio": "1:1|16:9|9:16|4:3"}
-2. edit_image —— 修改已有图片（改色调/换背景/加文字/局部调整/风格迁移）。args: {"prompt": "<英文编辑指令，描述要改什么、保留什么>", "source_asset": "asset_N"}
+2. edit_image —— 修改已有图片（改色调/换背景/加文字/局部调整/风格迁移）。args: {"prompt": "<英文编辑指令，描述要改什么、保留什么>", "source_asset": "asset_N", "aspect_ratio": "1:1|3:4|9:16|4:3|16:9"}。aspect_ratio 按成品用途选：小红书封面/海报 3:4 或 9:16、电商主图 1:1、横版 banner 16:9；不确定时省略（系统会按源图比例就近选，避免形变）
 3. generate_video —— 生成短视频（电商短视频/商品展示）。args: {"prompt": "<英文，描述画面/运镜/时长内容>", "seconds": <时长秒数，3-10>, "model": "seedance-2-480p|seedance-2-720p", "resolution": "480p|720p"}。仅当用户明确要「视频/短视频/动态」时使用；视频按秒计费，默认 5 秒、480p
 
 输出格式：
