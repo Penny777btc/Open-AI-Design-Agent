@@ -681,13 +681,15 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         #   | 带 mask / 无 has_person                           | gpt-image（不变）           |
         # why：默认「锁人物合成」——本地抠出人物原始像素零变形 + AI 只生成背景/排版 + 合成，
         # 彻底规避扩散模型整图重绘造成的人脸/身材变形；仅当用户明确要把人融进画面/风格化时才 fuse。
-        person_mode = str(node.args.get("person_mode", "lock")).lower()
+        # 用户实测反转默认：抠贴(lock)在复杂场景抠不干净(人+桌面食物整块带入、灰桌板穿帮)、
+        # 拼贴感重，效果不如重绘 → 默认 fuse(重绘+身份锁)，lock 仅当用户明确要"原图抠贴/拼贴风"。
+        person_mode = str(node.args.get("person_mode", "fuse")).lower()
         has_person = bool(node.args.get("has_person"))
         person_lock = (
             node.tool == "edit_image"
             and has_person
             and mask is None
-            and person_mode != "fuse"
+            and person_mode == "lock"  # 仅显式 lock 才走抠贴合成
             and settings.provider_mode == "sub2api"
         )
         if person_lock:
