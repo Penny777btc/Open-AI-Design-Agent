@@ -101,6 +101,54 @@ def pad_to_aspect(src: bytes, ar_label: str) -> bytes:
     return out.getvalue()
 
 
+def _held_objects_alpha(padded_png: bytes, person_a) -> "object":
+    """纯本地找「人物手里拿着的东西」（盘子/杯子/产品）：isnet 通用前景 − 人物 = 候选物件，
+    保留满足两个几何条件的连通块：①主体落在人物躯干带（人物 bbox 高度 15%~80%、横向外扩 20%
+    ——手持物必在这个范围）②面积 < 人物的 35%（盘子量级；桌面/背景大块被排除）。
+
+    why：人像分割只保护「人」，手里的盘子被切半，回贴后是撕纸状残片（用户实测）。把手持物
+    并入保护区，人+物作为一个整体保留原像素。无 vision 依赖（gemini key 不可用也能工作）；
+    任何异常返回全零 alpha（退化为只保护人，不会更差）。
+    """
+    import numpy as np
+
+    try:
+        from PIL import Image
+        from scipy import ndimage
+
+        fg = cutout_subject(padded_png)  # isnet 通用前景（人+手持物+桌面…）
+        fa = np.array(Image.open(io.BytesIO(fg)).convert("RGBA"))[:, :, 3]
+        pa = person_a > 40
+        if not pa.any():
+            return np.zeros_like(fa)
+        cand = (fa > 40) & (~pa)
+        ys, xs = np.where(pa)
+        y0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()
+        ph, pw = y1 - y0, x1 - x0
+        person_area = int(pa.sum())
+        band = np.zeros_like(cand)
+        by0, by1 = int(y0 + 0.15 * ph), int(y0 + 0.80 * ph)
+        bx0, bx1 = max(0, int(x0 - 0.20 * pw)), min(cand.shape[1], int(x1 + 0.20 * pw))
+        band[by0:by1, bx0:bx1] = True
+
+        out = np.zeros_like(fa)
+        lbl, n = ndimage.label(cand)
+        for i in range(1, n + 1):
+            comp = lbl == i
+            area = int(comp.sum())
+            if area < 400 or area > 0.35 * person_area:
+                continue  # 噪点 / 桌面级大块 → 不是手持物
+            if (comp & band).sum() / area < 0.6:
+                continue  # 主体不在躯干带 → 不是手里的东西
+            out[comp] = 255
+        return out
+    except Exception:
+        import numpy as np
+        from PIL import Image
+        a = np.array(Image.open(io.BytesIO(padded_png)).convert("RGBA"))[:, :, 3]
+        return np.zeros_like(a)
+
+
 async def outpaint_person_locked(provider, prompt: str, src: bytes, ar_label: str):
     """扩图锁人：人物区域像素级锁定，模型只重绘人物以外的一切（纯 gpt-image 实现）。
 
@@ -124,6 +172,13 @@ async def outpaint_person_locked(provider, prompt: str, src: bytes, ar_label: st
     pa = np.array(Image.open(io.BytesIO(person)).convert("RGBA"))[:, :, 3]
     if int((pa > 40).sum()) < pa.size * 0.01:
         raise RuntimeError("人物抠图为空（<1% 前景）")
+
+    # 人 ∪ 手持物 = 完整保护区（否则手里的盘子被切半，回贴成撕纸残片）
+    held = await loop.run_in_executor(None, lambda: _held_objects_alpha(padded, pa))
+    if held.any():
+        from PIL import ImageFilter as _IF
+        held_soft = np.array(Image.fromarray(held, "L").filter(_IF.GaussianBlur(1.6)))
+        pa = np.maximum(pa, held_soft)
 
     # 【防重影关键】发给模型的输入图先把人物 inpaint 抹掉——gpt-image 的蒙版是「软遵守」，
     # 输入里有人它就会照着再画一个（姿势略偏），与回贴的原像素叠成双人重影（用户实测）。
@@ -152,14 +207,36 @@ async def outpaint_person_locked(provider, prompt: str, src: bytes, ar_label: st
         "or body part anywhere in the image — the final image must contain ZERO painted humans. "
         "Design the layout AROUND the reserved silhouette: keep titles, text and key decorations "
         "clear of it, and make the background lighting/scene coherent so a person composited there "
-        "will blend naturally. Brief: "
+        "will blend naturally. Paint foreground props (a table edge, plated food, flowers or "
+        "products) directly below and up to the bottom boundary of the reserved area, so the "
+        "composited person will look naturally anchored in the scene instead of floating. Brief: "
     )
     out = await provider.edit(directive + prompt, erased, ar_label, mask=mbuf.getvalue())
 
     def _repaste():
         o = Image.open(io.BytesIO(out.data)).convert("RGBA")
-        # 垫图与输出画幅同比例 → resize 是均匀缩放，人物比例严格不变
-        pl = Image.open(io.BytesIO(person)).convert("RGBA").resize(o.size, Image.LANCZOS)
+        # 回贴层 = 垫图原像素 × (人∪手持物) alpha；垫图与输出同比例 → 均匀缩放零变形
+        parr = np.array(Image.open(io.BytesIO(padded)).convert("RGBA"))
+        alpha = pa.copy()
+
+        # 下缘截断淡出：原照片里人物常被桌子截断，抠出的下缘是一条平直硬边，直接悬在海报上
+        # 是「撕裂感」的来源。判定：alpha 最底部若仍有较宽的连续内容（≥40% 人物宽）= 被截断，
+        # 对最后 5% 内容高度做 1→0.35 渐隐，让下缘融进模型按指令画在正下方的前景道具里。
+        ys, xs = np.where(alpha > 40)
+        if len(ys):
+            y0, y1 = ys.min(), ys.max()
+            x0, x1 = xs.min(), xs.max()
+            bottom_w = (alpha[max(y1 - 2, 0):y1 + 1] > 40).any(axis=0).sum()
+            if bottom_w >= 0.40 * max(x1 - x0, 1):
+                fade_h = max(int((y1 - y0) * 0.05), 8)
+                fy0 = max(y1 - fade_h, 0)
+                ramp = np.linspace(1.0, 0.35, y1 + 1 - fy0)[:, None]
+                alpha_f = alpha.astype("float32")
+                alpha_f[fy0:y1 + 1] *= ramp
+                alpha = alpha_f.astype("uint8")
+
+        parr[:, :, 3] = alpha
+        pl = Image.fromarray(parr).resize(o.size, Image.LANCZOS)
         o.alpha_composite(pl)
         b = io.BytesIO()
         o.convert("RGB").save(b, "PNG")
