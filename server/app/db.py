@@ -33,6 +33,9 @@ _LIGHTWEIGHT_MIGRATIONS = (
     # 智能拆解：语义角色 + 人类可读名（供 PSD 语义命名/分组，刷新后导出仍可用）
     ("assets", "ALTER TABLE assets ADD COLUMN split_role VARCHAR(16)"),
     ("assets", "ALTER TABLE assets ADD COLUMN split_label VARCHAR(64)"),
+    # 手动布局持久化：用户拖拽/缩放后回写的画布显示尺寸（坐标复用已有 canvas_x/y）
+    ("assets", "ALTER TABLE assets ADD COLUMN canvas_w INTEGER"),
+    ("assets", "ALTER TABLE assets ADD COLUMN canvas_h INTEGER"),
 )
 
 

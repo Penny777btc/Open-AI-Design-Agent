@@ -952,6 +952,8 @@ const CanvasArea = forwardRef(
 
       setActiveTasks = () => {},
       onZoomChange,
+      // 手动布局持久化：拖拽/缩放/微移后防抖回调 [{asset_label,x,y,w,h},...] → 宿主 PATCH 后端
+      onLayoutChange = null,
       // 局部编辑：用户在选中图片上涂抹蒙版后回调 { assetLabel, prompt, maskDataUrl }
       onRegionEdit = null,
       // 套图：选中一批产品图 + 模板后回调 { assetLabels, template, templateLabel } → 后端批量 AI 生成
@@ -2221,6 +2223,39 @@ const CanvasArea = forwardRef(
 
     // Snapshot the canvas in the shape the agent expects (see SYSTEM_PROMPT).
     // Coordinates are in canvas (pre-zoom) space, origin top-left.
+    // 手动布局持久化：监听节点状态变化（拖拽/群组拖动/缩放/方向键微移/对齐全覆盖，单一收口），
+    // 与上次已上报的基线做 diff，防抖 800ms 把变化的资产坐标/尺寸回报宿主 → PATCH 后端。
+    // 首个快照只建基线不上报（那是「刷新恢复」不是「用户移动」，避免把恢复值再写一遍）。
+    const layoutBaselineRef = useRef(null);
+    useEffect(() => {
+      if (!onLayoutChange) return;
+      const snap = {};
+      [...images, ...videos, ...audios].forEach((n) => {
+        if (!n.assetLabel) return;
+        snap[n.assetLabel] = {
+          x: Math.round(n.x || 0), y: Math.round(n.y || 0),
+          w: Math.round(n.width || 0) || null, h: Math.round(n.height || 0) || null,
+        };
+      });
+      if (!layoutBaselineRef.current) {
+        if (Object.keys(snap).length) layoutBaselineRef.current = snap;
+        return;
+      }
+      const base = layoutBaselineRef.current;
+      const moves = Object.entries(snap)
+        .filter(([k, v]) => {
+          const b = base[k];
+          return !b || b.x !== v.x || b.y !== v.y || b.w !== v.w || b.h !== v.h;
+        })
+        .map(([k, v]) => ({ asset_label: k, ...v }));
+      if (!moves.length) return;
+      const timer = setTimeout(() => {
+        layoutBaselineRef.current = snap;
+        try { onLayoutChange(moves); } catch {}
+      }, 800);
+      return () => clearTimeout(timer);
+    }, [images, videos, audios, onLayoutChange]);
+
     const getCanvasState = () => {
       const stage = stageRef.current;
       const nodes = [];

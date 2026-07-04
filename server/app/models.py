@@ -108,6 +108,9 @@ class Asset(Base):
     # 画布世界坐标（前端 addImage 用；空则前端走默认摆放）
     canvas_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
     canvas_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 画布显示尺寸（用户手动拖拽/缩放后由前端回写；空=按图片自然比例默认尺寸）
+    canvas_w: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    canvas_h: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 层叠序（四层合成：背景<装饰<阴影<主体<前景<文案）。空=不参与显式堆叠，按插入序渲染
     z_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 智能拆解的语义角色与人类可读名（供 PSD 语义命名/分组；空=非拆解层）

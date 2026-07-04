@@ -950,6 +950,16 @@ export default function CreativeCanvas({
     } catch {}
   };
 
+  // 手动布局持久化：CanvasArea 防抖回报的拖拽/缩放批次 → PATCH 后端，刷新后按新布局重建。
+  // 静默失败（布局回写不该打扰创作；下次变动会带着最新坐标再试）。
+  const persistLayout = useCallback(async (moves) => {
+    const sid = sessionIdRef.current;
+    if (!sid || !moves?.length) return;
+    try {
+      await axios.patch(`${API}/sessions/${sid}/assets/layout`, { moves }, { headers: getHeaders() });
+    } catch {}
+  }, [getHeaders]);
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
@@ -1399,11 +1409,13 @@ export default function CreativeCanvas({
 
           const kind = a.kind || (a.url.match(/\.(mp4|webm|mov)$/i) ? "video" : a.url.match(/\.(mp3|wav|ogg|m4a)$/i) ? "audio" : "image");
           const label = a.asset_label || null;
-          // 后端持久化的画布坐标：刷新后恢复布局，避免叠图
+          // 后端持久化的画布坐标+尺寸：刷新后恢复布局（含用户手动拖拽/缩放的结果），避免叠图/回跳
           const px = a.canvas_x ?? undefined;
           const py = a.canvas_y ?? undefined;
-          if (kind === "image") canvasRef.current.addImage(a.url, px, py, undefined, undefined, undefined, label, a.set_template, a.set_content, a.z_index, a.split_role, a.split_label);
-          else if (kind === "video") canvasRef.current.addVideo(a.url, px, py, undefined, undefined, undefined, label);
+          const pw = a.canvas_w ?? undefined;
+          const ph = a.canvas_h ?? undefined;
+          if (kind === "image") canvasRef.current.addImage(a.url, px, py, pw, ph, undefined, label, a.set_template, a.set_content, a.z_index, a.split_role, a.split_label);
+          else if (kind === "video") canvasRef.current.addVideo(a.url, px, py, pw, ph, undefined, label);
           else if (kind === "audio") canvasRef.current.addAudio(a.url, px, py, undefined, label);
         });
 
@@ -1851,6 +1863,7 @@ export default function CreativeCanvas({
               hasConversation={historyStatus === "error" || messages.length === 0 || messages.some((m) => m.role === "user")}
               setActiveTasks={setActiveTasks}
               onZoomChange={setZoomLevel}
+              onLayoutChange={persistLayout}
               onRegionEdit={handleRegionEdit}
               onSetTemplate={handleSetTemplate}
               onSplitImage={handleSplitImage}

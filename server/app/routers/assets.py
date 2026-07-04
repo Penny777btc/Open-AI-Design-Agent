@@ -20,6 +20,8 @@ def _serialize(asset: Asset) -> dict:
         "source_tool": asset.source_tool,
         "canvas_x": asset.canvas_x,
         "canvas_y": asset.canvas_y,
+        "canvas_w": asset.canvas_w,
+        "canvas_h": asset.canvas_h,
         "z_index": asset.z_index,
         "split_role": asset.split_role,
         "split_label": asset.split_label,
@@ -49,6 +51,52 @@ async def list_assets(
     ).scalars().all()
     # 响应仍是纯数组，不包 envelope，前端直接 .map 不受影响
     return [_serialize(a) for a in rows]
+
+
+@router.patch("/sessions/{session_id}/assets/layout")
+async def update_layout(
+    session_id: str, request: Request,
+    db: AsyncSession = Depends(get_db), user=Depends(get_current_user),
+):
+    """手动布局持久化：用户在画布拖拽/缩放素材后，前端防抖回写最终位置与尺寸。
+
+    body: {"moves": [{"asset_label": "asset_3", "x": 120, "y": 340, "w": 266, "h": 400}, ...]}
+    w/h 可省略（只挪位置）。刷新后 loadAssets 按 canvas_x/y/w/h 重建 → 布局不再回跳。
+    """
+    await _owned_session(db, user, session_id)
+    body = await request.json()
+    moves = body.get("moves") or []
+    if not isinstance(moves, list):
+        return {"updated": 0}
+
+    def _i(v):
+        try:
+            return int(round(float(v)))
+        except (TypeError, ValueError):
+            return None
+
+    updated = 0
+    for m in moves[:200]:  # 上限护栏：单会话资产远小于此
+        if not isinstance(m, dict):
+            continue
+        label = m.get("asset_label")
+        x, y = _i(m.get("x")), _i(m.get("y"))
+        if not label or x is None or y is None:
+            continue
+        asset = (
+            await db.execute(select(Asset).where(
+                Asset.session_id == session_id, Asset.asset_label == label))
+        ).scalars().first()
+        if not asset:
+            continue
+        asset.canvas_x, asset.canvas_y = x, y
+        w, h = _i(m.get("w")), _i(m.get("h"))
+        if w and h and w > 0 and h > 0:
+            asset.canvas_w, asset.canvas_h = w, h
+        updated += 1
+    if updated:
+        await db.commit()
+    return {"updated": updated}
 
 
 @router.post("/sessions/{session_id}/assets")
