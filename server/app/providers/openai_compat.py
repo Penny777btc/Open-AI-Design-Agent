@@ -200,9 +200,14 @@ class GptImageProvider:
             "n": 1,
             "size": self._SIZES.get(aspect_ratio, "1024x1024"),
         }
+        if settings.image_quality:
+            payload["quality"] = settings.image_quality  # medium ≈ high 一半耗时，海报级足够
         headers = {"Authorization": f"Bearer {self.api_key}"}
         client = _img_client()  # 复用连接池
         resp = await _post_retry(client, f"{self.base_url}/v1/images/generations", json=payload, headers=headers)
+        if resp.status_code == 400 and "quality" in payload:
+            payload.pop("quality")  # 站点不认 quality → 去掉重试
+            resp = await _post_retry(client, f"{self.base_url}/v1/images/generations", json=payload, headers=headers)
         if resp.status_code == 400 and payload["size"] != "1024x1024":
             payload["size"] = "1024x1024"  # 尺寸不被支持时回退方图
             resp = await _post_retry(client, f"{self.base_url}/v1/images/generations", json=payload, headers=headers)
@@ -224,12 +229,19 @@ class GptImageProvider:
         # 人物比例被压扁/拉长（用户实测「人变扁」的直接诱因）。与 generate 同一映射，同一 400 回退。
         form = {"model": self.model, "prompt": prompt,
                 "size": self._SIZES.get(aspect_ratio, "1024x1024")}
+        if settings.image_quality:
+            form["quality"] = settings.image_quality  # medium ≈ high 一半耗时，海报级足够
         if transparent:
             form["background"] = "transparent"
         client = _img_client()  # 复用连接池
         resp = await _post_retry(
             client, f"{self.base_url}/v1/images/edits", data=form, files=files, headers=headers
         )
+        if resp.status_code == 400 and "quality" in form:
+            form.pop("quality")  # 站点不认 quality → 去掉重试
+            resp = await _post_retry(
+                client, f"{self.base_url}/v1/images/edits", data=form, files=files, headers=headers
+            )
         if resp.status_code == 400 and form["size"] != "1024x1024":
             form["size"] = "1024x1024"  # 尺寸不被支持 → 回退方图（与 generate 一致）
             resp = await _post_retry(

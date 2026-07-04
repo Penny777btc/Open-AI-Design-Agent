@@ -101,7 +101,7 @@ def pad_to_aspect(src: bytes, ar_label: str) -> bytes:
     return out.getvalue()
 
 
-def _held_objects_alpha(padded_png: bytes, person_a) -> "object":
+def _held_objects_alpha(padded_png: bytes, person_a, fg_png: bytes | None = None) -> "object":
     """纯本地找「人物手里拿着的东西」（盘子/杯子/产品）：isnet 通用前景 − 人物 = 候选物件，
     保留满足两个几何条件的连通块：①主体落在人物躯干带（人物 bbox 高度 15%~80%、横向外扩 20%
     ——手持物必在这个范围）②面积 < 人物的 35%（盘子量级；桌面/背景大块被排除）。
@@ -116,7 +116,7 @@ def _held_objects_alpha(padded_png: bytes, person_a) -> "object":
         from PIL import Image
         from scipy import ndimage
 
-        fg = cutout_subject(padded_png)  # isnet 通用前景（人+手持物+桌面…）
+        fg = fg_png or cutout_subject(padded_png)  # isnet 通用前景（可由调用方并行预算好传入）
         fa = np.array(Image.open(io.BytesIO(fg)).convert("RGBA"))[:, :, 3]
         pa = person_a > 40
         if not pa.any():
@@ -168,13 +168,20 @@ async def outpaint_person_locked(provider, prompt: str, src: bytes, ar_label: st
 
     loop = asyncio.get_running_loop()
     padded = await loop.run_in_executor(None, lambda: pad_to_aspect(src, ar_label))
-    person = await loop.run_in_executor(None, lambda: cut_person_soft(padded))
+    # 人像分割与通用前景（供手持物检测）互不依赖 → 并行跑，省 1-2s CPU 串行等待
+    person_f = loop.run_in_executor(None, lambda: cut_person_soft(padded))
+    fg_f = loop.run_in_executor(None, lambda: cutout_subject(padded))
+    person = await person_f
+    try:
+        fg = await fg_f
+    except Exception:
+        fg = None  # 前景失败只影响手持物检测（退化为只保护人），不阻断
     pa = np.array(Image.open(io.BytesIO(person)).convert("RGBA"))[:, :, 3]
     if int((pa > 40).sum()) < pa.size * 0.01:
         raise RuntimeError("人物抠图为空（<1% 前景）")
 
     # 人 ∪ 手持物 = 完整保护区（否则手里的盘子被切半，回贴成撕纸残片）
-    held = await loop.run_in_executor(None, lambda: _held_objects_alpha(padded, pa))
+    held = await loop.run_in_executor(None, lambda: _held_objects_alpha(padded, pa, fg_png=fg))
     if held.any():
         from PIL import ImageFilter as _IF
         held_soft = np.array(Image.fromarray(held, "L").filter(_IF.GaussianBlur(1.6)))
@@ -201,15 +208,30 @@ async def outpaint_person_locked(provider, prompt: str, src: bytes, ar_label: st
     mbuf = io.BytesIO()
     Image.fromarray(marr).save(mbuf, "PNG")
 
+    # 人物几何位置注入指令：抽象的「避开轮廓」压不住模型把副标题横贯头部（实测两轮都撞），
+    # 给出保留区的具体百分比框，文字排版有明确的禁区坐标可循。
+    _ys, _xs = np.where(pa > 40)
+    H_, W_ = pa.shape
+    zone = ""
+    if len(_ys):
+        zone = (
+            f"The reserved silhouette occupies roughly {100 * _xs.min() // W_}%-{100 * _xs.max() // W_}% "
+            f"horizontally and {100 * _ys.min() // H_}%-{100 * _ys.max() // H_}% vertically of the canvas. "
+        )
     directive = (
         "The PROTECTED silhouette area in this image is RESERVED: a real person will be composited "
-        "into it afterwards. Do NOT draw, paint or render ANY person, human figure, face, silhouette "
+        "into it afterwards. " + zone +
+        "Do NOT draw, paint or render ANY person, human figure, face, silhouette "
         "or body part anywhere in the image — the final image must contain ZERO painted humans. "
-        "Design the layout AROUND the reserved silhouette: keep titles, text and key decorations "
-        "clear of it, and make the background lighting/scene coherent so a person composited there "
-        "will blend naturally. Paint foreground props (a table edge, plated food, flowers or "
-        "products) directly below and up to the bottom boundary of the reserved area, so the "
-        "composited person will look naturally anchored in the scene instead of floating. Brief: "
+        "Design the layout AROUND the reserved silhouette. HARD RULE for text: every title, "
+        "subtitle and caption must be FULLY visible and readable in the final image — NEVER place "
+        "any text behind, under or overlapping the reserved silhouette. If the intended text "
+        "position would collide with the silhouette, MOVE the text to clear space (sides or "
+        "corners) or make it smaller — cropped/hidden text is a failure. Make the background "
+        "lighting/scene coherent so a person composited there will blend naturally. Paint "
+        "foreground props (a table edge, plated food, flowers or products) directly below and up "
+        "to the bottom boundary of the reserved area, so the composited person will look naturally "
+        "anchored in the scene instead of floating. Brief: "
     )
     out = await provider.edit(directive + prompt, erased, ar_label, mask=mbuf.getvalue())
 
@@ -287,19 +309,36 @@ def cut_person_soft(src: bytes, *, feather: float = 1.6, keep_only_largest: bool
     # alpha_matting：柔化发丝/边缘，去白边（pymatting 已装）；失败自动回落普通 remove。
     # 必须持 _matting_lock 串行：pymatting 的 Numba 线程层并发访问会干崩整个进程。
     with _matting_lock:
+        base = remove(src, session=_human_session, post_process_mask=True)  # 基础分割（无 matting）
         try:
             png = remove(src, session=_human_session, post_process_mask=True,
                          alpha_matting=True, alpha_matting_foreground_threshold=240,
                          alpha_matting_background_threshold=15, alpha_matting_erode_size=3)
         except Exception:
-            png = remove(src, session=_human_session, post_process_mask=True)
+            png = base
 
     im = Image.open(io.BytesIO(png)).convert("RGBA")
     arr = np.array(im)
     a = arr[:, :, 3]
 
+    # 【matting 溢出钳制】alpha matting 按颜色相似度传播：深色椅背/背包与黑发同色时会被
+    # 「传染」进人物 alpha（用户实测右臂旁浮出藤椅块）。用基础分割做钳制——matting 的柔边
+    # 只允许出现在基础分割人物的 10px 邻域内，颜色扩散出去的家具被硬性切掉。
+    try:
+        from scipy import ndimage as _nd
+        ba = np.array(Image.open(io.BytesIO(base)).convert("RGBA"))[:, :, 3]
+        if (ba > 40).any():
+            clamp = _nd.binary_dilation(ba > 40, iterations=10)
+            a = np.where(clamp, a, 0).astype("uint8")
+            arr[:, :, 3] = a
+    except Exception:
+        pass
+
     if keep_only_largest:
-        # 只保留最大连通块（人本体）——u2net_human_seg 偶尔会漏检出零星小块，一并清掉
+        # 只保留最大连通块（人本体）——u2net_human_seg 偶尔会漏检出零星小块，一并清掉。
+        # 再做一次轻度开运算（腐蚀+膨胀）：深色椅背/道具常经窄桥「粘」在人物轮廓上（用户实测
+        # 右臂旁浮着藤椅块），开运算掐断窄桥后重新取最大块，把粘连的家具剥掉；9px 核只断
+        # 窄桥，不伤人物主干。
         try:
             from scipy import ndimage
             mask = a > 40
@@ -307,7 +346,16 @@ def cut_person_soft(src: bytes, *, feather: float = 1.6, keep_only_largest: bool
             if n > 1:
                 sizes = ndimage.sum(mask, lbl, range(1, n + 1))
                 keep = int(np.argmax(sizes)) + 1
-                arr[lbl != keep, 3] = 0
+                mask = lbl == keep
+            opened = ndimage.binary_opening(mask, structure=np.ones((9, 9), bool))
+            lbl2, n2 = ndimage.label(opened)
+            if n2 >= 1:
+                sizes2 = ndimage.sum(opened, lbl2, range(1, n2 + 1))
+                main = lbl2 == (int(np.argmax(sizes2)) + 1)
+                # 把开运算磨掉的细节（发丝/手指边缘）在主块附近补回：主块膨胀 12px 内的原 mask 恢复
+                halo = ndimage.binary_dilation(main, iterations=12)
+                final = mask & halo
+                arr[~final, 3] = 0
                 a = arr[:, :, 3]
         except Exception:
             pass

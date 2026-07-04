@@ -7,6 +7,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 # 进程内运行时状态（DB 之外的部分）：approve 唤醒、cancel 标记
 _runtime: dict[str, dict] = {}
+
+# nano-banana 熔断：认证失效/账号池耗尽时避免每个人物节点都白撞一次（503 退避 ~5s/节点）
+_nano_down_until: float = 0.0
 
 # asset_label 分配锁：防止并行节点取到相同计数（多实例部署时改为 DB 序列）
 _label_locks: dict[str, asyncio.Lock] = {}
@@ -785,7 +789,10 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         for _ in range(0 if image is not None else 2):  # 节点级重试
             try:
                 if node.tool == "edit_image":
-                    if use_person and not person_failed:
+                    # nano 熔断：失效的 key/耗尽的账号池会让每个人物节点都白撞一次（503 退避
+                    # 重试 ~5s/节点，套图批量时成倍浪费）。失败后 15 分钟内直接走扩图锁人。
+                    global _nano_down_until
+                    if use_person and not person_failed and time.time() >= _nano_down_until:
                         try:
                             provider_p = get_person_edit_provider()
                             image = await provider_p.edit(edit_prompt, edit_source, edit_ar)
@@ -793,7 +800,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                         except Exception as exc:  # nano 失败 → 本次及之后都回落 gpt 系
                             last_exc = exc
                             person_failed = True
-                            logger.warning("nano-banana edit 失败，降级扩图锁人：%s", str(exc)[:160])
+                            _nano_down_until = time.time() + 900
+                            logger.warning("nano-banana edit 失败，熔断 15 分钟，降级扩图锁人：%s", str(exc)[:160])
                     if image is None and use_person:
                         # gpt 系人物路径首选「扩图锁人」：人物区蒙版保护+原像素回贴，
                         # 模型只画人物以外（拉伸/变形物理不可能）；失败才裸整图重绘（最后兜底）。
