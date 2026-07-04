@@ -125,22 +125,36 @@ async def outpaint_person_locked(provider, prompt: str, src: bytes, ar_label: st
     if int((pa > 40).sum()) < pa.size * 0.01:
         raise RuntimeError("人物抠图为空（<1% 前景）")
 
-    # 蒙版语义（与拆图/补全一致）：alpha=0 的区域=允许重绘；人物区 alpha=255=锁定保留。
-    pim = Image.open(io.BytesIO(padded)).convert("RGBA")
-    marr = np.array(pim)
+    # 【防重影关键】发给模型的输入图先把人物 inpaint 抹掉——gpt-image 的蒙版是「软遵守」，
+    # 输入里有人它就会照着再画一个（姿势略偏），与回贴的原像素叠成双人重影（用户实测）。
+    # 模型全程看不见人 → 画不出第二个人；人物位置信息由蒙版轮廓 + 指令传达。
+    def _erase_person():
+        import cv2
+        rgb = np.array(Image.open(io.BytesIO(padded)).convert("RGB"))
+        m = (pa > 60).astype("uint8") * 255
+        m = cv2.dilate(m, np.ones((15, 15), np.uint8))  # 外扩防边缘残影/发丝残留
+        filled = cv2.inpaint(rgb, m, 12, cv2.INPAINT_TELEA)
+        b = io.BytesIO()
+        Image.fromarray(filled).save(b, "PNG")
+        return b.getvalue()
+
+    erased = await loop.run_in_executor(None, _erase_person)
+
+    # 蒙版语义（与拆图/补全一致）：alpha=0 的区域=允许重绘；人物轮廓区 alpha=255=保留（留位）。
+    marr = np.array(Image.open(io.BytesIO(erased)).convert("RGBA"))
     marr[:, :, 3] = np.where(pa > 128, 255, 0).astype("uint8")
     mbuf = io.BytesIO()
     Image.fromarray(marr).save(mbuf, "PNG")
 
     directive = (
-        "The person in the image is FINAL and PROTECTED — do not repaint, resize or move them. "
-        "Do NOT add, paint or render ANY other person, human figure, silhouette or body part — "
-        "exactly ONE person must appear in the final image. If the person is holding an object "
-        "(a plate, cup, product), redraw that object cleanly and completely in their hands. "
-        "Redesign EVERYTHING ELSE around the person (background, scenery, decorations, text layout) "
-        "to fulfill this brief, blending naturally with the person's edges and lighting: "
+        "The PROTECTED silhouette area in this image is RESERVED: a real person will be composited "
+        "into it afterwards. Do NOT draw, paint or render ANY person, human figure, face, silhouette "
+        "or body part anywhere in the image — the final image must contain ZERO painted humans. "
+        "Design the layout AROUND the reserved silhouette: keep titles, text and key decorations "
+        "clear of it, and make the background lighting/scene coherent so a person composited there "
+        "will blend naturally. Brief: "
     )
-    out = await provider.edit(directive + prompt, padded, ar_label, mask=mbuf.getvalue())
+    out = await provider.edit(directive + prompt, erased, ar_label, mask=mbuf.getvalue())
 
     def _repaste():
         o = Image.open(io.BytesIO(out.data)).convert("RGBA")

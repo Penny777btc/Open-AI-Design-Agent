@@ -13,3 +13,4 @@ email-validator
 pypdf
 python-docx
 rembg  # AI 拆图主体层：本地背景去除(透明)
+opencv-python-headless  # 扩图锁人：人物区 inpaint 抹除(防 gpt-image 照着输入再画一个人=重影)
