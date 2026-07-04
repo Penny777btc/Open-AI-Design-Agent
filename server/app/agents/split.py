@@ -219,6 +219,24 @@ async def outpaint_person_locked(provider, prompt: str, src: bytes, ar_label: st
         parr = np.array(Image.open(io.BytesIO(padded)).convert("RGBA"))
         alpha = pa.copy()
 
+        # 【去边 defringe】发丝半透明像素的 RGB 还带着原照片背景色（深色木墙），贴到浅色
+        # 海报上就是一圈脏雾边（用户实测「头发丝很奇怪」）。两步：
+        # ① 低 alpha 尾巴掐掉（<22 → 0）：高斯羽化外扩出的纯背景色像素直接不要；
+        # ② 色彩去污：0<alpha<200 的过渡像素，用最近的实心区(alpha>200)颜色替换 RGB——
+        #    发丝仍是发丝形状，但颜色是头发色而非旧背景色。
+        try:
+            from scipy import ndimage as _ndi
+            alpha = np.where(alpha < 22, 0, alpha).astype("uint8")
+            core = alpha > 200
+            soft = (alpha > 0) & ~core
+            if core.any() and soft.any():
+                _, (iy, ix) = _ndi.distance_transform_edt(~core, return_indices=True)
+                parr[soft, 0] = parr[iy[soft], ix[soft], 0]
+                parr[soft, 1] = parr[iy[soft], ix[soft], 1]
+                parr[soft, 2] = parr[iy[soft], ix[soft], 2]
+        except Exception:
+            pass  # 去边失败不阻断（只是边缘略脏，不值得让整节点失败）
+
         # 下缘截断淡出：原照片里人物常被桌子截断，抠出的下缘是一条平直硬边，直接悬在海报上
         # 是「撕裂感」的来源。判定：alpha 最底部若仍有较宽的连续内容（≥40% 人物宽）= 被截断，
         # 对最后 5% 内容高度做 1→0.35 渐隐，让下缘融进模型按指令画在正下方的前景道具里。
