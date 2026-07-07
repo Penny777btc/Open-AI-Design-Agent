@@ -2192,7 +2192,8 @@ const CanvasArea = forwardRef(
       const base = images.find((i) => i.assetLabel === ref) || images[images.length - 1];
       if (!base || !blocks?.length) return;
       const bx = base.x, by = base.y, bw = base.width || 200, bh = base.height || 200;
-      const stamp = Date.now();
+      // 同一毫秒内两批文字层(回放/孤儿层兜底并发)会撞 id → React 重复 key 告警,加随机后缀保唯一
+      const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       // 文案永远压在所有图片层之上（四层合成里图片层 zIndex 可达 ~6）
       const TEXT_Z = 10000;
       const nodes = [];
