@@ -1,22 +1,23 @@
-"""画布自动摆放：按行排布（每行 4 张、间距 24px），新批次落在已有内容包围盒下方。
+"""画布自动摆放：Figma 卡片墙式排布（每行 4 张、双向等装订线），新批次落在已有内容包围盒下方。
 
-坐标是画布世界坐标。显示尺寸模拟前端 addImage 的缩放规则：
-自然尺寸等比缩到 maxDim=400 再减半（即最长边 200px）。
+坐标是画布世界坐标。显示尺寸：自然尺寸等比缩放，最长边统一 CARD_DIM——卡片够大、
+密度均匀。装订线 GAP 取卡片长边 ~10%（Figma 观感）；旧参数(最长边 200、行距失衡)太松散。
 """
 
 ROW_CAP = 4
-GAP = 24
-NEW_BATCH_GAP = 48
-MAX_DIM = 400
+GAP = 32
+NEW_BATCH_GAP = 64
+MAX_DIM = 400   # 前端 addImage 无坐标时的自然缩放上限（保持兼容语义，勿删）
+CARD_DIM = 320  # 自动摆放卡片的最长边（Figma 式卡片墙）
 
 
 def display_size(width: int | None, height: int | None) -> tuple[int, int]:
     w, h = width or 1024, height or 1024
     if w >= h:
-        scaled = (MAX_DIM, h / w * MAX_DIM)
+        scaled = (CARD_DIM, h / w * CARD_DIM)
     else:
-        scaled = (w / h * MAX_DIM, MAX_DIM)
-    return int(scaled[0] / 2), int(scaled[1] / 2)
+        scaled = (w / h * CARD_DIM, CARD_DIM)
+    return int(scaled[0]), int(scaled[1])
 
 
 class PlacementPlanner:
