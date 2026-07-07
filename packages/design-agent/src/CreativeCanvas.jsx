@@ -567,8 +567,10 @@ export default function CreativeCanvas({
         const px = flat.asset.canvas_x, py = flat.asset.canvas_y;
         if (newLabel && newUrl && px != null && py != null && canvasRef.current) {
           const pw = flat.asset.canvas_w ?? undefined, ph = flat.asset.canvas_h ?? undefined;
+          const A = flat.asset;
           if (newKind === "video") canvasRef.current.addVideo?.(newUrl, px, py, pw, ph, undefined, newLabel);
-          else canvasRef.current.addImage?.(newUrl, px, py, pw, ph, undefined, newLabel);
+          else canvasRef.current.addImage?.(newUrl, px, py, pw, ph, undefined, newLabel,
+            A.set_template, A.set_content, A.z_index, A.split_role, A.split_label);
           syncedUrlsRef.current?.add?.(`${newLabel}-${newUrl}`);
         } else {
           const place = canvasRef.current?.placeNextToSource || canvasRef.current?.replaceAt;

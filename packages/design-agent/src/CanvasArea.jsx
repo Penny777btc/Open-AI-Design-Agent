@@ -298,18 +298,20 @@ const URLImage = ({
             height={20}
             fill="transparent"
           />
-          {/* Asset Type */}
+          {/* Asset Type：有人类可读层名(平台名/拆解层名)优先显示——存图时一眼知道这是哪个平台 */}
           <KonvaText
-            text={t("image")}
+            text={imageObj.splitLabel || t("image")}
             fontSize={11}
             fontFamily="sans-serif"
             fill={ACCENT}
             x={0}
             y={5}
           />
-          {/* Dimensions */}
+          {/* Dimensions：显示原始像素(导出/存储的真实尺寸)，画布显示尺寸对存图没意义 */}
           <KonvaText
-            text={`${dims.w} × ${dims.h}`}
+            text={(imageObj.image?.naturalWidth)
+              ? `${imageObj.image.naturalWidth} × ${imageObj.image.naturalHeight}`
+              : `${dims.w} × ${dims.h}`}
             fontSize={11}
             fontFamily="sans-serif"
             fill={ACCENT}

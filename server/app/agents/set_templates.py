@@ -790,6 +790,8 @@ def build_social_set_plan(source_label: str) -> Plan:
                 "prompt": role["prompt"], "source_asset": source_label,
                 "aspect_ratio": role["aspect_ratio"], "set_member": True,
                 "set_template": "social5",
+                # 平台名落到 Asset.split_label → 画布角标/导出命名显示「小红书封面 1024×1536」
+                "label": role["label"],
             },
             depends=[],
         )

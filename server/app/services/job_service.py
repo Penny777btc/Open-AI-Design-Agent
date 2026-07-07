@@ -1116,8 +1116,9 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         asset_payload["canvas_h"] = disp_h
         if node.args.get("split_role"):
             asset_payload["split_role"] = node.args["split_role"]
-            if node.args.get("label"):
-                asset_payload["split_label"] = node.args["label"]  # 元素人类名 → PSD 语义层名
+        if node.args.get("label"):
+            # 人类可读层名不再绑死 split_role：社媒套图等也用它标注平台名(画布角标/导出命名)
+            asset_payload["split_label"] = node.args["label"]
         if node.args.get("z_index") is not None:
             asset_payload["z_index"] = node.args["z_index"]  # 四层合成：显式 z 序，刷新后仍按层叠正确堆叠
         if node.args.get("set_template"):
