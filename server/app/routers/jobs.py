@@ -31,6 +31,9 @@ async def job_events(job_id: str, since: int = 0, db: AsyncSession = Depends(get
         "cursor": rows[-1].id if rows else since,
         "done": job.status in Job.TERMINAL,
         "approved": job.approved,
+        # 前端失速保护需要区分「等待用户批准」和「真失速」：待批准期没有新事件是正常的，
+        # 不该触发 6 分钟死气超时（否则批准后没人消费事件，结果永远进不了聊天流）
+        "status": job.status,
     }
 
 

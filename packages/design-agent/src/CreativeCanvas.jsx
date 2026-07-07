@@ -570,6 +570,9 @@ export default function CreativeCanvas({
           lastProgress = Date.now();
         }
         if (data.done) break;
+        // 「等待用户批准」≠ 失速：待批准期天然没有新事件，不能吃 6 分钟死气超时——
+        // 否则轮询自杀后用户再点批准，没人消费事件，结果永远进不了聊天流（实测复现）。
+        if (data.status === "awaiting_approval" || data.status === "approving") lastProgress = Date.now();
         if (Date.now() - lastProgress > MAX_DEAD_AIR) throw new Error("Stalled");
       } catch (err) {
         // 致命 4xx（job 不存在/无权）→ 立即退出，不再空转 6 分钟锁着输入框
