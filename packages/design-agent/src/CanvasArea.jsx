@@ -988,6 +988,18 @@ const CanvasArea = forwardRef(
     const [setGenMode, setSetGenMode] = useState("ai");        // 套图模式：ai 融合 / editable 可编辑
 
     // ===== 框选多选（拖拽橡皮筋，默认行为）+ 空格平移 =====
+    const pendingDeletesRef = useRef([]);  // undo 窗口内的待删批次（关页前冲刷落库）
+    useEffect(() => {
+      const flush = () => {
+        const labels = pendingDeletesRef.current
+          .filter((b) => !b.undone.current).flatMap((b) => b.labels);
+        if (labels.length && onDeleteAssets) { try { onDeleteAssets(labels, { keepalive: true }); } catch {} }
+      };
+      window.addEventListener("beforeunload", flush);
+      window.addEventListener("pagehide", flush);
+      return () => { window.removeEventListener("beforeunload", flush); window.removeEventListener("pagehide", flush); };
+    }, [onDeleteAssets]);
+
     const [marquee, setMarquee] = useState(null);              // 正在拖的选框（世界坐标 {x,y,w,h}）
     const marqueeStartRef = useRef(null);                      // 拖拽起点（世界坐标）+ 是否叠加
     const [spaceDown, setSpaceDown] = useState(false);         // 空格按下=手型平移（拖拽=移动画布）
@@ -1050,6 +1062,37 @@ const CanvasArea = forwardRef(
         hit.forEach((id) => n.add(id));
         return n;
       });
+    };
+
+    // 一键整理：全部图片按标准卡片网格重排（高统一 320、行 4 张、装订线 32），
+    // 文字层随各自底图平移。位置/尺寸由布局持久化 watcher 自动落库——素材重叠随时自助修复。
+    const tidyCanvas = () => {
+      const CARD_H = 320, GAP = 32, ROW_CAP = 4;
+      const list = [...images].sort((a, b) => {
+        const na = parseInt((a.assetLabel || "").split("_")[1]) || 1e9;
+        const nb = parseInt((b.assetLabel || "").split("_")[1]) || 1e9;
+        return na - nb;
+      });
+      if (!list.length) return;
+      const minX = Math.min(...list.map((n) => n.x));
+      const minY = Math.min(...list.map((n) => n.y));
+      const patch = {};   // id → {x,y,width,height}
+      const delta = {};   // assetLabel → [dx,dy] 供文字层跟随
+      let x = minX, y = minY, col = 0, rowH = 0;
+      list.forEach((n) => {
+        const ratio = (n.width || 200) / (n.height || 200);
+        const h = CARD_H, w = Math.max(60, Math.round(ratio * CARD_H));
+        if (col >= ROW_CAP) { col = 0; x = minX; y += rowH + GAP; rowH = 0; }
+        patch[n.id] = { x, y, width: w, height: h };
+        if (n.assetLabel) delta[n.assetLabel] = [x - n.x, y - n.y];
+        x += w + GAP; rowH = Math.max(rowH, h); col += 1;
+      });
+      setImages((prev) => prev.map((n) => patch[n.id] ? { ...n, ...patch[n.id] } : n));
+      setTexts((prev) => prev.map((tx) => {
+        const d = tx.srcRef && delta[tx.srcRef];
+        return d ? { ...tx, x: tx.x + d[0], y: tx.y + d[1] } : tx;
+      }));
+      setSetSel(new Set()); setSelectedId(null);
     };
 
     // 对齐/等距（Figma 式）：作用于框选的多张节点，按选区包围盒计算。
@@ -2801,7 +2844,12 @@ const CanvasArea = forwardRef(
       const txtLabels = new Set(delTxts.map((tx) => tx.layerAsset).filter(Boolean));
       const undoneRef = { current: false };
       if (delLabels.size || txtLabels.size) {
+        // 待删批次登记：undo 窗口内刷新/关页 → beforeunload 冲刷(keepalive)兜底落库,
+        // 否则「删完 5 秒内刷新」的删除会静默丢失、素材复活(用户实测)。
+        const batch = { labels: [...delLabels, ...txtLabels], undone: undoneRef };
+        pendingDeletesRef.current.push(batch);
         setTimeout(() => {
+          pendingDeletesRef.current = pendingDeletesRef.current.filter((b) => b !== batch);
           if (undoneRef.current || !onDeleteAssets) return;
           setTexts((now) => {
             // 在最新状态里核对：该文字资产还有存活节点就不删行
@@ -3457,6 +3505,12 @@ const CanvasArea = forwardRef(
             >
               <FiGrid size={14} /> {t("set_template")}
             </button>
+            <button
+              onClick={() => { tidyCanvas(); setShowTextMenu(false); }}
+              className="w-full flex items-center gap-2 px-3.5 py-2.5 bg-bg-card border border-divider rounded-xl text-[12px] font-semibold text-primary-text hover:border-secondary-text transition-colors"
+              title={t("tidy_canvas_title")}
+              aria-label={t("tidy_canvas")}
+            ><FiGrid size={14} /> {t("tidy_canvas")}</button>
             {/* 操作提示（自然交互，无需按钮）：拖拽=框选，空格+拖拽=平移 */}
             <div className="mt-2 px-3 py-2 rounded-lg bg-bg-card/70 border border-divider/60 text-[11px] text-secondary-strong leading-relaxed select-none">
               <div><span className="text-primary-text font-semibold">{t("hint_drag")}</span> {t("hint_marquee")} · <span className="text-primary-text font-semibold">{t("hint_shift_drag")}</span> {t("hint_add_select")} · <span className="text-primary-text font-semibold">{t("hint_space_drag")}</span> {t("hint_pan")}</div>

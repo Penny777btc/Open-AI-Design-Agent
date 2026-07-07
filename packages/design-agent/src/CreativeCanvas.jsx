@@ -1070,10 +1070,19 @@ export default function CreativeCanvas({
   // 手动布局持久化：CanvasArea 防抖回报的拖拽/缩放批次 → PATCH 后端，刷新后按新布局重建。
   // 静默失败（布局回写不该打扰创作；下次变动会带着最新坐标再试）。
   // 画布删除持久化：undo 窗口过后删资产行（刷新不再复活）。静默失败可接受（下次删除再试）。
-  const persistDelete = useCallback(async (labels) => {
+  const persistDelete = useCallback(async (labels, opts = {}) => {
     const sid = sessionIdRef.current;
     if (!sid || !labels?.length) return;
     try {
+      if (opts.keepalive) {
+        // 关页前冲刷：keepalive fetch 保证请求在页面卸载后仍送达（axios 不支持）
+        fetch(`${API}/sessions/${sid}/assets/delete`, {
+          method: "POST", keepalive: true,
+          headers: { "Content-Type": "application/json", ...getHeaders() },
+          body: JSON.stringify({ labels }),
+        });
+        return;
+      }
       await axios.post(`${API}/sessions/${sid}/assets/delete`, { labels }, { headers: getHeaders() });
       loadAssets();
     } catch {}
