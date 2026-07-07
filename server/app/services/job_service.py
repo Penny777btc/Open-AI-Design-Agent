@@ -10,6 +10,7 @@ import logging
 import time
 from datetime import datetime, timezone
 
+import httpx
 from sqlalchemy import func, select
 
 from app.agents.planner import Plan, make_plan
@@ -80,6 +81,76 @@ def cancel_job(job_id: str) -> bool:
     return True
 
 
+async def _refund_job_remainder(job_id: str, user_id: str | None, reason: str) -> int:
+    """兜底退款：应退 = 预扣 - 已结算成功节点(settled) - 已退流水。
+
+    why：崩溃/取消/审批竞态等非常规退出路径没有逐节点退款轨迹，只能靠账本重算保证
+    余额守恒；用「已退流水总额」抵扣使其幂等——与 per-node refund 并存不会双退。
+    预扣由 approve 端点写入 job 行，这里必须重读最新行（进程内快照可能落后）。
+    """
+    settled = int((_runtime.get(job_id) or {}).get("settled") or 0)
+    async with SessionLocal() as db:
+        job = await db.get(Job, job_id)
+        if job is None or not job.credits_reserved:
+            return 0
+        already_refunded = (
+            await db.execute(
+                select(func.coalesce(func.sum(CreditLedger.delta), 0)).where(
+                    CreditLedger.job_id == job_id, CreditLedger.kind == "refund"
+                )
+            )
+        ).scalar_one()
+        remainder = job.credits_reserved - settled - already_refunded
+        if remainder <= 0:
+            return 0
+        await credit_service.apply(
+            db, user_id or job.user_id, remainder, "refund",
+            job_id=job_id, memo=reason, enforce=False,
+        )
+        await db.commit()
+        return remainder
+
+
+def _start_heartbeat(job_id: str) -> asyncio.Task:
+    """节点执行期保活：单节点真实生成可达 3 分钟+，期间零事件会触发前端 6 分钟死气
+    误杀合法长调用。每 45s 发一条 heartbeat（前端已约定忽略该类型，事件持久化可回放）。"""
+
+    async def _beat() -> None:
+        while True:
+            await asyncio.sleep(45)
+            try:
+                await emit(job_id, "heartbeat", {})
+            except Exception:
+                # DB 抖动不能杀掉保活循环本身——下一拍再试
+                logger.warning("job %s heartbeat emit failed", job_id, exc_info=True)
+
+    return asyncio.create_task(_beat())
+
+
+async def _stop_heartbeat(task: asyncio.Task) -> None:
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def _next_asset_label(session_id: str, db) -> str:
+    """分配下一个 asset_label：取现存 label 数字后缀的 max+1，而非 count+1。
+
+    why：admin 硬删资产后 count 回退，count+1 会与仍存活的旧 label 撞车（前端画布
+    按 label 寻址会错乱）。须在 _label_lock(session_id) 内调用，防并行节点拿到同号。
+    """
+    labels = (
+        await db.execute(select(Asset.asset_label).where(Asset.session_id == session_id))
+    ).scalars().all()
+    mx = 0
+    for lb in labels:
+        if isinstance(lb, str) and lb.startswith("asset_") and lb[6:].isdigit():
+            mx = max(mx, int(lb[6:]))
+    return f"asset_{mx + 1}"
+
+
 async def _run_job(job_id: str) -> None:
     try:
         async with SessionLocal() as db:
@@ -120,7 +191,11 @@ async def _run_job(job_id: str) -> None:
                 },
             )
             await _set_status(job_id, "running", approved=True)
-            ok, failed = await _execute_plan(job_id, session_id, user_id, Plan(nodes=[node]))
+            beat = _start_heartbeat(job_id)
+            try:
+                ok, failed = await _execute_plan(job_id, session_id, user_id, Plan(nodes=[node]))
+            finally:
+                await _stop_heartbeat(beat)
             zh_edit = any("一" <= ch <= "鿿" for ch in job_input.get("message", ""))
             if ok:
                 await emit(job_id, "text", {"content": "✅ 局部编辑完成，结果已放在原图旁" if zh_edit else "✅ Region edit done — placed next to the original"})
@@ -258,31 +333,62 @@ async def _run_job(job_id: str) -> None:
         })
 
         state = _runtime[job_id]
+        # 审计 B1：approve 端点预扣成功后，cancel/reject 仍可能翻转运行时标志（cancel 无状态
+        # 校验），三个「未跑先终」分支必须全额退预扣（此时零节点已执行），否则整单预扣泄漏。
+        # 退款失败只记日志，不能挡住终态落库；credits_reserved 由 approve 端点写入 → helper 重读最新行。
         try:
             await asyncio.wait_for(state["approve"].wait(), timeout=settings.approval_timeout_seconds)
         except asyncio.TimeoutError:
+            try:
+                await _refund_job_remainder(job_id, user_id, "approval timeout: full refund")
+            except Exception:
+                logger.error("job %s approval-timeout refund failed", job_id, exc_info=True)
             await emit(job_id, "info", {"content": "Plan expired without approval."})
             await _set_status(job_id, "cancelled", approved=False)
             return
 
         if state["cancelled"]:
+            try:
+                await _refund_job_remainder(job_id, user_id, "cancelled before run: full refund")
+            except Exception:
+                logger.error("job %s cancel refund failed", job_id, exc_info=True)
             await emit(job_id, "info", {"content": "Cancelled by user."})
             await _set_status(job_id, "cancelled")
             return
         if not state["approved"]:
+            try:
+                await _refund_job_remainder(job_id, user_id, "rejected before run: full refund")
+            except Exception:
+                logger.error("job %s reject refund failed", job_id, exc_info=True)
             await emit(job_id, "info", {"content": "Plan rejected. Tell me what to change and I'll re-plan."})
             await _set_status(job_id, "rejected", approved=False)
             return
 
         await _set_status(job_id, "running", approved=True)
         canvas_state = job_input.get("canvas_state") or {}
-        ok, failed = await _execute_plan(
-            job_id, session_id, user_id, plan,
-            canvas_state.get("nodes"), canvas_state.get("viewport"),
-        )
+        beat = _start_heartbeat(job_id)
+        try:
+            ok, failed = await _execute_plan(
+                job_id, session_id, user_id, plan,
+                canvas_state.get("nodes"), canvas_state.get("viewport"),
+            )
+        finally:
+            await _stop_heartbeat(beat)
 
         # 总结语言跟随用户输入（审计 U3）
         zh = any("一" <= ch <= "鿿" for ch in brief)
+        # 审计 B7：运行中取消的 job 不能写成 done +「✅ 完成啦」——终态该是 cancelled，
+        # 并兜底退掉未执行节点的余量（per-node 已退部分被 already_refunded 抵扣，不会双退）。
+        if _runtime.get(job_id, {}).get("cancelled"):
+            try:
+                await _refund_job_remainder(job_id, user_id, "cancelled during run: refund unexecuted")
+            except Exception:
+                logger.error("job %s mid-run cancel refund failed", job_id, exc_info=True)
+            cancel_msg = (f"已取消：完成 {ok} 张，未执行步骤的积分已退回" if zh
+                          else f"Cancelled: {ok} finished; credits for unexecuted steps refunded")
+            await emit(job_id, "text", {"content": cancel_msg})
+            await _set_status(job_id, "cancelled")
+            return
         if zh:
             summary = f"✅ 完成啦！{ok} 张已放到画布上" if failed == 0 else (
                 f"⚠️ 完成 {ok} 张，有 {failed} 张没成功（积分已退回），其余已放到画布"
@@ -295,6 +401,13 @@ async def _run_job(job_id: str) -> None:
         await _set_status(job_id, "done" if failed == 0 else ("done" if ok else "failed"))
     except Exception as exc:
         logger.exception("job %s crashed", job_id)
+        # 审计 B2：下面的文案承诺「未完成步骤的积分会退回」，必须真退——按账本重算余量。
+        # 退款自身失败不能吞掉原始错误处理（error 事件 + failed 终态照常走）；
+        # user_id 在极早期崩溃时可能未绑定 → 传 None 由 helper 从 job 行取。
+        try:
+            await _refund_job_remainder(job_id, None, "job crashed: refund unused reserve")
+        except Exception:
+            logger.error("job %s crash refund failed", job_id, exc_info=True)
         # 失败要说人话（用户曾看到英文 "Internal error" 完全不知所措）：
         # 上游 AI 服务抖动(sub2api 503/超时)是最常见 crash 源 → 明说"稍后重试"；其余给通用中文。
         exc_text = str(exc)
@@ -381,18 +494,39 @@ async def _execute_plan(
                 await emit(job_id, "tool_call", {"name": node.tool, "args": node.args, "est_seconds": est})
                 try:
                     results[node.id] = await _generate_node(job_id, session_id, user_id, node, planner, source_cache, node_outputs)
-                    if not results[node.id]:  # 节点返回 False（如视频未开通）也退款——否则预扣积分白扣
+                    if results[node.id]:
+                        # 结算记账（审计 B2）：成功节点按预扣同口径(node_cost)累计到运行时状态，
+                        # 崩溃/取消兜底退款用「预扣 - settled - 已退」算余量，已交付的不重复退。
+                        st = _runtime.get(job_id)
+                        if st is not None:
+                            st["settled"] = st.get("settled", 0) + node_cost(node)
+                    else:  # 节点返回 False（如视频未开通）也退款——否则预扣积分白扣
                         await refund_node(node, "failed")
                 except SkipLayer as skip:  # 元素判为「留在背景」是设计行为，非失败
-                    await emit(job_id, "info", {"content": str(skip)})
                     results[node.id] = False
                     skipped.add(node.id)
-                    await refund_node(node, "skipped")
+                    # 与失败分支同理（审计 B5）：先退款后通知，emit 抛错不能吞掉退款
+                    try:
+                        await refund_node(node, "skipped")
+                    except Exception:
+                        logger.error("node %s skip refund failed", node.id, exc_info=True)
+                    try:
+                        await emit(job_id, "info", {"content": str(skip)})
+                    except Exception:
+                        logger.error("node %s skip info emit failed", node.id, exc_info=True)
                 except Exception as exc:
                     logger.exception("node %s failed", node.id)
-                    await emit(job_id, "error", {"message": f"{node.label}: 生成失败（{str(exc)[:160]}），该节点积分已退还"})
                     results[node.id] = False
-                    await refund_node(node, "failed")
+                    # 审计 B5：先 refund 再 emit——原顺序下 emit 抛错（DB 抖动）会跳过退款，
+                    # 且异常被 gather(return_exceptions=True) 吞掉。两步各自兜底，互不牵连。
+                    try:
+                        await refund_node(node, "failed")
+                    except Exception:
+                        logger.error("node %s refund failed", node.id, exc_info=True)
+                    try:
+                        await emit(job_id, "error", {"message": f"{node.label}: 生成失败（{str(exc)[:160]}），该节点积分已退还"})
+                    except Exception:
+                        logger.error("node %s error emit failed", node.id, exc_info=True)
         finally:
             done_nodes.add(node.id)  # 无论成功/失败/早退，都标完成，避免依赖节点死等（+ emit/refund 抛错也不悬空）
 
@@ -477,8 +611,7 @@ async def _video_node(job_id: str, session_id: str, user_id: str, node, planner:
     storage.save_bytes(key, video.data)
     url = storage.public_url(key)
     async with _label_lock(session_id), SessionLocal() as db:
-        count = (await db.execute(select(func.count()).select_from(Asset).where(Asset.session_id == session_id))).scalar_one()
-        label = f"asset_{count + 1}"
+        label = await _next_asset_label(session_id, db)  # max+1 而非 count+1：硬删后不撞旧 label
         cx, cy = planner.next(video.width, video.height)
         db.add(Asset(
             session_id=session_id, user_id=user_id, asset_label=label, url=url, storage_key=key,
@@ -523,10 +656,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                         select(Asset).where(Asset.session_id == session_id, Asset.asset_label == src_label)
                     )
                 ).scalars().first()
-                count = (
-                    await db.execute(select(func.count()).select_from(Asset).where(Asset.session_id == session_id))
-                ).scalar_one()
-                tlabel = f"asset_{count + 1}"
+                tlabel = await _next_asset_label(session_id, db)  # max+1 而非 count+1：硬删后不撞旧 label
                 db.add(Asset(
                     session_id=session_id, user_id=user_id, asset_label=tlabel, url="", storage_key=None,
                     kind="text_layer", mime=None, width=None, height=None, model="ocr-text",
@@ -812,8 +942,19 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                         except Exception as exc:  # nano 失败 → 本次及之后都回落 gpt 系
                             last_exc = exc
                             person_failed = True
-                            _nano_down_until = time.time() + 900
-                            logger.warning("nano-banana edit 失败，熔断 15 分钟，降级扩图锁人：%s", str(exc)[:160])
+                            # 审计 B6：熔断只认「服务不可用」信号——传输层故障（超时/连接错）、
+                            # 认证/配额（401/402/403/429）、5xx。内容策略拒绝（400/422）、解析/PIL
+                            # 错误是单节点问题，全站熔断 15 分钟会误伤其他用户的人物节点。
+                            svc_down = isinstance(exc, httpx.TransportError) or (
+                                isinstance(exc, httpx.HTTPStatusError)
+                                and (exc.response.status_code in {401, 402, 403, 429}
+                                     or exc.response.status_code >= 500)
+                            )
+                            if svc_down:
+                                _nano_down_until = time.time() + 900
+                                logger.warning("nano-banana edit 失败，熔断 15 分钟，降级扩图锁人：%s", str(exc)[:160])
+                            else:
+                                logger.warning("nano-banana edit 失败（非服务故障不熔断），降级扩图锁人：%s", str(exc)[:160])
                     if image is None and use_person:
                         # gpt 系人物路径首选「扩图锁人」：人物区蒙版保护+原像素回贴，
                         # 模型只画人物以外（拉伸/变形物理不可能）；失败才裸整图重绘（最后兜底）。
@@ -868,10 +1009,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
     has_source = bool(node.args.get("source_asset"))
 
     async with _label_lock(session_id), SessionLocal() as db:
-        count = (
-            await db.execute(select(func.count()).select_from(Asset).where(Asset.session_id == session_id))
-        ).scalar_one()
-        label = f"asset_{count + 1}"
+        label = await _next_asset_label(session_id, db)  # max+1 而非 count+1：硬删后不撞旧 label
 
         # 摆放：普通编辑结果放源图右侧；套图（set_*）是一组成套结果，走行排布成整齐网格
         # 而不是散落在各自源图旁边（否则交错在原图中间显得很乱）。
@@ -924,65 +1062,68 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         # 计费：审批时已整单预扣（reserve），节点成功无需再记账；失败由 refund_node 退还
         await db.commit()
 
-    # placed（set_*/split_*/lay_*）都用 arrange 落到指定坐标，不走「放在源图旁」逻辑
-    result = {"ok": True, "model": image.model}
-    if node.tool == "edit_image" and not placed:
-        result["source_asset_id"] = node.args.get("source_asset")
-    asset_payload = {
-        "asset_label": label, "url": url, "kind": "image",
-        "model": image.model, "prompt": prompt, "source_tool": node.tool,
-    }
-    # 套图/拆图落位坐标。可编辑版套图还带模板 key + 文案 → 前端叠可编辑文字层
-    if node.args.get("set_member") or node.args.get("set_template") or placed:
-        asset_payload["canvas_x"] = canvas_x
-        asset_payload["canvas_y"] = canvas_y
-    if node.args.get("split_role"):
-        asset_payload["split_role"] = node.args["split_role"]
-        if node.args.get("label"):
-            asset_payload["split_label"] = node.args["label"]  # 元素人类名 → PSD 语义层名
-    if node.args.get("z_index") is not None:
-        asset_payload["z_index"] = node.args["z_index"]  # 四层合成：显式 z 序，刷新后仍按层叠正确堆叠
-    if node.args.get("set_template"):
-        asset_payload["set_template"] = node.args["set_template"]
-        if node.args.get("slot_content"):
-            asset_payload["set_content"] = node.args["slot_content"]
-    await emit(job_id, "tool_result", {
-        "name": node.tool,
-        "result": result,
-        "asset": asset_payload,
-    })
-    # 普通编辑结果由前端 placeNextToSource 摆放；生成结果与套图/拆图用 arrange 落到指定坐标
-    if (node.tool != "edit_image" or placed) and canvas_x is not None:
-        await emit(job_id, "canvas_op", {
-            "op": "arrange",
-            "args": {"moves": [{"asset_id": label, "x": canvas_x, "y": canvas_y}]},
+    # 审计 B5：主资产已落库 = 节点业务上已成功交付。下面的 tool_result/canvas_op 通知与
+    # 人物文字层落库只是「收尾」，任何一步抛错（DB 抖动等）都不能让已交付节点被误判失败
+    # 而触发退款——只记日志，照常返回 True。
+    try:
+        # placed（set_*/split_*/lay_*）都用 arrange 落到指定坐标，不走「放在源图旁」逻辑
+        result = {"ok": True, "model": image.model}
+        if node.tool == "edit_image" and not placed:
+            result["source_asset_id"] = node.args.get("source_asset")
+        asset_payload = {
+            "asset_label": label, "url": url, "kind": "image",
+            "model": image.model, "prompt": prompt, "source_tool": node.tool,
+        }
+        # 套图/拆图落位坐标。可编辑版套图还带模板 key + 文案 → 前端叠可编辑文字层
+        if node.args.get("set_member") or node.args.get("set_template") or placed:
+            asset_payload["canvas_x"] = canvas_x
+            asset_payload["canvas_y"] = canvas_y
+        if node.args.get("split_role"):
+            asset_payload["split_role"] = node.args["split_role"]
+            if node.args.get("label"):
+                asset_payload["split_label"] = node.args["label"]  # 元素人类名 → PSD 语义层名
+        if node.args.get("z_index") is not None:
+            asset_payload["z_index"] = node.args["z_index"]  # 四层合成：显式 z 序，刷新后仍按层叠正确堆叠
+        if node.args.get("set_template"):
+            asset_payload["set_template"] = node.args["set_template"]
+            if node.args.get("slot_content"):
+                asset_payload["set_content"] = node.args["slot_content"]
+        await emit(job_id, "tool_result", {
+            "name": node.tool,
+            "result": result,
+            "asset": asset_payload,
         })
-
-    # 人物海报文字层：模型没画字（_NO_TEXT 留白），把 planner 给的文案叠成前端可编辑文字层。
-    # why：nano 中文会写错字（实测「北海道美食」→「北洧道羪食」），文字层字永远正确且用户可改。
-    # 复用 extract_text 同一套通路（add_texts 事件 + kind=text_layer 持久化，刷新可恢复）。
-    if person_text_blocks:
-        texts = _person_text_layout(person_text_blocks)
-        if texts:
-            await emit(job_id, "canvas_op", {"op": "add_texts", "args": {"ref": label, "texts": texts}})
-            async with _label_lock(session_id), SessionLocal() as db:
-                count = (
-                    await db.execute(select(func.count()).select_from(Asset).where(Asset.session_id == session_id))
-                ).scalar_one()
-                tlabel = f"asset_{count + 1}"
-                db.add(Asset(
-                    session_id=session_id, user_id=user_id, asset_label=tlabel, url="", storage_key=None,
-                    kind="text_layer", mime=None, width=None, height=None, model="person-poster-text",
-                    prompt=json.dumps(texts, ensure_ascii=False), source_tool="edit_image", job_id=job_id,
-                    canvas_x=canvas_x, canvas_y=canvas_y,
-                ))
-                await db.commit()
-            await emit(job_id, "tool_result", {
-                "name": "text_layers", "result": {"ok": True, "text_blocks": len(texts)},
-                "asset": {"asset_label": tlabel, "url": "", "kind": "text_layer",
-                          "prompt": json.dumps(texts, ensure_ascii=False), "ref": label,
-                          "source_tool": "edit_image"},
+        # 普通编辑结果由前端 placeNextToSource 摆放；生成结果与套图/拆图用 arrange 落到指定坐标
+        if (node.tool != "edit_image" or placed) and canvas_x is not None:
+            await emit(job_id, "canvas_op", {
+                "op": "arrange",
+                "args": {"moves": [{"asset_id": label, "x": canvas_x, "y": canvas_y}]},
             })
+
+        # 人物海报文字层：模型没画字（_NO_TEXT 留白），把 planner 给的文案叠成前端可编辑文字层。
+        # why：nano 中文会写错字（实测「北海道美食」→「北洧道羪食」），文字层字永远正确且用户可改。
+        # 复用 extract_text 同一套通路（add_texts 事件 + kind=text_layer 持久化，刷新可恢复）。
+        if person_text_blocks:
+            texts = _person_text_layout(person_text_blocks)
+            if texts:
+                await emit(job_id, "canvas_op", {"op": "add_texts", "args": {"ref": label, "texts": texts}})
+                async with _label_lock(session_id), SessionLocal() as db:
+                    tlabel = await _next_asset_label(session_id, db)  # max+1 而非 count+1：硬删后不撞旧 label
+                    db.add(Asset(
+                        session_id=session_id, user_id=user_id, asset_label=tlabel, url="", storage_key=None,
+                        kind="text_layer", mime=None, width=None, height=None, model="person-poster-text",
+                        prompt=json.dumps(texts, ensure_ascii=False), source_tool="edit_image", job_id=job_id,
+                        canvas_x=canvas_x, canvas_y=canvas_y,
+                    ))
+                    await db.commit()
+                await emit(job_id, "tool_result", {
+                    "name": "text_layers", "result": {"ok": True, "text_blocks": len(texts)},
+                    "asset": {"asset_label": tlabel, "url": "", "kind": "text_layer",
+                              "prompt": json.dumps(texts, ensure_ascii=False), "ref": label,
+                              "source_tool": "edit_image"},
+                })
+    except Exception:
+        logger.error("node %s post-commit notify failed (asset already delivered)", node.id, exc_info=True)
     return True
 
 
@@ -1014,10 +1155,39 @@ def _person_text_layout(blocks: list) -> list[dict]:
     return out
 
 
+def _consumed_cost_from_plan(plan, produced_assets: list) -> int:
+    """已成功成本按「预扣同口径」重算：plan 节点的 node_cost（含 model/seconds/has_person 等）。
+
+    why（审计 B3）：裸 tool_cost(source_tool) 与预扣口径系统性不符——人物海报节点预扣 45
+    按 15 结算=多退，视频按秒预扣按固定 10 结算=乱。做法：产出资产按 source_tool 分组计数，
+    对每个 tool 取 plan 中该 tool 的前 N 个节点按 node_cost 求和。kind='text_layer' 是成功
+    节点的伴生产物（与主资产同节点落库），不是独立计费节点 → 排除，防同一节点计两次。
+    plan 缺失/解析失败由调用方回退旧口径（这里直接抛）。
+    """
+    if isinstance(plan, str):
+        plan = json.loads(plan)
+    nodes = (plan or {}).get("nodes") or []
+    if not nodes:
+        raise ValueError("plan has no nodes")
+    counts: dict[str, int] = {}
+    for a in produced_assets:
+        if a.kind == "text_layer":
+            continue
+        tool = a.source_tool or ""
+        counts[tool] = counts.get(tool, 0) + 1
+    by_tool: dict[str, list] = {}
+    for n in nodes:
+        by_tool.setdefault((n or {}).get("tool") or "", []).append(n)
+    total = 0
+    for tool, cnt in counts.items():
+        total += sum(node_cost(n) for n in by_tool.get(tool, [])[:cnt])
+    return total
+
+
 async def mark_stale_jobs_failed() -> None:
     """服务重启后：遗留非终态 job 标记失败，并补退未消耗的预扣积分（审计 L1）。
 
-    应退金额 = 预扣 - 已成功节点成本（按该 job 产出的资产计） - 已退金额。
+    应退金额 = 预扣 - 已成功节点成本（按 plan 节点预扣同口径重算，审计 B3） - 已退金额。
     """
     from sqlalchemy import func as sa_func
 
@@ -1028,13 +1198,17 @@ async def mark_stale_jobs_failed() -> None:
         for job in rows:
             job.status = "failed"
             job.error = "server restarted"
-            db.add(JobEvent(job_id=job.id, type="error", payload={"message": "Server restarted; unused credits refunded."}))
 
+            refunded = 0
             if job.credits_reserved:
                 succeeded = (
                     await db.execute(select(Asset).where(Asset.job_id == job.id))
                 ).scalars().all()
-                succeeded_cost = sum(tool_cost(a.source_tool or "") for a in succeeded)
+                try:
+                    succeeded_cost = _consumed_cost_from_plan(job.plan, succeeded)
+                except Exception:
+                    # plan 缺失/解析失败（如 region_edit 无 plan）→ 回退旧口径估算
+                    succeeded_cost = sum(tool_cost(a.source_tool or "") for a in succeeded)
                 already_refunded = (
                     await db.execute(
                         select(sa_func.coalesce(sa_func.sum(CreditLedger.delta), 0)).where(
@@ -1048,4 +1222,8 @@ async def mark_stale_jobs_failed() -> None:
                         db, job.user_id, due, "refund",
                         job_id=job.id, memo="server restart: unused reserve", enforce=False,
                     )
+                    refunded = due
+            # 审计 B10：没退钱就别说「credits refunded」——无预扣/无余量时文案要如实
+            msg = "Server restarted; unused credits refunded." if refunded else "Server restarted."
+            db.add(JobEvent(job_id=job.id, type="error", payload={"message": msg}))
         await db.commit()

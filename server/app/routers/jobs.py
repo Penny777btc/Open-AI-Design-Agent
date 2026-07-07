@@ -98,7 +98,11 @@ async def approve_job(job_id: str, db: AsyncSession = Depends(get_db), user=Depe
 
 @router.post("/jobs/{job_id}/reject")
 async def reject_job(job_id: str, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
-    await _owned_job(db, user, job_id)
+    job = await _owned_job(db, user, job_id)
+    # 审计 B9：与 approve 同一状态机语义——非待批准的 job（已批准/已预扣/已终态）reject
+    # 必须 409 而非静默 no-op，否则 approve 预扣后 reject 仍能翻转运行时标志造成预扣泄漏。
+    if job.status != "awaiting_approval":
+        raise HTTPException(status_code=409, detail=f"Job is {job.status}, not awaiting approval")
     job_service.resolve_approval(job_id, approved=False)
     return {"ok": True}
 

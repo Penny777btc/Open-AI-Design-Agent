@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps import get_current_user, get_db
 from app.models import Asset
 from app.routers.sessions import _owned_session
-from app.services.job_service import _label_lock
+from app.services.job_service import _label_lock, _next_asset_label
 
 router = APIRouter()
 
@@ -122,13 +122,11 @@ async def register_asset(session_id: str, request: Request, db: AsyncSession = D
     if ext and ext not in allowed:
         raise HTTPException(status_code=415, detail=f"不支持的资产类型（.{ext}）")
     async with _label_lock(session_id):
-        count = (
-            await db.execute(select(func.count()).select_from(Asset).where(Asset.session_id == session_id))
-        ).scalar_one()
         asset = Asset(
             session_id=session_id,
             user_id=user.id,
-            asset_label=f"asset_{count + 1}",
+            # max+1 而非 count+1：admin 硬删资产后 count 回退，count+1 会撞上仍存活的旧 label
+            asset_label=await _next_asset_label(session_id, db),
             url=body.get("url", ""),
             kind=body.get("kind", "image"),
             source_tool=body.get("source_tool", "upload"),

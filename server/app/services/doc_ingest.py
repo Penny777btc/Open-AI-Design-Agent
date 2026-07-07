@@ -8,8 +8,6 @@ import asyncio
 import logging
 import uuid as uuidlib
 
-from sqlalchemy import select
-
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Asset, ReferenceDoc
@@ -112,16 +110,15 @@ async def ingest(
 
     labels = []
     strip_assets = []  # 回执缩略图条：[{label, url, caption, is_product}]
+    # 函数内 import 避免模块加载环（job_service 在 _run_job 内才 import 本模块）
+    from app.services.job_service import _label_lock, _next_asset_label
+
     async with SessionLocal() as db:
         db.add(ReferenceDoc(
             session_id=session_id, user_id=user_id, filename=filename[:255],
             extracted_text=extracted_text, image_count=len(selected),
             sha256=sha256,  # 成品行带指纹：上传端点据此对已完成的解析去重
         ))
-        existing = (
-            await db.execute(select(Asset).where(Asset.session_id == session_id))
-        ).scalars().all()
-        count = len(existing)
         await db.commit()  # 立即落库并释放写锁（无图文档也要记录 ReferenceDoc；emit 走独立连接）
         for img_bytes, mime, _page, caption, is_product in selected:
             from io import BytesIO
@@ -135,21 +132,23 @@ async def ingest(
                 continue
             key = f"assets/{session_id}/doc_{uuidlib.uuid4().hex[:10]}.{mime.split('/')[-1]}"
             storage.save_bytes(key, img_bytes)
-            count += 1
-            label = f"asset_{count}"
             url = storage.public_url(key)
             # caption 让 planner 能分辨每张图是什么；「产品图：」前缀是选 edit_image 源图的依据
             if caption:
                 prompt = f"{'产品图：' if is_product else ''}{caption}（来自文档 {filename}）"
             else:
                 prompt = f"来自文档 {filename}"
-            db.add(Asset(
-                session_id=session_id, user_id=user_id, asset_label=label,
-                url=url, storage_key=key, kind="image", mime=mime,
-                width=width, height=height, source_tool="doc_extract",
-                prompt=prompt, canvas_x=None, canvas_y=None,
-            ))
-            await db.commit()
+            # label 分配走 max+1（而非 count+1，硬删后不撞旧 label），且与生成节点共用
+            # _label_lock 串行化——摄取期间同会话可能有并行 job 在落资产
+            async with _label_lock(session_id):
+                label = await _next_asset_label(session_id, db)
+                db.add(Asset(
+                    session_id=session_id, user_id=user_id, asset_label=label,
+                    url=url, storage_key=key, kind="image", mime=mime,
+                    width=width, height=height, source_tool="doc_extract",
+                    prompt=prompt, canvas_x=None, canvas_y=None,
+                ))
+                await db.commit()
             labels.append(label)
             strip_assets.append({"label": label, "url": url, "caption": caption, "is_product": is_product})
 

@@ -50,7 +50,11 @@ class FalNanoBanana:
             if url.startswith("data:"):
                 raw = base64.b64decode(url.split(",", 1)[1])
             else:
-                raw = (await client.get(url)).content  # fal.media 产物 URL 会过期 → 立即取回落盘
+                resp2 = await client.get(url)  # fal.media 产物 URL 会过期 → 立即取回落盘
+                # 4xx/5xx 必须显式抛错：错误页字节流喂给 PIL 会变成难排查的解析异常，
+                # 且取回失败属单节点问题，抛 HTTPStatusError 后由调用方按状态码分类（不误触熔断）
+                resp2.raise_for_status()
+                raw = resp2.content
 
         from PIL import Image
 

@@ -183,6 +183,10 @@ export default function CreativeCanvas({
   const lastUserMsgRef = useRef("");
   const mountedRef = useRef(true);           // 卸载后停止后台轮询
   const sessionIdRef = useRef(sessionId);    // 切会话时让旧轮询自停，防串会话/锁死输入
+  // 轮询登记表：同一 job 永远只留一条轮询在消费事件。快速 A→B→A 往返时旧轮询的
+  // 会话守卫会重新成立继续存活，若再叠一条就是事件双写；StrictMode 双执行、
+  // approve 接管重启等入口也都靠它天然去重。
+  const activePollsRef = useRef(new Set());
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
@@ -313,6 +317,11 @@ export default function CreativeCanvas({
     setUploadSuggestion(null);
     // M3：切会话时清掉旧会话遗留的画布占位 Loader（activeTasks），否则永久转圈。
     setActiveTasks([]);
+    // 旧会话的轮询被 sessionIdRef 守卫掐掉时刻意不碰 busy（那已是新会话的状态），
+    // 但没人兜底的话 busy 会卡在 true——切进来的会话输入框/发送按钮被永久禁用。
+    // 这里统一复位；新会话若真有活跃任务，loadHistory→checkActiveJobs 会重新置 true，语义闭环。
+    // （sendingRef 不在此复位：它是全局发送闸，由各 handler 的 finally 无条件复位。）
+    setBusy(false);
     if (sessionId) {
       loadHistory();
       loadAssets();
@@ -358,6 +367,10 @@ export default function CreativeCanvas({
   };
 
   const processEvent = (ev, msgIdx) => {
+    // 后端每 45s 一条的 heartbeat 保活事件（回放流里也有）：只为撑住轮询的「有进展」
+    // 判定（data.events.length 分支天然刷新 lastProgress），不进消息流、不做任何副作用——
+    // 否则每 45s 往气泡里塞一条未知类型事件、回放时还会成串出现。
+    if (ev.type === "heartbeat") return;
     const p = ev.payload || {};
 
     // Canvas mutation events — apply directly to the live canvas, don't push
@@ -500,8 +513,10 @@ export default function CreativeCanvas({
         // 优先按 name 配对（tool_result 带 name）；
         // M3：error 事件常无 name → 回落到「同 job_id 且仍 processing」的占位 Loader，
         // 否则 loader 会在 job 以 error 结束后永久转圈。
+        // 带 name 却没配上的 tool_result（如 SkipLayer——这类工具压根不生成占位 Loader）
+        // 不许走 job_id 回落，否则会误吃同 job 里其它还在跑的 Loader。
         let idx = flat.name ? prev.findIndex(t => t.modelName === flat.name) : -1;
-        if (idx === -1 && flat.job_id) {
+        if (idx === -1 && flat.job_id && (!flat.name || flat.type === "error")) {
           idx = prev.findIndex(t => t.job_id === flat.job_id && t.status === "processing");
         }
         if (idx !== -1) {
@@ -550,70 +565,84 @@ export default function CreativeCanvas({
   };
 
   const resumePolling = async (jobId, assistantIdx, pollSessionId = sessionId) => {
-    let cursor = 0;
-    const POLL_INTERVAL = 1200;
-    const MAX_DEAD_AIR = 6 * 60 * 1000;
-    let lastProgress = Date.now();
-
+    // busy 先于登记检查置 true：不管是新起轮询还是已有一条在跑（下面被去重掉），
+    // 任务都在进行中，输入闸都该关上——复位交给存活的那条轮询（或切会话时的兜底复位）。
     setBusy(true);
-    while (true) {
-      // 卸载 / 切换会话 → 停止本轮询（否则旧 job 事件会灌进新会话、并锁死新会话输入）
-      if (!mountedRef.current || sessionIdRef.current !== pollSessionId) return;
-      try {
-        const { data } = await axios.get(`${API}/jobs/${jobId}/events`, {
-          params: { since: cursor },
-          headers: getHeaders(),
-        });
-        if (data.events?.length) {
-          data.events.forEach(ev => processEvent({ ...ev, approved: data.approved }, assistantIdx));
-          cursor = data.cursor || cursor;
-          lastProgress = Date.now();
-        }
-        if (data.done) break;
-        // 「等待用户批准」≠ 失速：待批准期天然没有新事件，不能吃 6 分钟死气超时——
-        // 否则轮询自杀后用户再点批准，没人消费事件，结果永远进不了聊天流（实测复现）。
-        if (data.status === "awaiting_approval" || data.status === "approving") lastProgress = Date.now();
-        if (Date.now() - lastProgress > MAX_DEAD_AIR) throw new Error("Stalled");
-      } catch (err) {
-        // 致命 4xx（job 不存在/无权）→ 立即退出，不再空转 6 分钟锁着输入框
-        // M3：退出前清掉本 job 的占位 Loader，否则它会永久转圈（没有结果事件来消解）。
-        if ([403, 404, 410].includes(err.response?.status)) {
-          setActiveTasks(prev => prev.filter(t => t.job_id !== jobId));
-          setBusy(false);
-          return;
-        }
-        if (Date.now() - lastProgress > MAX_DEAD_AIR) {
-          // 长时间无进展时不再静默退出：告知用户任务仍在后台，刷新可重连
-          // M3：轮询超时也清本 job 的占位 Loader（任务转后台，前台不该再挂着转圈）。
-          setActiveTasks(prev => prev.filter(t => t.job_id !== jobId));
-          setMessages(prev => {
-            const arr = [...prev];
-            if (assistantIdx >= 0 && assistantIdx < arr.length) {
-              const m = { ...arr[assistantIdx], events: [...(arr[assistantIdx].events || [])] };
-              m.events.push({ id: `stall-${jobId}`, type: "info", job_id: jobId,
-                content: t("still_running_bg") });
-              arr[assistantIdx] = m;
-            }
-            return arr;
+    // 登记表去重：该 job 已有轮询在消费事件（如 A→B→A 往返后旧轮询复活）就不再叠一条，
+    // 否则同一事件被 processEvent 双写、画布副作用翻倍。
+    if (activePollsRef.current.has(jobId)) return;
+    activePollsRef.current.add(jobId);
+    // try/finally 兜住函数体内所有退出路径（守卫 return / 致命 4xx return / 失速 break），
+    // 保证登记一定注销——漏了该 job 就永远无法再被接管轮询（approve 重启也会被挡）。
+    try {
+      let cursor = 0;
+      const POLL_INTERVAL = 1200;
+      const MAX_DEAD_AIR = 6 * 60 * 1000;
+      let lastProgress = Date.now();
+
+      while (true) {
+        // 卸载 / 切换会话 → 停止本轮询（否则旧 job 事件会灌进新会话、并锁死新会话输入）
+        if (!mountedRef.current || sessionIdRef.current !== pollSessionId) return;
+        try {
+          const { data } = await axios.get(`${API}/jobs/${jobId}/events`, {
+            params: { since: cursor },
+            headers: getHeaders(),
           });
-          break;
+          if (data.events?.length) {
+            data.events.forEach(ev => processEvent({ ...ev, approved: data.approved }, assistantIdx));
+            cursor = data.cursor || cursor;
+            lastProgress = Date.now();
+          }
+          if (data.done) break;
+          // 「等待用户批准」≠ 失速：待批准期天然没有新事件，不能吃 6 分钟死气超时——
+          // 否则轮询自杀后用户再点批准，没人消费事件，结果永远进不了聊天流（实测复现）。
+          if (data.status === "awaiting_approval" || data.status === "approving") lastProgress = Date.now();
+          if (Date.now() - lastProgress > MAX_DEAD_AIR) throw new Error("Stalled");
+        } catch (err) {
+          // 致命 4xx（job 不存在/无权）→ 立即退出，不再空转 6 分钟锁着输入框
+          // M3：退出前清掉本 job 的占位 Loader，否则它会永久转圈（没有结果事件来消解）。
+          if ([403, 404, 410].includes(err.response?.status)) {
+            setActiveTasks(prev => prev.filter(t => t.job_id !== jobId));
+            setBusy(false);
+            return;
+          }
+          if (Date.now() - lastProgress > MAX_DEAD_AIR) {
+            // 长时间无进展时不再静默退出：告知用户任务仍在后台，刷新可重连
+            // M3：轮询超时也清本 job 的占位 Loader（任务转后台，前台不该再挂着转圈）。
+            setActiveTasks(prev => prev.filter(t => t.job_id !== jobId));
+            setMessages(prev => {
+              const arr = [...prev];
+              if (assistantIdx >= 0 && assistantIdx < arr.length) {
+                const m = { ...arr[assistantIdx], events: [...(arr[assistantIdx].events || [])] };
+                m.events.push({ id: `stall-${jobId}`, type: "info", job_id: jobId,
+                  content: t("still_running_bg") });
+                arr[assistantIdx] = m;
+              }
+              return arr;
+            });
+            break;
+          }
         }
+        await new Promise(r => setTimeout(r, POLL_INTERVAL));
       }
-      await new Promise(r => setTimeout(r, POLL_INTERVAL));
+      // 会话已切走 → 交给新会话管理，别复位它的 busy
+      if (!mountedRef.current || sessionIdRef.current !== pollSessionId) return;
+      setBusy(false);
+      loadAssets();
+      onBalanceChange?.();
+      // Persist final state（用轮询启动时的 sessionId，避免新建会话时闭包里的 sessionId 为 null）
+      setMessages(prev => {
+        const next = [...prev];
+        // updater 延后执行，届时可能刚好切走会话：prev 已是新会话的消息，
+        // 再验一次归属，绝不把别的会话的消息 PATCH 进本轮询的会话。
+        if (pollSessionId && sessionIdRef.current === pollSessionId) {
+          axios.patch(`${API}/sessions/${pollSessionId}/messages`, { messages: next }, { headers: getHeaders() }).catch(() => {});
+        }
+        return next;
+      });
+    } finally {
+      activePollsRef.current.delete(jobId);
     }
-    // 会话已切走 → 交给新会话管理，别复位它的 busy
-    if (!mountedRef.current || sessionIdRef.current !== pollSessionId) return;
-    setBusy(false);
-    loadAssets();
-    onBalanceChange?.();
-    // Persist final state（用轮询启动时的 sessionId，避免新建会话时闭包里的 sessionId 为 null）
-    setMessages(prev => {
-      const next = [...prev];
-      if (pollSessionId) {
-        axios.patch(`${API}/sessions/${pollSessionId}/messages`, { messages: next }, { headers: getHeaders() }).catch(() => {});
-      }
-      return next;
-    });
   };
 
   // 画布局部编辑：涂抹蒙版 + 指令 → 跳过审批直接执行（面板已展示消耗）
@@ -830,11 +859,11 @@ export default function CreativeCanvas({
     try {
       await axios.post(`${API}/jobs/${jobId}/${action}`, {}, { headers: getHeaders() });
       if (!opts.silent) toast.success(t("job_actioned", action));
-      
+
       // Hide the approval card in the UI
-      setMessages(prev => prev.map(m => ({
+      const hideApprovalCard = (msgs) => msgs.map(m => ({
         ...m,
-        events: (m.events || []).map(e => 
+        events: (m.events || []).map(e =>
           e.job_id === jobId && (
             (e.type === "info" && (e.content?.includes("approval") || e.content?.includes("confirmation"))) ||
             (e.type === "plan_propose")
@@ -842,7 +871,23 @@ export default function CreativeCanvas({
             ? { ...e, handled: true }
             : e
         )
-      })));
+      }));
+      // 批准成功但该 job 的轮询已死（失速自杀 / 刷新后从未接管）→ 没人消费后续事件，
+      // 任务实际在跑、聊天却永远停格在计划卡。查登记表，缺席就找回归属气泡重新接管轮询。
+      const needResume = action === "approve" && !activePollsRef.current.has(jobId);
+      let resumeIdx = needResume
+        ? messages.findIndex(m => m?.role === "assistant" && (m.events || []).some(e => e.job_id === jobId))
+        : -1;
+      if (needResume && resumeIdx < 0) {
+        // 找不到归属气泡（快照被清等异常）：追加新气泡承接。基于渲染快照同步算好再 set
+        // ——updater 必须无副作用（StrictMode 会双执行），索引也要与真实数组一致。
+        const next = hideApprovalCard([...messages, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }]);
+        resumeIdx = next.length - 1;
+        setMessages(next);
+      } else {
+        setMessages(prev => hideApprovalCard(prev));
+      }
+      if (needResume) resumePolling(jobId, resumeIdx);
       onBalanceChange?.();
     } catch (err) {
       // 审计 U2：积分不足时给充值直达入口，而不是只报错
@@ -923,50 +968,70 @@ export default function CreativeCanvas({
 
   const checkActiveJobs = async (currentMessages) => {
     if (!sessionId) return;
+    const checkSessionId = sessionId; // 拉取期间可能切会话，回来先验归属再动 messages
     try {
-      const { data } = await axios.get(`${API}/sessions/${sessionId}/jobs`, { headers: getHeaders() });
-      // 非终态全部恢复（含等待审批），刷新/跨页后重建事件流与审批卡片
+      const { data } = await axios.get(`${API}/sessions/${checkSessionId}/jobs`, { headers: getHeaders() });
+      // 已切走：追加的气泡/启动的轮询都不该落到新会话头上
+      if (sessionIdRef.current !== checkSessionId) return;
+      // 非终态全部恢复（含等待审批），刷新/跨页后重建事件流与审批卡片。
+      // 只恢复第一个会让其余并发任务（批量套图+追问）的事件无人消费、完成了也进不了聊天流
+      // ——遍历全部 active job，各自解析归属气泡、独立轮询。busy 沿用既有语义：
+      // 任一轮询置 true、最先结束者置 false。
       const ACTIVE = ["pending", "processing", "planning", "awaiting_approval", "approving", "running"];
-      const active = data.find(j => ACTIVE.includes(j.status) && j.id);
-      if (active) {
-        // If the last message is assistant but empty/no events, it might be the one for this job.
-        let aIdx = currentMessages.length - 1;
-        if (aIdx < 0 || currentMessages[aIdx].role !== "assistant") {
-          // No assistant bubble to resume into, create a new one.
-          setMessages(prev => {
-            const next = [...prev, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
-            resumePolling(active.id, next.length - 1);
-            return next;
-          });
-        } else {
-          resumePolling(active.id, aIdx);
-        }
+      const actives = data.filter(j => ACTIVE.includes(j.status) && j.id);
+      if (actives.length) {
+        // 先在 updater 外同步算好「追加气泡后的数组 + 各 job 的气泡索引」，setMessages 之后
+        // 才启动轮询——updater 必须无副作用（StrictMode 双执行 updater，曾把 resumePolling 调起两次）。
+        let next = currentMessages;
+        const polls = actives.map(job => {
+          let aIdx = next.findIndex(
+            m => m?.role === "assistant" && (m.events || []).some(e => e.job_id === job.id));
+          if (aIdx < 0) {
+            // 快照里没有承接该 job 的助手气泡（如发完消息就关页）→ 追加新气泡接住事件
+            next = [...next, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
+            aIdx = next.length - 1;
+          }
+          return [job.id, aIdx];
+        });
+        if (next !== currentMessages) setMessages(next);
+        polls.forEach(([jid, idx]) => resumePolling(jid, idx, checkSessionId));
         return;
       }
-      // 「离开期间完成」的任务：快照里只有早期事件（计划卡/失速提示），没有终局事件——
-      // 气泡会永远停在「还在为你生成中」、旧计划卡还能点（点了 409 弹「已失效」惊扰）。
-      // 补救：找最近的终态任务，若其 tool_result/error 不在快照里 → 回放全部事件补齐
-      // （resumePolling 从 since=0 拉全量，done 即收口），回放前先收掉该任务的旧卡/失速提示。
+      // 「离开期间完成」的任务：快照里没有终局事件——气泡会永远停在「还在为你生成中」、
+      // 旧计划卡还能点（点了 409 弹「已失效」惊扰）。
+      // 补救：找最近的终态任务回放全部事件补齐（resumePolling 从 since=0 拉全量，done 即收口），
+      // 回放前先收掉该任务的旧卡/失速提示。
+      // 判据不再要求「快照里已有该 job 事件」：发完消息秒关页面的任务事件从未 PATCH 进快照
+      //（零事件），老判据会把它永久跳过、结果永远丢失。放宽为「有其任意事件，或快照最后一条
+      // 有效消息是 user（用户在等一个从未落地的回复）」。
       const TERMINAL = ["done", "failed", "succeeded", "cancelled", "rejected"];
+      const lastMsg = [...currentMessages].reverse().find(m => m && m.role);
       const stale = data
         .filter(j => TERMINAL.includes(j.status) && j.id)
         .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
         .slice(0, 3)
         .find(j =>
-          currentMessages.some(m => (m.events || []).some(e => e.job_id === j.id)) &&
           !currentMessages.some(m => (m.events || []).some(e =>
-            e.job_id === j.id && (e.type === "tool_result" || e.type === "error"))));
+            e.job_id === j.id && (e.type === "tool_result" || e.type === "error"))) &&
+          (currentMessages.some(m => (m.events || []).some(e => e.job_id === j.id)) ||
+            lastMsg?.role === "user"));
       if (stale) {
         let aIdx = currentMessages.findIndex(
-          m => m.role === "assistant" && (m.events || []).some(e => e.job_id === stale.id));
-        if (aIdx < 0) aIdx = currentMessages.length - 1;
-        setMessages(prev => prev.map(m => ({
+          m => m?.role === "assistant" && (m.events || []).some(e => e.job_id === stale.id));
+        let next = currentMessages.map(m => ({
           ...m,
           events: (m.events || [])
             .filter(e => !(e.job_id === stale.id && String(e.id || "").startsWith("stall-")))
             .map(e => e.job_id === stale.id && e.type === "plan_propose" ? { ...e, handled: true } : e),
-        })));
-        resumePolling(stale.id, aIdx);
+        }));
+        if (aIdx < 0) {
+          // 零事件快照没有可复用的助手气泡：追加新气泡承接回放——绝不能回落到「最后一条消息」，
+          // 那多半是 user 气泡，事件会被灌进用户消息里。同样在 updater 外算好再 set。
+          next = [...next, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
+          aIdx = next.length - 1;
+        }
+        setMessages(next);
+        resumePolling(stale.id, aIdx, checkSessionId);
       }
     } catch {}
   };
@@ -1303,13 +1368,21 @@ export default function CreativeCanvas({
         return arr;
       });
     } finally {
+      // 全局发送闸必须无条件复位：不复位则此后所有发送/套图/拆图被 guard 静默吞掉，UI 死锁到刷新
       sendingRef.current = false;
-      setBusy(false);
-      await loadAssets();
-      if (activeSessionId) {
+      // H3 会话守卫（对齐 handleSetTemplate/handleSplitImage/handleRegionEdit/processReferenceDoc）：
+      // 仍停留在本次发送的会话才收尾。旧逻辑切走后无条件收尾——把「当前(新)会话的 messages」
+      // 整份 PATCH 进旧会话（跨会话覆写聊天记录），loadAssets 还会把旧会话资产灌进新画布，
+      // busy 复位也误清新会话的任务闸。
+      if (activeSessionId && sessionIdRef.current === activeSessionId) {
+        setBusy(false);
+        await loadAssets();
         setMessages(prev => {
           const newMsgs = [...prev];
-          axios.patch(`${API}/sessions/${activeSessionId}/messages`, { messages: newMsgs }, { headers: getHeaders() }).catch(() => {});
+          // updater 延后执行，届时可能刚好切走：再验一次归属，消息只写进它所属的会话
+          if (sessionIdRef.current === activeSessionId) {
+            axios.patch(`${API}/sessions/${activeSessionId}/messages`, { messages: newMsgs }, { headers: getHeaders() }).catch(() => {});
+          }
           return newMsgs;
         });
       }
@@ -2610,6 +2683,12 @@ function EventPill({ event }) {
 
   if (event.type === "tool_result") {
     const ok = event.result?.ok !== false;
+    // SkipLayer 类回执（ok:true + skipped:true，无 asset）不是「生成了什么」，
+    // 按默认路径显示「画面已生成」是撒谎态——改用中性「已跳过」，有 reason 就补一句小字。
+    // （本组件不新增 i18n 词条，按站点语言就地取词，桥接方式与 processReferenceDoc 一致。）
+    const skipped = ok && event.result?.skipped === true;
+    const skippedLabel =
+      (typeof localStorage !== "undefined" && localStorage.getItem("lang")) === "en" ? "Skipped" : "已跳过";
     if (event.name === "ask_user" && event.result?.ask_user) {
       const choices = event.result.choices || [];
       return (
@@ -2646,8 +2725,13 @@ function EventPill({ event }) {
         {ok ? <FiCheck size={13} /> : <FiX size={13} />}
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <span className="font-medium">
-            {ok ? friendlyDone(event.name, event.asset) : t("step_skipped")}
+            {ok ? (skipped ? skippedLabel : friendlyDone(event.name, event.asset)) : t("step_skipped")}
           </span>
+          {skipped && event.result?.reason && (
+            <span className="text-[11px] opacity-70 truncate max-w-[160px]" title={String(event.result.reason)}>
+              {String(event.result.reason).substring(0, 60)}
+            </span>
+          )}
           {!ok && event.result?.error && (
             <span className="text-[11px] opacity-70 truncate max-w-[160px]" title={event.result.error}>
               {String(event.result.error).replace(/^\w+Error:\s*/i, "").substring(0, 60)}

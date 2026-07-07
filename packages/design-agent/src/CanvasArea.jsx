@@ -735,7 +735,8 @@ const URLText = ({
 }) => {
   const shapeRef = useRef();
   const trRef = useRef();
-  const { zIndex, ...restTextObj } = textObj;
+  // srcRef 是回放幂等用的来源标记（zIndex 同理），别泄漏成 Konva 节点属性
+  const { zIndex, srcRef, ...restTextObj } = textObj;
 
   useEffect(() => {
     if (isSelected) {
@@ -1848,6 +1849,13 @@ const CanvasArea = forwardRef(
 
     const addImage = (src, x, y, width, height, onLoaded, assetLabel, setTemplate, setContent, zIndex, splitRole, splitLabel) => {
       if (!src) return;
+      // 回放幂等：assetLabel 是资产唯一键，同 label 重复 add 只会来自事件回放/资产同步撞车
+      //（刷新恢复时 since=0 全量回放与 asset-sync 都想落图）——直接跳过，防同一张图落两份、
+      // 套图模板文字跟着翻倍。本地未注册图 assetLabel 为空，不受此限。
+      if (assetLabel && images.some((it) => it.assetLabel === assetLabel)) {
+        if (typeof onLoaded === "function") onLoaded();
+        return;
+      }
       const stage = stageRef.current;
       if (!stage) {
         console.error("CanvasArea: stageRef.current is null in addImage");
@@ -1963,6 +1971,11 @@ const CanvasArea = forwardRef(
 
     const addVideo = (src, x, y, width, height, onLoaded, assetLabel) => {
       if (!src) return;
+      // 回放幂等：同 addImage——带 label 的重复 add 只会来自回放/同步撞车，跳过防重复落布
+      if (assetLabel && videos.some((it) => it.assetLabel === assetLabel)) {
+        if (typeof onLoaded === "function") onLoaded();
+        return;
+      }
       const stage = stageRef.current;
       if (!stage) {
         console.error("CanvasArea: stageRef.current is null in addVideo");
@@ -2164,6 +2177,9 @@ const CanvasArea = forwardRef(
           draggable: true,
           rotation: 0,
           zIndex: TEXT_Z + i,
+          // 回放幂等：记住来源 ref，同源重放（刷新恢复的 add_texts / 资产同步重复触发）
+          // 先清旧层再落新层，文字才不会翻倍；手动添加的文字无 srcRef，永不被误清
+          srcRef: ref,
         };
         // 浮雕：高光层(偏左上) + 暗影层(偏右下) + 主体层(最上)，三层同坐标 → 导出 PSD 即 3 个可编辑文字层
         if (e.emboss) {
@@ -2187,7 +2203,12 @@ const CanvasArea = forwardRef(
         }
         nodes.push(main);
       });
-      setTexts((prev) => [...prev, ...nodes]);
+      // 清旧+落新放同一个 updater：同一 tick 内重复调用也幂等（分两次 set 会读到旧闭包）。
+      // ref 为空（无锚图）时没有稳定身份可比对，不清——否则会误删其它无锚批次/手动文字。
+      setTexts((prev) => [
+        ...(ref != null ? prev.filter((tx) => tx.srcRef !== ref) : prev),
+        ...nodes,
+      ]);
       // 加载文案用到的设计字体（用裸字体名，loadGoogleFont 遇 "sans-serif" 会跳过），加载完强制重绘
       [...new Set(blocks.map((b) => b.fontFamily).filter(Boolean))].forEach((fam) =>
         loadGoogleFont(fam).then(() => {
