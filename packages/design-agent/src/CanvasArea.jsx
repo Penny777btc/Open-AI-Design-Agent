@@ -956,6 +956,8 @@ const CanvasArea = forwardRef(
       onZoomChange,
       // 手动布局持久化：拖拽/缩放/微移后防抖回调 [{asset_label,x,y,w,h},...] → 宿主 PATCH 后端
       onLayoutChange = null,
+      // 画布删除持久化：undo 窗口过后回调 [asset_label,...] → 宿主删资产行(否则刷新复活)
+      onDeleteAssets = null,
       // 局部编辑：用户在选中图片上涂抹蒙版后回调 { assetLabel, prompt, maskDataUrl }
       onRegionEdit = null,
       // 套图：选中一批产品图 + 模板后回调 { assetLabels, template, templateLabel } → 后端批量 AI 生成
@@ -1026,12 +1028,21 @@ const CanvasArea = forwardRef(
         if (!s.additive) setSetSel(new Set());
         return;
       }
-      // 命中测试：图片包围盒与选框相交即选中（世界坐标）
-      const hit = images.filter((img) => {
-        const w = img.width || 200, h = img.height || 200;
-        return img.x < box.x + box.w && img.x + w > box.x &&
-               img.y < box.y + box.h && img.y + h > box.y;
-      }).map((img) => img.id);
+      // 命中测试：所有可见节点（图片/视频/音频/文字）包围盒与选框相交即选中（世界坐标）。
+      // 文字节点没有显式 height，用字号×行数估算——孤儿文字层也能被批量框中删除/对齐。
+      const inBox = (x, y, w, h) =>
+        x < box.x + box.w && x + w > box.x && y < box.y + box.h && y + h > box.y;
+      const hit = [
+        ...images.filter((n) => inBox(n.x, n.y, n.width || 200, n.height || 200)),
+        ...videos.filter((n) => inBox(n.x, n.y, n.width || 200, n.height || 200)),
+        ...audios.filter((n) => inBox(n.x, n.y, n.width || 240, n.height || 60)),
+        ...texts.filter((n) => {
+          const lines = Math.max(1, String(n.text || "").split("\n").length);
+          const h = n.height || (n.fontSize || 24) * 1.35 * lines;
+          const w = n.width || Math.max(40, String(n.text || "").length * (n.fontSize || 24));
+          return inBox(n.x, n.y, w, h);
+        }),
+      ].map((n) => n.id);
       setSetSel((prev) => {
         const n = s.additive ? new Set(prev) : new Set();
         hit.forEach((id) => n.add(id));
@@ -2189,7 +2200,7 @@ const CanvasArea = forwardRef(
     };
 
     // AI 拆图·文字层：后端 OCR 出的文字块(相对坐标) → 在参考图上重建为可编辑文字节点。
-    const addTextLayers = (ref, blocks) => {
+    const addTextLayers = (ref, blocks, layerLabel = null) => {
       const base = images.find((i) => i.assetLabel === ref) || images[images.length - 1];
       if (!base || !blocks?.length) return;
       const bx = base.x, by = base.y, bw = base.width || 200, bh = base.height || 200;
@@ -2229,6 +2240,7 @@ const CanvasArea = forwardRef(
           // 回放幂等：记住来源 ref，同源重放（刷新恢复的 add_texts / 资产同步重复触发）
           // 先清旧层再落新层，文字才不会翻倍；手动添加的文字无 srcRef，永不被误清
           srcRef: ref,
+          layerAsset: layerLabel,  // 所属 text_layer 资产行——画布删除要按它落库
         };
         // 浮雕：高光层(偏左上) + 暗影层(偏右下) + 主体层(最上)，三层同坐标 → 导出 PSD 即 3 个可编辑文字层
         if (e.emboss) {
@@ -2778,6 +2790,26 @@ const CanvasArea = forwardRef(
       setVideos((prev) => prev.filter((v) => !targetIds.has(v.id)));
       setAudios((prev) => prev.filter((a) => !targetIds.has(a.id)));
       setTexts((prev) => prev.filter((tx) => !targetIds.has(tx.id)));
+      // 删除持久化：undo 窗口(5s)过后未撤销 → 把资产行删掉，否则刷新后从资产表复活。
+      // 文字层按 layerAsset 归并：同一资产行的节点(标题+副标题)全删光才删行。
+      const delLabels = new Set([
+        ...delImgs.map((i) => i.assetLabel), ...delVids.map((v) => v.assetLabel),
+        ...delAuds.map((a) => a.assetLabel),
+      ].filter(Boolean));
+      const txtLabels = new Set(delTxts.map((tx) => tx.layerAsset).filter(Boolean));
+      const undoneRef = { current: false };
+      if (delLabels.size || txtLabels.size) {
+        setTimeout(() => {
+          if (undoneRef.current || !onDeleteAssets) return;
+          setTexts((now) => {
+            // 在最新状态里核对：该文字资产还有存活节点就不删行
+            txtLabels.forEach((l) => { if (now.some((tx) => tx.layerAsset === l)) txtLabels.delete(l); });
+            const all = [...delLabels, ...txtLabels];
+            if (all.length) { try { onDeleteAssets(all); } catch {} }
+            return now;
+          });
+        }, 5400);
+      }
       setSetSel(new Set());
       setSelectedId(null);
       setContextMenu(null);
@@ -2786,6 +2818,7 @@ const CanvasArea = forwardRef(
           {t("canvas_deleted", total)}
           <button
             onClick={() => {
+              undoneRef.current = true;  // 撤销 → 取消落库删除
               if (delImgs.length) setImages((prev) => [...prev, ...delImgs]);
               if (delVids.length) setVideos((prev) => [...prev, ...delVids]);
               if (delAuds.length) setAudios((prev) => [...prev, ...delAuds]);

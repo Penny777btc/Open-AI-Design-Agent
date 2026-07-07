@@ -99,6 +99,28 @@ async def update_layout(
     return {"updated": updated}
 
 
+@router.post("/sessions/{session_id}/assets/delete")
+async def delete_assets(
+    session_id: str, request: Request,
+    db: AsyncSession = Depends(get_db), user=Depends(get_current_user),
+):
+    """批量删除资产（用户画布删除的持久化）。body: {"labels": ["asset_3", ...]}
+
+    why：删除原本只清前端画布状态，刷新后资产重同步全部复活。硬删行（存储文件保留，
+    避免误删后无法恢复文件；行删除后前端 undo 窗口已过，属用户确认过的操作）。
+    """
+    await _owned_session(db, user, session_id)
+    body = await request.json()
+    labels = [l for l in (body.get("labels") or []) if isinstance(l, str)][:200]
+    if not labels:
+        return {"deleted": 0}
+    from sqlalchemy import delete as sa_delete
+    res = await db.execute(sa_delete(Asset).where(
+        Asset.session_id == session_id, Asset.asset_label.in_(labels)))
+    await db.commit()
+    return {"deleted": res.rowcount}
+
+
 @router.post("/sessions/{session_id}/assets")
 async def register_asset(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     await _owned_session(db, user, session_id)

@@ -369,12 +369,12 @@ export default function CreativeCanvas({
   // 文字层挂载竞态修复：tool_result 的图片走 addImage 异步 onload 提交，紧随其后的 add_texts
   // 到达时锚图往往还没落布 → addTextLayers 找不到 base 静默丢层（用户实测：海报出来没标题）。
   // 等锚图出现再挂层；15×400ms 内锚图仍未出现（异常）才放弃。ref 为空走旧语义（锚最后一张图）。
-  const addTextLayersWhenReady = (ref, texts, attemptsLeft = 15) => {
+  const addTextLayersWhenReady = (ref, texts, layerLabel = null, attemptsLeft = 15) => {
     const c = canvasRef.current;
     if (!c || typeof c.addTextLayers !== "function" || !texts?.length) return;
     const anchored = !ref || (c.getCanvasState?.()?.nodes || []).some(n => n.asset_id === ref);
-    if (anchored) { c.addTextLayers(ref, texts); return; }
-    if (attemptsLeft > 0) setTimeout(() => addTextLayersWhenReady(ref, texts, attemptsLeft - 1), 400);
+    if (anchored) { c.addTextLayers(ref, texts, layerLabel); return; }
+    if (attemptsLeft > 0) setTimeout(() => addTextLayersWhenReady(ref, texts, layerLabel, attemptsLeft - 1), 400);
   };
 
   const processEvent = (ev, msgIdx) => {
@@ -396,7 +396,7 @@ export default function CreativeCanvas({
       } else if (op === "arrange" && typeof c.arrangeNodes === "function") {
         c.arrangeNodes(args.moves || []);
       } else if (op === "add_texts" && typeof c.addTextLayers === "function") {
-        addTextLayersWhenReady(args.ref, args.texts || []);
+        addTextLayersWhenReady(args.ref, args.texts || [], args.layer_label || null);
       }
       return;
     }
@@ -1067,6 +1067,16 @@ export default function CreativeCanvas({
 
   // 手动布局持久化：CanvasArea 防抖回报的拖拽/缩放批次 → PATCH 后端，刷新后按新布局重建。
   // 静默失败（布局回写不该打扰创作；下次变动会带着最新坐标再试）。
+  // 画布删除持久化：undo 窗口过后删资产行（刷新不再复活）。静默失败可接受（下次删除再试）。
+  const persistDelete = useCallback(async (labels) => {
+    const sid = sessionIdRef.current;
+    if (!sid || !labels?.length) return;
+    try {
+      await axios.post(`${API}/sessions/${sid}/assets/delete`, { labels }, { headers: getHeaders() });
+      loadAssets();
+    } catch {}
+  }, [getHeaders]);
+
   const persistLayout = useCallback(async (moves) => {
     const sid = sessionIdRef.current;
     if (!sid || !moves?.length) return;
@@ -1532,7 +1542,7 @@ export default function CreativeCanvas({
                 && (o.canvas_y ?? null) === (a.canvas_y ?? null));
               anchorLabel = anchor?.asset_label ?? null;
             }
-            addTextLayersWhenReady(anchorLabel, blocks);
+            addTextLayersWhenReady(anchorLabel, blocks, a.asset_label || null);
             return;
           }
 
@@ -1993,6 +2003,7 @@ export default function CreativeCanvas({
               setActiveTasks={setActiveTasks}
               onZoomChange={setZoomLevel}
               onLayoutChange={persistLayout}
+              onDeleteAssets={persistDelete}
               onRegionEdit={handleRegionEdit}
               onSetTemplate={handleSetTemplate}
               onSplitImage={handleSplitImage}

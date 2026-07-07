@@ -1142,7 +1142,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         if person_text_blocks:
             texts = _person_text_layout(person_text_blocks)
             if texts:
-                await emit(job_id, "canvas_op", {"op": "add_texts", "args": {"ref": label, "texts": texts}})
+                # 先落库拿到 tlabel 再发 add_texts：事件带 layer_label，前端把文字节点
+                # 与资产行绑定 → 画布删除文字层才能持久化（否则刷新复活）
                 async with _label_lock(session_id), SessionLocal() as db:
                     tlabel = await _next_asset_label(session_id, db)  # max+1 而非 count+1：硬删后不撞旧 label
                     db.add(Asset(
@@ -1155,6 +1156,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                         canvas_x=canvas_x, canvas_y=canvas_y,
                     ))
                     await db.commit()
+                await emit(job_id, "canvas_op", {"op": "add_texts",
+                                                 "args": {"ref": label, "texts": texts, "layer_label": tlabel}})
                 await emit(job_id, "tool_result", {
                     "name": "text_layers", "result": {"ok": True, "text_blocks": len(texts)},
                     "asset": {"asset_label": tlabel, "url": "", "kind": "text_layer",
