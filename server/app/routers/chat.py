@@ -95,7 +95,8 @@ async def set_template(session_id: str, request: Request, db: AsyncSession = Dep
     body = await request.json()
     template = body.get("template")
     labels = body.get("asset_labels") or []
-    single_kinds = {"main6": ("电商主图六联", 6), "detail7": ("电商详情页七段", 7)}
+    single_kinds = {"main6": ("电商主图六联", 6), "detail7": ("电商详情页七段", 7),
+                    "social5": ("社交媒体封面五联", 5)}
     if template not in single_kinds and template not in SET_TEMPLATES:
         raise HTTPException(status_code=422, detail="未知套图模板")
     if not labels:

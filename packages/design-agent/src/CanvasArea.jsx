@@ -66,6 +66,7 @@ const TEXT_SWATCHES = ["#ffffff", "#262320", "#8a847c", "#a8884e", "#ffe24d", "#
 const SET_TEMPLATES = {
   main6: { labelKey: "tpl_main6", descKey: "tpl_main6_desc", single: true, count: 6, ctaKey: "tpl_main6_cta" },
   detail7: { labelKey: "tpl_detail7", descKey: "tpl_detail7_desc", single: true, count: 7, ctaKey: "tpl_detail7_cta" },
+  social5: { labelKey: "tpl_social5", descKey: "tpl_social5_desc", single: true, count: 5, ctaKey: "tpl_social5_cta" },
   ecom: { labelKey: "tpl_ecom", descKey: "tpl_ecom_desc" },
   rednote: { labelKey: "tpl_rednote", descKey: "tpl_rednote_desc" },
   minimal: { labelKey: "tpl_minimal", descKey: "tpl_minimal_desc" },
@@ -3587,25 +3588,18 @@ const CanvasArea = forwardRef(
                   </div>
                 </div>
               )}
-              {/* 图片勾选 */}
+              {/* 已选素材（只读预览）：选择在画布上完成（点选/框选），弹窗不再做二次挑选——
+                  用户实测二次勾选是冗余步骤；无选中时给出画布选图的引导。 */}
               <div className="px-5 py-4 flex-1 overflow-y-auto scrollbar-subtle">
-                {images.length === 0 ? (
-                  <div className="py-10 text-center text-secondary-strong text-[12px]">{t("no_images_on_canvas")}</div>
+                {setSel.size === 0 ? (
+                  <div className="py-8 text-center text-secondary-strong text-[12px]">{t("set_pick_on_canvas")}</div>
                 ) : (
-                  <div className="grid grid-cols-4 gap-2">
-                    {images.map((img) => {
-                      const on = setSel.has(img.id);
-                      return (
-                        <button
-                          key={img.id}
-                          onClick={() => setSetSel((prev) => { const n = new Set(prev); n.has(img.id) ? n.delete(img.id) : n.add(img.id); return n; })}
-                          className={`relative aspect-square rounded overflow-hidden border-2 transition-all ${on ? "border-primary" : "border-divider hover:border-secondary-text"}`}
-                        >
-                          <img src={img.src} className="w-full h-full object-cover" />
-                          {on && <span className="absolute top-1 right-1 w-5 h-5 rounded-full bg-primary text-black text-[11px] font-bold flex items-center justify-center">✓</span>}
-                        </button>
-                      );
-                    })}
+                  <div className="flex gap-2 flex-wrap">
+                    {images.filter((img) => setSel.has(img.id)).map((img) => (
+                      <div key={img.id} className="relative w-16 h-16 rounded overflow-hidden border border-primary/60">
+                        <img src={img.src} className="w-full h-full object-cover" />
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

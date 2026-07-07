@@ -718,3 +718,85 @@ def build_detail_set_locked_plan(source_label: str, subject_key: str,
             "每段 = AI 生成无产品的暗调背景与中英排版 + 叠回同一主体：封面 / 核心信息 / 风味 / 工艺 / 产区 / 餐配 / 规格",
         ],
     )
+
+
+# ============================================================================
+# 社交媒体封面五联（social5）：一张选中图 → 五大平台专属封面
+# 与主图六联同理（1 源图 → N 角色），角色 = 平台版式惯例（画幅/标题密度/氛围）。
+# 主体身份锁写死在每个 prompt 里（人物零重绘、产品零变体），标题由模型按图意自拟。
+# ============================================================================
+
+_SOCIAL_IDENTITY = (
+    "CRITICAL: keep the main subject (person or product) EXACTLY as in the source image — "
+    "same face, features, hairstyle, colors and proportions, photographic realism, no redraw "
+    "or stylization of the subject itself. "
+)
+
+SOCIAL_COVER_ROLES = [
+    {
+        "key": "xhs", "label": "小红书封面", "aspect_ratio": "3:4",
+        "prompt": _SOCIAL_IDENTITY + (
+            "Redesign this image as a Xiaohongshu (RED) cover, portrait 3:4: cozy lifestyle "
+            "collage aesthetic, cute stickers/washi-tape accents, a large catchy Chinese title at "
+            "the top (invent a short click-worthy title matching the image's theme) plus a small "
+            "subtitle, soft trendy palette. Text must be correctly spelled and legible."
+        ),
+    },
+    {
+        "key": "weibo", "label": "微博配图", "aspect_ratio": "1:1",
+        "prompt": _SOCIAL_IDENTITY + (
+            "Redesign this image as a Weibo post image, square 1:1: bold poster energy, one "
+            "punchy Chinese headline (invent it from the image's theme) with a hashtag-style tag "
+            "element, vivid contrast, clean margins so it reads well in a feed."
+        ),
+    },
+    {
+        "key": "wechat", "label": "公众号头图", "aspect_ratio": "16:9",
+        "prompt": _SOCIAL_IDENTITY + (
+            "Redesign this image as a WeChat Official Account banner, wide 16:9: editorial and "
+            "clean, subject placed to one side, a large elegant Chinese title (invent it from the "
+            "image's theme) on the open side, generous breathing room, premium magazine feel."
+        ),
+    },
+    {
+        "key": "x", "label": "X/Twitter 帖图", "aspect_ratio": "16:9",
+        "prompt": _SOCIAL_IDENTITY + (
+            "Redesign this image as an X (Twitter) post card, wide 16:9: modern international "
+            "look, one short punchy bilingual title (Chinese main + small English tagline, invent "
+            "from the image's theme), minimal graphic accents, high legibility at small sizes."
+        ),
+    },
+    {
+        "key": "youtube", "label": "YouTube 封面", "aspect_ratio": "16:9",
+        "prompt": _SOCIAL_IDENTITY + (
+            "Redesign this image as a YouTube thumbnail, wide 16:9: high-contrast attention-"
+            "grabbing composition, subject large on one side, HUGE bold Chinese title text "
+            "(3-6 characters, invent from the image's theme) with outline/glow for readability, "
+            "saturated colors, clear focal point — clickable at tiny sizes."
+        ),
+    },
+]
+
+
+def build_social_set_plan(source_label: str) -> Plan:
+    """社媒五联：同一张源图 → 小红书 / 微博 / 公众号 / X / YouTube 各出一张平台专属封面。"""
+    if not source_label:
+        raise ValueError("未选择源图")
+    nodes = [
+        PlanNode(
+            id=f"set_{i + 1}", tool="edit_image",
+            label=f"社媒封面 {i + 1}/{len(SOCIAL_COVER_ROLES)} · {role['label']}",
+            args={
+                "prompt": role["prompt"], "source_asset": source_label,
+                "aspect_ratio": role["aspect_ratio"], "set_member": True,
+                "set_template": "social5",
+            },
+            depends=[],
+        )
+        for i, role in enumerate(SOCIAL_COVER_ROLES)
+    ]
+    return Plan(
+        mode="plan", title="社交媒体封面五联",
+        nodes=nodes,
+        notes=["同一主体一键适配五大平台：小红书 3:4 · 微博 1:1 · 公众号/X/YouTube 16:9，主体保持一致，标题按图意自拟"],
+    )

@@ -250,6 +250,11 @@ async def _run_job(job_id: str) -> None:
                     plan = None  # 任何异常 → 降级
                 if plan is None:
                     plan = build_main_set_plan(labels[0], content_map=main_content, lang=lang)
+            elif tpl_key == "social5":
+                # 社媒五联：一张选中图 → 五大平台封面（小红书/微博/公众号/X/YouTube）
+                from app.agents.set_templates import build_social_set_plan
+
+                plan = build_social_set_plan(labels[0])
             elif tpl_key == "detail7":
                 # 详情页七段：用第一张产品图，出 7 段暗调详情页
                 from app.agents.set_templates import build_detail_set_plan, generate_detail_content
