@@ -1927,7 +1927,8 @@ const CanvasArea = forwardRef(
           else if (!finalWidth && finalHeight) finalWidth = (loadedImg.width / loadedImg.height) * finalHeight;
         }
         if (!finalWidth && !finalHeight && loadedImg.width) {
-          const maxDim = 400;
+          // 自然尺寸默认档:最长边 200(旧代码是 400 再落库减半,现落库不再减半,等价保持观感)
+          const maxDim = 200;
           if (loadedImg.width > loadedImg.height) {
             finalWidth = maxDim;
             finalHeight = (loadedImg.height / loadedImg.width) * maxDim;
@@ -1946,8 +1947,10 @@ const CanvasArea = forwardRef(
             x: targetX,
             y: targetY,
             image: loadedImg,
-            width: finalWidth / 2 || 200,
-            height: finalHeight / 2 || 200,
+            // 千万不能再 /2:显式传入的尺寸(后端统一卡片/用户手调/刷新恢复)必须原样存——
+            // 旧的落库减半 × 布局持久化回写 = 尺寸每刷新腰斩一次直至 14×20(用户实测根源)。
+            width: finalWidth || 200,
+            height: finalHeight || 200,
             rotation: 0,
             // 四层合成：显式层叠序，避免图片 onload 异步到达导致的堆叠错乱（背景压住主体等）
             zIndex: zIndex || 0,
@@ -2051,7 +2054,7 @@ const CanvasArea = forwardRef(
           
           if (vW && vH) {
             if (!finalWidth && !finalHeight) {
-              const maxDim = 400;
+              const maxDim = 200;  // 旧 400 再落库减半;现不减半,等价
               if (vW > vH) {
                 finalWidth = maxDim;
                 finalHeight = (vH / vW) * maxDim;
@@ -2070,8 +2073,8 @@ const CanvasArea = forwardRef(
               src,
               x: targetX,
               y: targetY,
-              width: finalWidth / 2 || 300,
-              height: finalHeight / 2 || 200,
+              width: finalWidth || 300,
+              height: finalHeight || 200,
               rotation: 0,
             },
           ]);
