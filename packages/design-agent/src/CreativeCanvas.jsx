@@ -938,6 +938,32 @@ export default function CreativeCanvas({
         } else {
           resumePolling(active.id, aIdx);
         }
+        return;
+      }
+      // 「离开期间完成」的任务：快照里只有早期事件（计划卡/失速提示），没有终局事件——
+      // 气泡会永远停在「还在为你生成中」、旧计划卡还能点（点了 409 弹「已失效」惊扰）。
+      // 补救：找最近的终态任务，若其 tool_result/error 不在快照里 → 回放全部事件补齐
+      // （resumePolling 从 since=0 拉全量，done 即收口），回放前先收掉该任务的旧卡/失速提示。
+      const TERMINAL = ["done", "failed", "succeeded", "cancelled", "rejected"];
+      const stale = data
+        .filter(j => TERMINAL.includes(j.status) && j.id)
+        .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+        .slice(0, 3)
+        .find(j =>
+          currentMessages.some(m => (m.events || []).some(e => e.job_id === j.id)) &&
+          !currentMessages.some(m => (m.events || []).some(e =>
+            e.job_id === j.id && (e.type === "tool_result" || e.type === "error"))));
+      if (stale) {
+        let aIdx = currentMessages.findIndex(
+          m => m.role === "assistant" && (m.events || []).some(e => e.job_id === stale.id));
+        if (aIdx < 0) aIdx = currentMessages.length - 1;
+        setMessages(prev => prev.map(m => ({
+          ...m,
+          events: (m.events || [])
+            .filter(e => !(e.job_id === stale.id && String(e.id || "").startsWith("stall-")))
+            .map(e => e.job_id === stale.id && e.type === "plan_propose" ? { ...e, handled: true } : e),
+        })));
+        resumePolling(stale.id, aIdx);
       }
     } catch {}
   };
