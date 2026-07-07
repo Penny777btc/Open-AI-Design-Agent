@@ -753,6 +753,12 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         )
         edit_model = None  # 记录本节点 edit 实际走的模型（预留给日志/资产标注；计价按 plan args 预扣）
         edit_prompt = prompt
+        # 人物海报的标题/副标题不让模型画（nano 中文会写错字），出图后叠前端可编辑文字层
+        person_text_blocks = (node.args.get("text_blocks")
+                              if (has_person and node.tool == "edit_image") else None) or None
+        _NO_TEXT = (" IMPORTANT: do NOT render, paint or draw ANY text, words, letters or titles in "
+                    "the image — text will be added later as separate editable layers. Leave clean "
+                    "negative space at the top area for a title.")
         if has_person and node.tool == "edit_image":
             # 【执行层人物防变形注入】只要节点标了 has_person，一律在指令最前置压上硬约束——
             # 不依赖 planner 是否记得写身份锁（它被 system prompt 要求但偶尔会漏），这里是确定性兜底。
@@ -767,6 +773,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                 ) + prompt
             else:
                 edit_prompt = prompt
+        if person_text_blocks:
+            edit_prompt += _NO_TEXT  # 文案交给可编辑文字层，模型只画画面
 
         # ── 抗拉伸（只靠 gpt-image 就能治）：源图/输出画布比例对齐 ──
         # 形变量 = 源图比例与输出画布比例之差（模型把源图重排进不同比例画布时整体压/拉最省力）。
@@ -808,7 +816,9 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                         try:
                             from app.agents.split import outpaint_person_locked
                             from app.providers.base import GeneratedImage
-                            data, w, h, m = await outpaint_person_locked(provider, prompt, source, edit_ar)
+                            data, w, h, m = await outpaint_person_locked(
+                                provider, prompt + _NO_TEXT if person_text_blocks else prompt,
+                                source, edit_ar)
                             image = GeneratedImage(data=data, mime="image/png", width=w, height=h, model=m)
                             edit_model = None
                         except Exception as exc:
@@ -943,7 +953,61 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             "op": "arrange",
             "args": {"moves": [{"asset_id": label, "x": canvas_x, "y": canvas_y}]},
         })
+
+    # 人物海报文字层：模型没画字（_NO_TEXT 留白），把 planner 给的文案叠成前端可编辑文字层。
+    # why：nano 中文会写错字（实测「北海道美食」→「北洧道羪食」），文字层字永远正确且用户可改。
+    # 复用 extract_text 同一套通路（add_texts 事件 + kind=text_layer 持久化，刷新可恢复）。
+    if person_text_blocks:
+        texts = _person_text_layout(person_text_blocks)
+        if texts:
+            await emit(job_id, "canvas_op", {"op": "add_texts", "args": {"ref": label, "texts": texts}})
+            async with _label_lock(session_id), SessionLocal() as db:
+                count = (
+                    await db.execute(select(func.count()).select_from(Asset).where(Asset.session_id == session_id))
+                ).scalar_one()
+                tlabel = f"asset_{count + 1}"
+                db.add(Asset(
+                    session_id=session_id, user_id=user_id, asset_label=tlabel, url="", storage_key=None,
+                    kind="text_layer", mime=None, width=None, height=None, model="person-poster-text",
+                    prompt=json.dumps(texts, ensure_ascii=False), source_tool="edit_image", job_id=job_id,
+                    canvas_x=canvas_x, canvas_y=canvas_y,
+                ))
+                await db.commit()
+            await emit(job_id, "tool_result", {
+                "name": "text_layers", "result": {"ok": True, "text_blocks": len(texts)},
+                "asset": {"asset_label": tlabel, "url": "", "kind": "text_layer",
+                          "prompt": json.dumps(texts, ensure_ascii=False), "ref": label,
+                          "source_tool": "edit_image"},
+            })
     return True
+
+
+def _person_text_layout(blocks: list) -> list[dict]:
+    """把 planner 的 text_blocks（{text, role}）转成前端 addTextLayers 的标准块。
+
+    布局按人物海报惯例：标题顶部居中大字、副标题其下、caption 底部。相对坐标以锚图为基。
+    颜色/字体用前端默认（用户可改）——这里只管「字正确 + 位置合理」。
+    """
+    out = []
+    for b in (blocks or [])[:4]:
+        if not isinstance(b, dict):
+            continue
+        text = str(b.get("text") or "").strip()
+        if not text:
+            continue
+        role = str(b.get("role") or "title").lower()
+        if role == "title" and not any(t.get("_role") == "title" for t in out):
+            out.append({"_role": "title", "text": text, "relX": 0.06, "relY": 0.045,
+                        "relW": 0.88, "relH": 0.085, "align": "center", "fontStyle": "bold"})
+        elif role == "subtitle" and not any(t.get("_role") == "subtitle" for t in out):
+            out.append({"_role": "subtitle", "text": text, "relX": 0.10, "relY": 0.148,
+                        "relW": 0.80, "relH": 0.042, "align": "center"})
+        else:
+            out.append({"_role": "caption", "text": text, "relX": 0.10, "relY": 0.905,
+                        "relW": 0.80, "relH": 0.036, "align": "center"})
+    for t in out:
+        t.pop("_role", None)
+    return out
 
 
 async def mark_stale_jobs_failed() -> None:

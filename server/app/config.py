@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     # 站点按模型订阅发 key：Codex（规划）与 Gemini（生图）各一个
     codex_api_key: str = ""
     gemini_api_key: str = ""
+    # fal.ai key（官方托管 nano-banana 推理；配置后人物编辑优先走它，~9s/张 vs 中转 2min+）
+    fal_api_key: str = ""
     planner_model: str = "codex"
     image_model: str = "gpt-image-2"  # 需支持带 mask 局部编辑（拆图背景/局部编辑/补全）；gemini 不支持 edit
     # gpt-image 生成质量档（low|medium|high|auto，空=不传由站点默认）。站点默认 high 单张可到
