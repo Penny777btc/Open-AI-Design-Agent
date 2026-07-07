@@ -1963,8 +1963,10 @@ const CanvasArea = forwardRef(
         // 相对图片尺寸算 → 全集 100% 一致，只有文字内容可逐张改）。
         const slots = setTemplate && SET_TEMPLATE_SLOTS[setTemplate];
         if (slots) {
-          const dw = finalWidth / 2 || 200;
-          const dh = finalHeight / 2 || 200;
+          // 模板文字槽位按节点【实际显示尺寸】算——落库已不再减半,这里同步去 /2,
+          // 否则文字会缩在图片左上四分之一处
+          const dw = finalWidth || 200;
+          const dh = finalHeight || 200;
           const stamp = Date.now();
           const slotTexts = slots.map((slot, i) => ({
             id: `txt-${stamp}-${(assetLabel || id).slice(-6)}-${i}`,
