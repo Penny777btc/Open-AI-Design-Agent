@@ -439,6 +439,10 @@ async def _execute_plan(
     skipped: set[str] = set()  # 按设计留在背景的元素（不计入「失败」）
     node_outputs: dict[str, dict] = {}  # 节点产出落位（供 overlay_on 跨节点叠放，如分层版产品叠到背景上）
     planner = PlacementPlanner(canvas_nodes, viewport)
+    # 批量出图(≥2 张)走网格摆放：旧逻辑把每张编辑结果都放「源图右侧 32px」同一个点，
+    # 批量结果全叠在一起，拖开后满画布乱序(用户实测)。单张编辑仍贴源图旁(改图场景直觉)。
+    _img_nodes = [n for n in plan.nodes if n.tool in ("generate_image", "edit_image")]
+    planner.batch_grid = len(_img_nodes) > 1
 
     # 预载编辑源图：套图/主图六联/详情页里 6-7 个角色节点共用同一张产品图，
     # 只读一次进缓存，省掉每节点重复的 DB 查询 + 磁盘/HTTP 读取（批量提速关键）。
@@ -1035,7 +1039,8 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                 pr_dw, pr_dh = display_size(image.width, image.height)
                 canvas_x = ref["canvas_x"] + (bg_dw - pr_dw) / 2
                 canvas_y = ref["canvas_y"] + (bg_dh - pr_dh) / 2
-        if canvas_x is None and has_source and not node.id.startswith("set_"):
+        if (canvas_x is None and has_source and not node.id.startswith("set_")
+                and not getattr(planner, "batch_grid", False)):
             source = (
                 await db.execute(
                     select(Asset).where(
@@ -1065,11 +1070,13 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                     entry["png_raw"] = raw_png
             node_outputs[node.id] = entry
 
+        disp_w, disp_h = display_size(image.width, image.height)  # 统一显示尺寸：批次内外一致
         db.add(Asset(
             session_id=session_id, user_id=user_id, asset_label=label, url=url, storage_key=key,
             kind="image", mime=image.mime, width=image.width, height=image.height,
             model=image.model, prompt=prompt, source_tool=node.tool, job_id=job_id,
-            canvas_x=canvas_x, canvas_y=canvas_y, z_index=node.args.get("z_index"),
+            canvas_x=canvas_x, canvas_y=canvas_y, canvas_w=disp_w, canvas_h=disp_h,
+            z_index=node.args.get("z_index"),
             split_role=node.args.get("split_role"), split_label=node.args.get("label"),
         ))
         # 计费：审批时已整单预扣（reserve），节点成功无需再记账；失败由 refund_node 退还
@@ -1087,10 +1094,12 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             "asset_label": label, "url": url, "kind": "image",
             "model": image.model, "prompt": prompt, "source_tool": node.tool,
         }
-        # 套图/拆图落位坐标。可编辑版套图还带模板 key + 文案 → 前端叠可编辑文字层
-        if node.args.get("set_member") or node.args.get("set_template") or placed:
-            asset_payload["canvas_x"] = canvas_x
-            asset_payload["canvas_y"] = canvas_y
+        # 落位坐标+显示尺寸恒带：前端照单落位，live 摆放与刷新重建完全一致（后端是唯一权威；
+        # 旧的 placeNextToSource 前端自摆是乱序/尺寸漂移的根源，仅作为无坐标时的回退）
+        asset_payload["canvas_x"] = canvas_x
+        asset_payload["canvas_y"] = canvas_y
+        asset_payload["canvas_w"] = disp_w
+        asset_payload["canvas_h"] = disp_h
         if node.args.get("split_role"):
             asset_payload["split_role"] = node.args["split_role"]
             if node.args.get("label"):

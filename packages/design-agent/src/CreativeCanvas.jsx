@@ -562,10 +562,20 @@ export default function CreativeCanvas({
         const newLabel = flat.asset.asset_label;
         const newUrl = flat.asset.url;
         const newKind = flat.asset.kind || "image";
-        const place = canvasRef.current?.placeNextToSource || canvasRef.current?.replaceAt;
-        if (srcLabel && newLabel && newUrl && place) {
-          place(srcLabel, newUrl, newKind, newLabel);
+        // 后端坐标是唯一权威：payload 带 canvas_x/y/w/h 就照单落位——live 摆放与刷新重建
+        // 完全一致（旧 placeNextToSource 前端自摆导致批量结果叠点/尺寸漂移=乱序根源）。
+        const px = flat.asset.canvas_x, py = flat.asset.canvas_y;
+        if (newLabel && newUrl && px != null && py != null && canvasRef.current) {
+          const pw = flat.asset.canvas_w ?? undefined, ph = flat.asset.canvas_h ?? undefined;
+          if (newKind === "video") canvasRef.current.addVideo?.(newUrl, px, py, pw, ph, undefined, newLabel);
+          else canvasRef.current.addImage?.(newUrl, px, py, pw, ph, undefined, newLabel);
           syncedUrlsRef.current?.add?.(`${newLabel}-${newUrl}`);
+        } else {
+          const place = canvasRef.current?.placeNextToSource || canvasRef.current?.replaceAt;
+          if (srcLabel && newLabel && newUrl && place) {
+            place(srcLabel, newUrl, newKind, newLabel);
+            syncedUrlsRef.current?.add?.(`${newLabel}-${newUrl}`);
+          }
         }
         // 智能拆解文字层：live 时 add_texts 已重建文字，标记 synced 防 asset-sync 重复 addTextLayers
         if (newKind === "text_layer" && newLabel) {
