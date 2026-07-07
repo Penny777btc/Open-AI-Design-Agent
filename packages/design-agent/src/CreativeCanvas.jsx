@@ -366,6 +366,17 @@ export default function CreativeCanvas({
     }
   };
 
+  // 文字层挂载竞态修复：tool_result 的图片走 addImage 异步 onload 提交，紧随其后的 add_texts
+  // 到达时锚图往往还没落布 → addTextLayers 找不到 base 静默丢层（用户实测：海报出来没标题）。
+  // 等锚图出现再挂层；15×400ms 内锚图仍未出现（异常）才放弃。ref 为空走旧语义（锚最后一张图）。
+  const addTextLayersWhenReady = (ref, texts, attemptsLeft = 15) => {
+    const c = canvasRef.current;
+    if (!c || typeof c.addTextLayers !== "function" || !texts?.length) return;
+    const anchored = !ref || (c.getCanvasState?.()?.nodes || []).some(n => n.asset_id === ref);
+    if (anchored) { c.addTextLayers(ref, texts); return; }
+    if (attemptsLeft > 0) setTimeout(() => addTextLayersWhenReady(ref, texts, attemptsLeft - 1), 400);
+  };
+
   const processEvent = (ev, msgIdx) => {
     // 后端每 45s 一条的 heartbeat 保活事件（回放流里也有）：只为撑住轮询的「有进展」
     // 判定（data.events.length 分支天然刷新 lastProgress），不进消息流、不做任何副作用——
@@ -385,7 +396,7 @@ export default function CreativeCanvas({
       } else if (op === "arrange" && typeof c.arrangeNodes === "function") {
         c.arrangeNodes(args.moves || []);
       } else if (op === "add_texts" && typeof c.addTextLayers === "function") {
-        c.addTextLayers(args.ref, args.texts || []);
+        addTextLayersWhenReady(args.ref, args.texts || []);
       }
       return;
     }
@@ -1498,14 +1509,20 @@ export default function CreativeCanvas({
 
           if (isTextLayer) {
             // 智能拆解文字层：blocks 存在 prompt(JSON)，锚到同坐标的底图（拆解各层叠回源图同位置）
-            let blocks = [];
-            try { blocks = JSON.parse(a.prompt || "[]"); } catch { blocks = []; }
+            let parsed = [];
+            try { parsed = JSON.parse(a.prompt || "[]"); } catch { parsed = []; }
+            // 新格式 {ref, blocks}：人物海报文字层凭 ref 精确锚定（普通编辑结果 canvas_x 为空，
+            // 坐标匹配法必然锚错/丢层）；旧格式裸数组走坐标匹配（拆解层与源图同坐标，语义不变）
+            const blocks = Array.isArray(parsed) ? parsed : (parsed?.blocks || []);
             if (!blocks.length) return;
-            // 找一张同 canvas 坐标的图片资产做锚（背景/主体层都在源图同位置），否则用最近一张
-            const anchor = assets.find(o => o.kind === "image" && o.url
-              && (o.canvas_x ?? null) === (a.canvas_x ?? null)
-              && (o.canvas_y ?? null) === (a.canvas_y ?? null));
-            canvasRef.current.addTextLayers(anchor?.asset_label ?? null, blocks);
+            let anchorLabel = (!Array.isArray(parsed) && parsed?.ref) ? parsed.ref : null;
+            if (!anchorLabel) {
+              const anchor = assets.find(o => o.kind === "image" && o.url
+                && (o.canvas_x ?? null) === (a.canvas_x ?? null)
+                && (o.canvas_y ?? null) === (a.canvas_y ?? null));
+              anchorLabel = anchor?.asset_label ?? null;
+            }
+            addTextLayersWhenReady(anchorLabel, blocks);
             return;
           }
 

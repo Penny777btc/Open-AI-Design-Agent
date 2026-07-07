@@ -890,9 +890,16 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         # 人物海报的标题/副标题不让模型画（nano 中文会写错字），出图后叠前端可编辑文字层
         person_text_blocks = (node.args.get("text_blocks")
                               if (has_person and node.tool == "edit_image") else None) or None
-        _NO_TEXT = (" IMPORTANT: do NOT render, paint or draw ANY text, words, letters or titles in "
-                    "the image — text will be added later as separate editable layers. Leave clean "
-                    "negative space at the top area for a title.")
+        # 「留白」二字千万别出现：nano 会太老实地留出一大块纯白死区（用户实测：顶部 1/3 全白、
+        # 人物缩到角落）。要的是「设计好的无字标题区」——装饰底(横幅/撕纸/色带)照做、只是不写字。
+        _NO_TEXT = (" IMPORTANT: do NOT render, paint or draw ANY words, letters or characters in "
+                    "the image — real text will be composited later as separate editable layers. "
+                    "Instead of leaving empty space, DESIGN a decorative TITLE AREA at the top "
+                    "(a styled banner / ribbon / torn-paper block / color band matching the overall "
+                    "art direction) with no letters on it, ready to receive a title. "
+                    "The person must remain LARGE and prominent — at least half the canvas height, "
+                    "never shrunk into a corner. Fill the composition edge-to-edge with the scene "
+                    "and decorative elements; no large blank areas.")
         if has_person and node.tool == "edit_image":
             # 【执行层人物防变形注入】只要节点标了 has_person，一律在指令最前置压上硬约束——
             # 不依赖 planner 是否记得写身份锁（它被 system prompt 要求但偶尔会漏），这里是确定性兜底。
@@ -1112,15 +1119,18 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                     db.add(Asset(
                         session_id=session_id, user_id=user_id, asset_label=tlabel, url="", storage_key=None,
                         kind="text_layer", mime=None, width=None, height=None, model="person-poster-text",
-                        prompt=json.dumps(texts, ensure_ascii=False), source_tool="edit_image", job_id=job_id,
+                        # prompt 存 {ref, blocks} 对象而非裸数组：刷新重建时前端凭 ref 精确锚定到
+                        # 所属海报（旧的坐标匹配法对 canvas_x=None 的普通编辑结果会锚错/丢层）
+                        prompt=json.dumps({"ref": label, "blocks": texts}, ensure_ascii=False),
+                        source_tool="edit_image", job_id=job_id,
                         canvas_x=canvas_x, canvas_y=canvas_y,
                     ))
                     await db.commit()
                 await emit(job_id, "tool_result", {
                     "name": "text_layers", "result": {"ok": True, "text_blocks": len(texts)},
                     "asset": {"asset_label": tlabel, "url": "", "kind": "text_layer",
-                              "prompt": json.dumps(texts, ensure_ascii=False), "ref": label,
-                              "source_tool": "edit_image"},
+                              "prompt": json.dumps({"ref": label, "blocks": texts}, ensure_ascii=False),
+                              "ref": label, "source_tool": "edit_image"},
                 })
     except Exception:
         logger.error("node %s post-commit notify failed (asset already delivered)", node.id, exc_info=True)
