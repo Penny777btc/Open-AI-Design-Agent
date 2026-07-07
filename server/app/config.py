@@ -31,9 +31,10 @@ class Settings(BaseSettings):
     fal_api_key: str = ""
     planner_model: str = "codex"
     image_model: str = "gpt-image-2"  # 需支持带 mask 局部编辑（拆图背景/局部编辑/补全）；gemini 不支持 edit
-    # gpt-image 生成质量档（low|medium|high|auto，空=不传由站点默认）。站点默认 high 单张可到
-    # 2 分钟+；medium 通常快约一半、海报级质量足够。站点不认此参数时自动降级重试（400 回退）。
-    image_quality: str = "medium"
+    # gpt-image 生成质量档（low|medium|high|auto，空=不传由站点默认）。用户实测 medium 的
+    # 场景复杂度/素材融合度明显低于站点默认(high)——最初那批高融合海报都是 high 出的，
+    # 且实测 medium 并没有更快(瓶颈在站点排队)。默认留空=high。
+    image_quality: str = ""
     # 含真人的编辑专用模型：gemini 系（nano-banana）人物一致性业界最强，避免 gpt-image 整图重绘导致人脸/身材变形。
     # 仅用于「has_person 且无 mask」的 edit_image 节点（见 job_service 路由）；其余仍走 image_model。
     person_edit_model: str = "gemini-3.1-flash-image"  # Nano Banana 官方 id（vibetools 后台实际暴露名）

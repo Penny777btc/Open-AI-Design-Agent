@@ -913,11 +913,15 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
             # 覆盖所有人物路径：nano / 扩图锁人的裸重绘兜底 / 非 fuse 的常规 edit。
             # planner 已写过同义句时跳过（省 token，避免指令重复稀释权重）。
             if "preserve the person" not in prompt.lower():
+                # 只锁「身份」（脸/发型/肤色/比例），不冻结全身：旧版的 "do NOT redraw the
+                # person" 会让模型不敢让任何素材遮挡人物 → 素材只能摆四周 = 拼贴感生硬
+                # （用户实测融合度下降的元凶之一）。明确鼓励场景遮挡与统一光影。
                 edit_prompt = (
-                    "CRITICAL: preserve the person's face, facial features, hairstyle, skin tone and body "
-                    "proportions EXACTLY as in the source image — do NOT redraw, restyle or alter the person. "
-                    "Do NOT widen, flatten, round, squash or stretch the face or body; keep the exact "
-                    "head-to-body ratio and natural, undistorted human proportions. "
+                    "CRITICAL: keep the person's face, facial features, hairstyle and skin tone "
+                    "EXACTLY as in the source photo, with natural undistorted proportions. "
+                    "Integrate the person naturally INTO the scene: foreground props and food may "
+                    "overlap or partially occlude their body, and the person must share the scene's "
+                    "lighting, color grading and perspective — avoid a pasted-on collage look. "
                 ) + prompt
             else:
                 edit_prompt = prompt
