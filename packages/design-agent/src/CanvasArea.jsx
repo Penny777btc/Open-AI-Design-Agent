@@ -323,7 +323,7 @@ const URLImage = ({
         <Transformer
           ref={trRef}
           keepRatio={true}
-          centeredScaling={true}
+          centeredScaling={false}  /* Figma 行为：锚定被拖手柄的对角(拖右下角=左上角不动)，不以中心为圆心 */
           onTransform={handleTransform}
           enabledAnchors={[
             "top-left",
@@ -503,7 +503,7 @@ const URLVideo = ({
         <Transformer
           ref={trRef}
           keepRatio={true}
-          centeredScaling={true}
+          centeredScaling={false}  /* Figma 行为：锚定被拖手柄的对角(拖右下角=左上角不动)，不以中心为圆心 */
           onTransform={handleTransform}
           enabledAnchors={[
             "top-left",
@@ -1036,6 +1036,48 @@ const CanvasArea = forwardRef(
         hit.forEach((id) => n.add(id));
         return n;
       });
+    };
+
+    // 对齐/等距（Figma 式）：作用于框选的多张节点，按选区包围盒计算。
+    // 布局持久化 watcher 会自动把新位置 PATCH 到后端，刷新不回跳。
+    const alignSelected = (mode) => {
+      const ids = setSel;
+      if (!ids || ids.size < 2) return;
+      const pick = [];
+      const collect = (arr, kind) => arr.forEach((n) => {
+        if (!ids.has(n.id)) return;
+        const w = n.width || 200;
+        const h = n.height || (kind === "audio" ? 60 : (kind === "text" ? (n.fontSize || 24) * 1.4 : 200));
+        pick.push({ id: n.id, x: n.x, y: n.y, w, h });
+      });
+      collect(images, "image"); collect(videos, "video"); collect(texts, "text"); collect(audios, "audio");
+      if (pick.length < 2) return;
+      const minX = Math.min(...pick.map(n => n.x));
+      const maxX = Math.max(...pick.map(n => n.x + n.w));
+      const minY = Math.min(...pick.map(n => n.y));
+      const maxY = Math.max(...pick.map(n => n.y + n.h));
+      const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+      const patch = {};
+      if (mode === "left")     pick.forEach(n => { patch[n.id] = { x: minX }; });
+      if (mode === "center_h") pick.forEach(n => { patch[n.id] = { x: cx - n.w / 2 }; });
+      if (mode === "right")    pick.forEach(n => { patch[n.id] = { x: maxX - n.w }; });
+      if (mode === "top")      pick.forEach(n => { patch[n.id] = { y: minY }; });
+      if (mode === "middle_v") pick.forEach(n => { patch[n.id] = { y: cy - n.h / 2 }; });
+      if (mode === "bottom")   pick.forEach(n => { patch[n.id] = { y: maxY - n.h }; });
+      if (mode === "dist_h" && pick.length >= 3) {
+        const s = [...pick].sort((a, b) => a.x - b.x);
+        const gap = ((maxX - minX) - s.reduce((t, n) => t + n.w, 0)) / (s.length - 1);
+        let x = minX;
+        s.forEach(n => { patch[n.id] = { x }; x += n.w + gap; });
+      }
+      if (mode === "dist_v" && pick.length >= 3) {
+        const s = [...pick].sort((a, b) => a.y - b.y);
+        const gap = ((maxY - minY) - s.reduce((t, n) => t + n.h, 0)) / (s.length - 1);
+        let y = minY;
+        s.forEach(n => { patch[n.id] = { y }; y += n.h + gap; });
+      }
+      const apply = (setter) => setter(prev => prev.map(n => patch[n.id] ? { ...n, ...patch[n.id] } : n));
+      apply(setImages); apply(setVideos); apply(setTexts); apply(setAudios);
     };
 
     const toggleMultiSelect = (id) => {
@@ -3385,6 +3427,19 @@ const CanvasArea = forwardRef(
         {!maskMode && !showSetPanel && (setSel.size > 0 || selectedId?.startsWith("img")) && (
           <div className="absolute bottom-6 inset-x-0 mx-auto w-fit max-w-[94%] overflow-x-auto z-30 flex items-center gap-1.5 whitespace-nowrap bg-bg-card border border-divider rounded-2xl shadow-pop px-2.5 py-2">
             <span className="text-[12px] font-semibold text-primary-text px-2">{t("selected_count", setSel.size > 0 ? setSel.size : 1)}</span>
+            {setSel.size >= 2 && (
+              <div className="flex items-center gap-0.5 border-r border-divider pr-1.5 mr-0.5">
+                {[["left", t("align_left"), "⇤"], ["center_h", t("align_center_h"), "⇹"], ["right", t("align_right"), "⇥"],
+                  ["top", t("align_top"), "⤒"], ["middle_v", t("align_middle_v"), "⇳"], ["bottom", t("align_bottom"), "⤓"],
+                  ...(setSel.size >= 3 ? [["dist_h", t("distribute_h"), "⇶"], ["dist_v", t("distribute_v"), "⇊"]] : [])
+                ].map(([mode, label, glyph]) => (
+                  <button key={mode} onClick={() => alignSelected(mode)} title={label} aria-label={label}
+                    className="w-7 h-7 grid place-items-center rounded-lg text-[13px] text-primary-text hover:bg-bg-page transition-colors">
+                    {glyph}
+                  </button>
+                ))}
+              </div>
+            )}
             <button
               onClick={() => { if (setSel.size === 0 && selectedId?.startsWith("img")) setSetSel(new Set([selectedId])); setShowSetPanel(true); }}
               className="flex items-center gap-1.5 px-3.5 py-2 bg-primary text-black rounded-xl text-[12px] font-semibold hover:opacity-90 transition-opacity"
