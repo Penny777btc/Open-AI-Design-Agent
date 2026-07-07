@@ -40,8 +40,9 @@ class Settings(BaseSettings):
     # 人物海报文字策略开关：False=模型直接把标题画进图里（版式感强，nano 中文偶有错字）；
     # True=模型只画装饰标题区，文案叠为前端可编辑文字层（字永远正确、可改，用户实测观感偏平）。
     person_text_layers: bool = False
-    # 人物编辑主引擎：gpt=扩图锁人(gpt-image,人物原像素零变形+中文标题准确+版式浓密,~2min/张)；
-    # nano=fal nano-banana 整图重绘(快 ~20s/张、融合感强,但中文错字+版式偏简,用户实测弃选)。
+    # 人物编辑主引擎：gpt=整图重绘(最初工作流,人物画大融入版式+中文标题准,人脸偶有轻微漂移,默认)；
+    # outpaint=扩图锁人(人脸物理零变形,但人物保持原照尺寸/边缘剪影感)；nano=fal nano-banana(快
+    # ~20s,中文错字+版式偏简,用户实测弃选)。
     person_engine: str = "gpt"
     # 视频生成：供应商加白后给的 endpoint；为空 = 视频未开通（执行层优雅提示）
     video_api_base: str = ""

@@ -972,9 +972,9 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                                 logger.warning("nano-banana edit 失败，熔断 15 分钟，降级扩图锁人：%s", str(exc)[:160])
                             else:
                                 logger.warning("nano-banana edit 失败（非服务故障不熔断），降级扩图锁人：%s", str(exc)[:160])
-                    if image is None and use_person:
-                        # gpt 系人物路径首选「扩图锁人」：人物区蒙版保护+原像素回贴，
-                        # 模型只画人物以外（拉伸/变形物理不可能）；失败才裸整图重绘（最后兜底）。
+                    if image is None and use_person and settings.person_engine == "outpaint":
+                        # 可选路径「扩图锁人」：人物区蒙版保护+原像素回贴，人脸物理零变形——
+                        # 但人物保持原照片尺寸、边缘有剪影感（用户实测观感不如整图重绘，故非默认）。
                         try:
                             from app.agents.split import outpaint_person_locked
                             from app.providers.base import GeneratedImage
@@ -986,8 +986,13 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                         except Exception as exc:
                             last_exc = exc
                             logger.warning("扩图锁人失败，降级整图重绘：%s", str(exc)[:160])
-                            image = await provider.edit(edit_prompt, edit_source, edit_ar, mask=mask)
-                            edit_model = None
+                    if image is None and use_person:
+                        # 默认「最初工作流」：gpt-image 整图重绘（身份锁 prompt 保人脸）。
+                        # 人物被模型按海报构图重新安排（画大、融入版式），观感最佳（用户拍板）；
+                        # 源图用【原图】而非 letterbox 垫图——垫出的模糊边带会被整图重绘照抄成
+                        # 糊边距；画布仍按源图比例就近选档（size 参数保竖版，防压扁）。
+                        image = await provider.edit(edit_prompt, source, edit_ar, mask=None)
+                        edit_model = None
                     elif image is None:
                         image = await provider.edit(edit_prompt, edit_source, edit_ar, mask=mask)
                 else:
