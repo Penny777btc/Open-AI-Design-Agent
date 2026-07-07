@@ -887,9 +887,12 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         )
         edit_model = None  # 记录本节点 edit 实际走的模型（预留给日志/资产标注；计价按 plan args 预扣）
         edit_prompt = prompt
-        # 人物海报的标题/副标题不让模型画（nano 中文会写错字），出图后叠前端可编辑文字层
+        # 人物海报文字策略随 settings.person_text_layers：开=文案叠可编辑文字层（模型禁字）；
+        # 关（默认）=模型直接把字画进图（版式感强，nano 中文偶有错字）。执行层双保险：
+        # 开关关闭时即使 planner 残留 text_blocks 也忽略，行为完全回到老方式。
         person_text_blocks = (node.args.get("text_blocks")
-                              if (has_person and node.tool == "edit_image") else None) or None
+                              if (settings.person_text_layers and has_person
+                                  and node.tool == "edit_image") else None) or None
         # 「留白」二字千万别出现：nano 会太老实地留出一大块纯白死区（用户实测：顶部 1/3 全白、
         # 人物缩到角落）。要的是「设计好的无字标题区」——装饰底(横幅/撕纸/色带)照做、只是不写字。
         _NO_TEXT = (" IMPORTANT: do NOT render, paint or draw ANY words, letters or characters in "

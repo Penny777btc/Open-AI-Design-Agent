@@ -31,8 +31,7 @@ SYSTEM_PROMPT = """你是一个 AI 设计 Agent 的规划器，专长电商设�
 - 用户提到"改/换/调整某张图"且上下文有可用资产时，必须用 edit_image 并正确填 source_asset；不要重新生成
 - 为真实产品做主图/海报/详情页/营销图时，若资产列表中有该产品的实拍图（标注「产品图：…」），必须用 edit_image 以那张产品图为 source_asset，在保留产品本体外观（瓶型/包装/标签/配色）完全一致的前提下重构背景、场景、排版和文字；禁止 generate_image 凭空虚构产品外观。多个产品各选对应的那张图
 - 【人物身份锁】源图含真人时，edit_image 的 prompt 必须显式包含身份保持指令，例如 "CRITICAL: preserve the person's face, facial features, hairstyle and body EXACTLY as in the source photo — do NOT redraw, stylize or alter the face in any way. Keep the EXACT facial proportions and head-to-body ratio: do NOT widen, flatten, round, squash or stretch the face or body; the face must NOT become wider or rounder than the source. Reproduce the person at natural, undistorted human proportions."；人物应保持为照片写实质感（哪怕背景/排版是插画风），并尽量让人物在构图中占比足够大（人物越小脸部越易漂移）。同时在 args 里加 "has_person": true
-- 【人物海报文字层】含真人的 edit_image 若成品需要渲染标题/副标题/口号，把文案放进 args "text_blocks": [{"text": "<原样文案>", "role": "title|subtitle|caption"}]（title 最多1条、subtitle 最多1条），并且 prompt 里【不要】要求模型渲染这些文字，改为要求顶部留出干净的标题留白（如 "leave clean negative space at the top, no text"）。系统会把文案叠加为前端可编辑文字层——字永远正确、用户可改字体字号。图内装饰性小字（如英文点缀）不受此限
-- 【人物模式 person_mode】含真人的 edit_image 还须在 args 里加 "person_mode"，二选一：
+{person_text_rule}- 【人物模式 person_mode】含真人的 edit_image 还须在 args 里加 "person_mode"，二选一：
   · 默认 "fuse"（整图重绘保真）——绝大多数情况用它：模型整图重绘，人物按合适比例自然融入海报排版、
     与周围食物/元素浑然一体，同时必须带上面的【人物身份锁】指令严守人脸/发型/体态一致。做封面/海报/
     换背景/合成到场景一律默认 "fuse"（效果远好于生硬的抠贴合成）。
@@ -77,7 +76,13 @@ async def make_plan(
     docs: list[dict] | None = None,
 ) -> Plan:
     llm = get_llm()
-    system = SYSTEM_PROMPT.replace("{max_nodes}", str(settings.max_plan_nodes))
+    # 人物海报文字策略（settings.person_text_layers）：开=文案走可编辑文字层（prompt 禁字留装饰区）；
+    # 关=沿用「文字原样写进 prompt、模型直接渲染」的老方式（版式感强，nano 中文偶有错字）。
+    _rule = """- 【人物海报文字层】含真人的 edit_image 若成品需要渲染标题/副标题/口号，把文案放进 args "text_blocks": [{"text": "<原样文案>", "role": "title|subtitle|caption"}]（title 最多1条、subtitle 最多1条），并且 prompt 里【不要】要求模型渲染这些文字，改为要求顶部留出干净的标题留白（如 "leave clean negative space at the top, no text"）。系统会把文案叠加为前端可编辑文字层——字永远正确、用户可改字体字号。图内装饰性小字（如英文点缀）不受此限
+""" if settings.person_text_layers else ""
+    system = (SYSTEM_PROMPT
+              .replace("{max_nodes}", str(settings.max_plan_nodes))
+              .replace("{person_text_rule}", _rule))
     if assets:
         lines = "\n".join(
             f"- {a['asset_label']} ({a.get('kind', 'image')}): {(a.get('prompt') or a.get('source_tool') or '')[:120]}"
