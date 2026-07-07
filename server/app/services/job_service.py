@@ -554,6 +554,10 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
     loop = asyncio.get_running_loop()
     split_role = node.args.get("split_role")
     raw_png = None  # 主体补全前的真实 alpha（供前景元素形状扣除，见 cutout 分支）
+    # 必须函数级预初始化：赋值点在 edit/generate 的 else 分支内，compose_subject/cutout_layer
+    # 分支不经过它，函数尾部的 `if person_text_blocks:` 会 UnboundLocalError——且发生在资产已
+    # 落库、tool_result 已发之后 → 已成功节点被误判失败并退款（审计确认的活回归）。
+    person_text_blocks = None
 
     # 锁主体合成（compose_subject）：AI 生成「无产品的背景/排版」+ 叠回「整套复用的同一主体」。
     # why：约束式重生成让扩散模型每张重画产品 → logo/形态跨图漂移；锁主体后 6 张共用同一像素 → 一致。
