@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # 人物海报文字策略开关：False=模型直接把标题画进图里（版式感强，nano 中文偶有错字）；
     # True=模型只画装饰标题区，文案叠为前端可编辑文字层（字永远正确、可改，用户实测观感偏平）。
     person_text_layers: bool = False
+    # 人物编辑主引擎：gpt=扩图锁人(gpt-image,人物原像素零变形+中文标题准确+版式浓密,~2min/张)；
+    # nano=fal nano-banana 整图重绘(快 ~20s/张、融合感强,但中文错字+版式偏简,用户实测弃选)。
+    person_engine: str = "gpt"
     # 视频生成：供应商加白后给的 endpoint；为空 = 视频未开通（执行层优雅提示）
     video_api_base: str = ""
     video_api_key: str = ""
@@ -100,8 +103,10 @@ def tool_cost(tool: str, model: str | None = None, seconds: float | None = None,
         if has_person and str(person_mode).lower() != "fuse":
             # 锁人物合成：≈ compose_subject（背景生图 + 本地合成 + 摊抠图/合成开销）
             return model_catalog.image_credits(model) + 4
-        # 含真人且 fuse → nano-banana（拿货更贵）→ 按该模型 edit 分价；无真人 → 默认 gpt-image edit。
-        return model_catalog.edit_credits(settings.person_edit_model if has_person else None)
+        # 含真人且 fuse：按主引擎计价——nano 拿货贵按其 edit 分价(45)；gpt(扩图锁人,默认)
+        # 成本≈一次 gpt edit,按默认 EDIT_CREDITS(15),不再让用户为没用上的 nano 买单。
+        use_nano = has_person and settings.person_engine == "nano"
+        return model_catalog.edit_credits(settings.person_edit_model if use_nano else None)
     if tool == "cutout_layer":
         # 纯本地 rembg 抠图层便宜(3)；但带护栏式补全(complete=True)时会跑最多 2 次 edit + 2 次
         # vision，成本≈一次 edit，须按 edit 计价，否则成本倒挂。

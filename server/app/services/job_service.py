@@ -944,7 +944,10 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                     # nano 熔断：失效的 key/耗尽的账号池会让每个人物节点都白撞一次（503 退避
                     # 重试 ~5s/节点，套图批量时成倍浪费）。失败后 15 分钟内直接走扩图锁人。
                     global _nano_down_until
-                    if use_person and not person_failed and time.time() >= _nano_down_until:
+                    # 人物主引擎开关：gpt(默认,用户实测弃选 nano 的中文错字/淡版式) → 直接跳过
+                    # nano 尝试,走下方扩图锁人(gpt-image,人物原像素零变形+中文标题准确)。
+                    if (use_person and not person_failed and settings.person_engine == "nano"
+                            and time.time() >= _nano_down_until):
                         try:
                             provider_p = get_person_edit_provider()
                             image = await provider_p.edit(edit_prompt, edit_source, edit_ar)
