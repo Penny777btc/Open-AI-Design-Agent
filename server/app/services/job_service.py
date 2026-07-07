@@ -533,7 +533,13 @@ async def _execute_plan(
                     except Exception:
                         logger.error("node %s refund failed", node.id, exc_info=True)
                     try:
-                        await emit(job_id, "error", {"message": f"{node.label}: 生成失败（{str(exc)[:160]}），该节点积分已退还"})
+                        # 用户可读性：自家抛的中文原因直说；异常天书(KeyError('relX')/英文堆栈)
+                        # 一律收敛成人话，技术细节只进日志——聊天窗不该出现代码碎片。
+                        _reason = str(exc)[:160]
+                        if not any("\u4e00" <= ch <= "\u9fff" for ch in _reason):
+                            _reason = "遇到一点技术问题"
+                        logger.error("node %s failed: %s", node.label, str(exc)[:300])
+                        await emit(job_id, "error", {"message": f"{node.label}：{_reason}，这一步的积分已退还，点「重试」可再来一次"})
                     except Exception:
                         logger.error("node %s error emit failed", node.id, exc_info=True)
         finally:

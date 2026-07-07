@@ -581,6 +581,7 @@ def _decode_size(src: bytes) -> tuple[int, int]:
 
 def _px_box(rel: dict, W: int, H: int, pad: float = 0.0) -> tuple[int, int, int, int]:
     """rel bbox(+pad) → 整数像素框 (x0,y0,x1,y1)，clamp 到 [0,W]/[0,H]。"""
+    rel = _norm_rel(rel)
     x0 = (rel["relX"] - pad) * W
     y0 = (rel["relY"] - pad) * H
     x1 = (rel["relX"] + rel["relW"] + pad) * W
@@ -1008,6 +1009,7 @@ def dislocation_guard(layer_png: bytes, rel_box: dict) -> bool:
 
 def _touches_frame_edge(rel_box: dict, eps: float = 0.01) -> str | None:
     """识别 bbox 是否贴近画框某边 → 返回该边方向（出血裁切疑似）。"""
+    rel_box = _norm_rel(rel_box)
     if rel_box["relX"] <= eps:
         return "left"
     if rel_box["relX"] + rel_box["relW"] >= 1.0 - eps:
@@ -1245,8 +1247,15 @@ async def complete_object(layer_png: bytes, src: bytes, rel_box: dict, label: st
     return best[1] if best else layer_png       # 全不过 → 退回残缺版（永不更差）
 
 
+def _norm_rel(box: dict | None) -> dict:
+    """rel-box 缺字段兜底（视觉识别偶发缺 relX 等，实测 KeyError 崩掉主体层节点）。"""
+    d = {"relX": 0.0, "relY": 0.0, "relW": 1.0, "relH": 1.0}
+    return {**d, **{k: v for k, v in (box or {}).items() if v is not None}}
+
+
 def _rel_iou(a: dict, b: dict) -> float:
     """两个 rel-box 的 IoU。"""
+    a, b = _norm_rel(a), _norm_rel(b)
     ax1, ay1 = a["relX"] + a["relW"], a["relY"] + a["relH"]
     bx1, by1 = b["relX"] + b["relW"], b["relY"] + b["relH"]
     iw = max(0.0, min(ax1, bx1) - max(a["relX"], b["relX"]))
@@ -1258,6 +1267,7 @@ def _rel_iou(a: dict, b: dict) -> float:
 
 def _rel_intersection(a: dict, b: dict) -> dict | None:
     """两 rel-box 的交集 rel-box；不相交返回 None。"""
+    a, b = _norm_rel(a), _norm_rel(b)
     ix0, iy0 = max(a["relX"], b["relX"]), max(a["relY"], b["relY"])
     ix1 = min(a["relX"] + a["relW"], b["relX"] + b["relW"])
     iy1 = min(a["relY"] + a["relH"], b["relY"] + b["relH"])
