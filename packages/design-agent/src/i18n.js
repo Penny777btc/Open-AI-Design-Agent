@@ -93,6 +93,10 @@ const dict = {
 
     // ── 事件 / 审批 ────────────────────────────────────────────────
     reply_to_continue: "回复以继续。",
+    // P1-C：ask_user 带选项时的提示（之前缺 key，界面裸奔显示 "click_or_reply"）
+    click_or_reply: "点选一项，或直接回复",
+    // P1-C：tool_call ETA 展示（函数 key——调用处按 t("eta_about", 秒数) 传参）
+    eta_about: (s) => `约 ${s} 秒`,
     generated: (kind) => `已生成 ${kind}`,
     done: "已完成",
     failed: "失败",
@@ -142,6 +146,12 @@ const dict = {
     split_user_msg: (label) => `✂️ 帮我把这张图拆成可编辑的图层`,
     next_steps: "接下来可以",
     plan_auto_low: (total, limit) => `小额任务（${total} 积分）已自动开工，无需确认`,
+    // P1-C：极速模式自动批准的计划卡说明（之前缺 key，界面裸奔显示 "plan_auto_express"）
+    plan_auto_express: "极速模式已开，自动执行",
+    // P1-C：下一步建议 chips 里最后一张图无 asset_label 时的兜底称呼
+    chip_this_image: "这张图",
+    // P3：发送失败别把 axios 英文 err.message 塞进气泡——收敛成人话
+    send_failed_msg: "发送失败，请重试",
     chip_make_set: "🛍 做成整套物料",
     chip_make_set_prompt: (label) => `基于刚生成的这张图，做一套配套的电商物料（主图+海报+详情头图），风格保持一致`,
     chip_swap_bg: "🎨 换个背景试试",
@@ -459,6 +469,10 @@ const dict = {
 
     // ── Events / approval ─────────────────────────────────────────
     reply_to_continue: "Reply to continue.",
+    // P1-C: ask_user hint when choices are present (key was missing — UI showed the raw key)
+    click_or_reply: "Pick one, or just reply",
+    // P1-C: tool_call ETA (function key — called as t("eta_about", seconds))
+    eta_about: (s) => `~${s}s`,
     generated: (kind) => `Generated ${kind}`,
     done: "Done",
     failed: "Failed",
@@ -480,8 +494,8 @@ const dict = {
     session_rename_failed: "Failed to rename session",
     session_deleted: "Session deleted",
     undo: "Undo",
-    canvas_deleted: (n) => `Deleted ${n} item${n > 1 ? "s" : ""}`,
     restore_failed: "Restore failed",
+    // （顺手修）此前 canvas_deleted 在 en 字典里重复声明了两次，保留一份
     canvas_deleted: (n) => `Deleted ${n} item${n > 1 ? "s" : ""}`,
     session_delete_failed: "Failed to delete session",
     establish_session_failed: "Failed to establish session",
@@ -509,6 +523,12 @@ const dict = {
     split_user_msg: (label) => `✂️ Split this image into editable layers`,
     next_steps: "Next you can",
     plan_auto_low: (total, limit) => `Small task (${total} credits) started automatically`,
+    // P1-C: express-mode auto-approval note on the plan card (key was missing)
+    plan_auto_express: "Express mode on — running automatically",
+    // P1-C: fallback label for next-step chips when the last image has no asset_label
+    chip_this_image: "this image",
+    // P3: human-readable send failure (instead of raw axios err.message in the bubble)
+    send_failed_msg: "Failed to send — please try again",
     chip_make_set: "🛍 Build a full set",
     chip_make_set_prompt: (label) => `Based on the image just generated, create a matching e-commerce set (hero + poster + detail header) in the same style`,
     chip_swap_bg: "🎨 Try another background",

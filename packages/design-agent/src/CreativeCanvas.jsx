@@ -624,9 +624,13 @@ export default function CreativeCanvas({
         } catch (err) {
           // 致命 4xx（job 不存在/无权）→ 立即退出，不再空转 6 分钟锁着输入框
           // M3：退出前清掉本 job 的占位 Loader，否则它会永久转圈（没有结果事件来消解）。
+          // P3：先验归属——await 请求期间可能已切会话，旧会话轮询的 4xx 清理不该动新会话的
+          // Loader；busy 的复位也不再各分支自行 setBusy(false)（多任务并发时会提前解锁），
+          // 统一交给 finally 的「活跃轮询计数」收口。
           if ([403, 404, 410].includes(err.response?.status)) {
-            setActiveTasks(prev => prev.filter(t => t.job_id !== jobId));
-            setBusy(false);
+            if (mountedRef.current && sessionIdRef.current === pollSessionId) {
+              setActiveTasks(prev => prev.filter(t => t.job_id !== jobId));
+            }
             return;
           }
           if (Date.now() - lastProgress > MAX_DEAD_AIR) {
@@ -650,7 +654,9 @@ export default function CreativeCanvas({
       }
       // 会话已切走 → 交给新会话管理，别复位它的 busy
       if (!mountedRef.current || sessionIdRef.current !== pollSessionId) return;
-      setBusy(false);
+      // P3：这里不再直接 setBusy(false)——checkActiveJobs 会并发恢复多条轮询，
+      // 最先结束的那条若直接解锁，其余任务还在跑输入闸就开了（用户可叠加发送出事故）。
+      // busy 统一由 finally 按「活跃轮询计数归零」复位。
       loadAssets();
       onBalanceChange?.();
       // Persist final state（用轮询启动时的 sessionId，避免新建会话时闭包里的 sessionId 为 null）
@@ -665,6 +671,12 @@ export default function CreativeCanvas({
       });
     } finally {
       activePollsRef.current.delete(jobId);
+      // P3：busy 改「活跃轮询计数」语义——登记表（activePollsRef）天然就是计数器：
+      // 本轮询退场后集合空了、且仍停留在本轮询的会话 → 才复位 busy；
+      // 还有别的轮询在跑 → 由最后退场的那条复位；会话已切走 → 交给切换 effect 兜底复位。
+      if (mountedRef.current && sessionIdRef.current === pollSessionId && activePollsRef.current.size === 0) {
+        setBusy(false);
+      }
     }
   };
 
@@ -685,7 +697,12 @@ export default function CreativeCanvas({
     let aIdx = -1;
     setMessages(prev => {
       aIdx = prev.length + 1;
-      return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
+      // P2：给承接气泡打上「操作类型 + 原始参数」——失败 pill 的「重试」要重放本操作，
+      // 而不是把最近一条聊天(lastUserMsg)重发一遍（那会触发完全无关的任务）。
+      return [...prev, userMsg, {
+        role: "assistant", content: "", events: [], timestamp: new Date().toISOString(),
+        opKind: "set", opArgs: { assetLabels, template, templateLabel, mode },
+      }];
     });
     // H3：记住本操作启动时的会话，复位 busy/sendingRef 前比对，避免误复位「已切走的新会话」的 busy。
     let opSessionId = sessionIdRef.current;
@@ -728,7 +745,8 @@ export default function CreativeCanvas({
       // 仅当仍停在本操作的会话时才复位——切走了就交给新会话自己管理（不误清它的 busy）。
       if (sessionIdRef.current === opSessionId) {
         sendingRef.current = false;
-        setBusy(false);
+        // P3：还有别的轮询在跑（并发恢复的多任务）就别提前解锁——busy 由最后退场的轮询复位
+        if (activePollsRef.current.size === 0) setBusy(false);
       }
     }
   };
@@ -759,7 +777,11 @@ export default function CreativeCanvas({
     let aIdx = -1;
     setMessages(prev => {
       aIdx = prev.length + 1;
-      return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
+      // P2：见 handleSetTemplate —— 失败重试要重放「拆图」本身，不能重发最近聊天。
+      return [...prev, userMsg, {
+        role: "assistant", content: "", events: [], timestamp: new Date().toISOString(),
+        opKind: "split", opArgs: { assetLabel },
+      }];
     });
     // H3：见 handleSetTemplate —— 记住启动会话，复位前比对，避免误清新会话 busy / 卡死输入。
     let opSessionId = sessionIdRef.current;
@@ -798,7 +820,8 @@ export default function CreativeCanvas({
     } finally {
       if (sessionIdRef.current === opSessionId) {
         sendingRef.current = false;
-        setBusy(false);
+        // P3：还有别的轮询在跑（并发恢复的多任务）就别提前解锁——busy 由最后退场的轮询复位
+        if (activePollsRef.current.size === 0) setBusy(false);
       }
     }
   };
@@ -818,7 +841,12 @@ export default function CreativeCanvas({
     let aIdx = -1;
     setMessages(prev => {
       aIdx = prev.length + 1;
-      return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
+      // P2：局部编辑的 mask dataURL 体积太大，不适合存进消息流做重放参数——
+      // 该操作的失败 pill 不显示「重试」按钮（比错误重放最近聊天安全），用户重新涂抹即可。
+      return [...prev, userMsg, {
+        role: "assistant", content: "", events: [], timestamp: new Date().toISOString(),
+        opKind: "region",
+      }];
     });
     // H3：见 handleSetTemplate —— 记住启动会话，复位前比对，避免误清新会话 busy / 卡死输入。
     let opSessionId = sessionIdRef.current;
@@ -859,7 +887,8 @@ export default function CreativeCanvas({
     } finally {
       if (sessionIdRef.current === opSessionId) {
         sendingRef.current = false;
-        setBusy(false);
+        // P3：还有别的轮询在跑（并发恢复的多任务）就别提前解锁——busy 由最后退场的轮询复位
+        if (activePollsRef.current.size === 0) setBusy(false);
       }
     }
   };
@@ -1070,9 +1099,15 @@ export default function CreativeCanvas({
   // 手动布局持久化：CanvasArea 防抖回报的拖拽/缩放批次 → PATCH 后端，刷新后按新布局重建。
   // 静默失败（布局回写不该打扰创作；下次变动会带着最新坐标再试）。
   // 画布删除持久化：undo 窗口过后删资产行（刷新不再复活）。静默失败可接受（下次删除再试）。
-  const persistDelete = useCallback(async (labels, opts = {}) => {
-    const sid = sessionIdRef.current;
-    if (!sid || !labels?.length) return;
+  //
+  // P1-A 跨会话数据安全：删除/布局的落库发生在操作之后（undo 窗口 5.4s / 防抖 800ms），
+  // 期间用户可能已切走会话。旧逻辑读「实时」sessionIdRef —— 会把 A 会话的删除/布局
+  // 落到 B 会话头上，硬删 B 里同名 asset（跨会话数据事故）。
+  // 修法：CanvasArea 在【操作发生时】捕获会话 id 随批次传入（opSessionId）；
+  // 这里只用传入的 id，且传入 id ≠ 当前会话时直接丢弃这次落库（操作属于旧会话，别误伤）。
+  const persistDelete = useCallback(async (labels, opts = {}, opSessionId = null) => {
+    const sid = opSessionId;
+    if (!sid || sid !== sessionIdRef.current || !labels?.length) return;
     try {
       if (opts.keepalive) {
         // 关页前冲刷：keepalive fetch 保证请求在页面卸载后仍送达（axios 不支持）
@@ -1088,9 +1123,10 @@ export default function CreativeCanvas({
     } catch {}
   }, [getHeaders]);
 
-  const persistLayout = useCallback(async (moves) => {
-    const sid = sessionIdRef.current;
-    if (!sid || !moves?.length) return;
+  const persistLayout = useCallback(async (moves, opSessionId = null) => {
+    // P1-A：同 persistDelete —— 只认「布局变更发生时」的会话，已切走则丢弃。
+    const sid = opSessionId;
+    if (!sid || sid !== sessionIdRef.current || !moves?.length) return;
     try {
       await axios.patch(`${API}/sessions/${sid}/assets/layout`, { moves }, { headers: getHeaders() });
     } catch {}
@@ -1134,7 +1170,12 @@ export default function CreativeCanvas({
     let aIdx = -1;
     setMessages(prev => {
       aIdx = prev.length + 1;
-      return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString() }];
+      // P2：文档解析失败无法从消息流重放（File 对象拿不回来）——不给通用「重试」，
+      // 否则会把「📄 上传参考文档…」当聊天指令重发。用户重新上传即可。
+      return [...prev, userMsg, {
+        role: "assistant", content: "", events: [], timestamp: new Date().toISOString(),
+        opKind: "doc",
+      }];
     });
     // H3：见 handleSetTemplate —— 记住启动会话，复位前比对，避免误清新会话 busy / 卡死输入。
     let opSessionId = sessionIdRef.current;
@@ -1180,7 +1221,8 @@ export default function CreativeCanvas({
       // H3：仅在仍停留于本操作会话时复位 busy/sendingRef，避免误清已切走的新会话状态。
       if (sessionIdRef.current === opSessionId) {
         sendingRef.current = false;
-        setBusy(false);
+        // P3：还有别的轮询在跑（并发恢复的多任务）就别提前解锁——busy 由最后退场的轮询复位
+        if (activePollsRef.current.size === 0) setBusy(false);
       }
     }
   };
@@ -1309,10 +1351,24 @@ export default function CreativeCanvas({
     setAttachments(prev => prev.filter(a => a.asset_label !== label));
   };
 
+  // P2：界面展示层不暴露内部 id（asset_N）——翻成「图片 3 / 视频 5」这类友好名。
+  // 注意：@提及插进输入框的仍是 @asset_N（后端按该 label 寻址），只友好化「展示」。
+  const friendlyAssetName = (a) => {
+    const m = /^asset_(\d+)$/.exec(a?.asset_label || "");
+    const kindKey = a?.kind === "video" ? "video" : a?.kind === "audio" ? "audio" : "image";
+    return m ? `${t(kindKey)} ${m[1]}` : (a?.asset_label || t(kindKey));
+  };
+
   const sendMessage = async (textOverride = null, skillOverride = null, attachmentsOverride = null) => {
     const typed = (typeof textOverride === 'string' ? textOverride : input).trim();
     const currentAttachments = attachmentsOverride || attachments;
-    if ((!typed && currentAttachments.length === 0) || busy || sendingRef.current) return;
+    if (!typed && currentAttachments.length === 0) return;
+    // P3：busy 时不再「静默吞掉」——尤其 ask_user 选项在任务进行中被点击时，
+    // 没有任何反馈会让用户以为按钮坏了。明确提示先等当前任务完成。
+    if (busy || sendingRef.current) {
+      toast.error(t("another_task_running"));
+      return;
+    }
     sendingRef.current = true;
     // P1-5.2：留住这条指令原文，失败 pill 的「重试」一键重发
     if (typed) lastUserMsgRef.current = typed;
@@ -1401,9 +1457,11 @@ export default function CreativeCanvas({
           </span>
         ), { duration: 8000 });
       }
+      // P3：非 402 的兜底不再把 axios 英文 err.message（"Network Error" 等）塞进气泡，
+      // 收敛成人话；后端给了 detail（业务文案）仍优先展示。
       const errText = err.response?.status === 402
         ? (err.response?.data?.detail || t("insufficient_credits"))
-        : (err.response?.data?.detail || err.message || err);
+        : (err.response?.data?.detail || t("send_failed_msg"));
       setMessages(prev => {
         const arr = [...prev];
         if (aIdx >= 0) arr[aIdx] = { ...arr[aIdx], content: `❌ ${errText}` };
@@ -1417,7 +1475,8 @@ export default function CreativeCanvas({
       // 整份 PATCH 进旧会话（跨会话覆写聊天记录），loadAssets 还会把旧会话资产灌进新画布，
       // busy 复位也误清新会话的任务闸。
       if (activeSessionId && sessionIdRef.current === activeSessionId) {
-        setBusy(false);
+        // P3：同各操作 handler——还有别的轮询在跑就别提前解锁 busy（活跃轮询计数语义）
+        if (activePollsRef.current.size === 0) setBusy(false);
         await loadAssets();
         setMessages(prev => {
           const newMsgs = [...prev];
@@ -1440,6 +1499,17 @@ export default function CreativeCanvas({
       text = (lastUser?.content || "").replace(/\n\n\[Attached [^\]]*\]$/, "").trim();
     }
     if (text) sendMessage(text);
+  };
+
+  // P2：失败 pill 的「重试」按操作类型路由——套图/拆图重放原操作（opArgs 随消息持久化，
+  // 刷新后仍可用）；局部编辑/文档解析无法安全重放 → 不给按钮（返回 undefined 时
+  // EventPill 不渲染「重试」）；普通聊天走 retryLastMessage 老路径。
+  const opRetryFor = (msg) => {
+    if (msg?.opKind === "set")    return msg.opArgs ? () => handleSetTemplate(msg.opArgs) : undefined;
+    if (msg?.opKind === "split")  return msg.opArgs ? () => handleSplitImage(msg.opArgs) : undefined;
+    if (msg?.opKind === "region") return undefined;
+    if (msg?.opKind === "doc")    return undefined;
+    return retryLastMessage;
   };
 
   // P1-1.2 结果尾部「下一步建议」chips：纯前端启发式，无需后端。
@@ -1736,10 +1806,12 @@ export default function CreativeCanvas({
         <div className={`flex-shrink-0 flex flex-col bg-bg-card border-r border-divider shadow-[4px_0_12px_rgba(0,0,0,0.05)] z-20 transition-all duration-300 ${(showLeftSidebar || inEmbedMode) ? 'overflow-hidden w-0' : 'w-64'}`}>
           <div className="p-3 border-b border-divider flex items-center justify-between bg-bg-card/50">
             <div className="flex items-center gap-2 overflow-hidden">
-              <Link 
+              {/* P2 可访问性：纯图标控件补 aria-label（读屏器只有 title 不可靠），下同 */}
+              <Link
                 href="/dashboard"
                 className={`p-2 hover:bg-bg-page rounded text-secondary-text hover:text-primary transition-colors`}
                 title={t("go_back")}
+                aria-label={t("go_back")}
               >
                 <FiArrowLeft size={16} />
               </Link>
@@ -1751,10 +1823,11 @@ export default function CreativeCanvas({
                 <span className="font-bold text-lg">{t("studio_brand")}</span>
               </Link>
             </div>
-            <button 
+            <button
               onClick={() => setShowLeftSidebar(!showLeftSidebar)}
               className={`p-1.5 rounded transition-colors ${showLeftSidebar ? "bg-primary/10 text-primary" : "hover:bg-bg-card text-secondary-text hover:text-primary"}`}
               title={t("toggle_sessions")}
+              aria-label={t("toggle_sessions")}
             >
               <VscLayoutSidebarLeftOff size={16} />
             </button>
@@ -1821,6 +1894,7 @@ export default function CreativeCanvas({
                         }}
                         className="p-1.5 hover:bg-bg-page rounded text-secondary-text hover:text-primary transition-colors"
                         title={t("rename")}
+                        aria-label={t("rename")}
                       >
                         <FiEdit2 size={13} />
                       </button>
@@ -1831,6 +1905,7 @@ export default function CreativeCanvas({
                         }}
                         className="p-1.5 hover:bg-red-500/10 rounded text-secondary-text hover:text-red-500 transition-colors"
                         title={t("delete")}
+                        aria-label={t("delete")}
                       >
                         <HiOutlineTrash size={14} />
                       </button>
@@ -1856,6 +1931,7 @@ export default function CreativeCanvas({
                   onClick={() => setShowLeftSidebar(!showLeftSidebar)}
                   className={`p-2 hover:bg-bg-card rounded transition-colors ${showLeftSidebar ? "text-primary" : "hidden"}`}
                   title={t("toggle_sessions")}
+                  aria-label={t("toggle_sessions")}
                 >
                   <VscLayoutSidebarLeftOff size={18} />
                 </button>
@@ -1866,6 +1942,7 @@ export default function CreativeCanvas({
                   href="/dashboard"
                   className={`p-1.5 hover:bg-bg-card rounded text-secondary-text hover:text-primary transition-colors ${!showLeftSidebar && "hidden"}`}
                   title={t("go_back")}
+                  aria-label={t("go_back")}
                 >
                   <FiArrowLeft size={16} />
                 </Link>
@@ -1876,6 +1953,7 @@ export default function CreativeCanvas({
                   onClick={() => setActiveEmbedSession(null)}
                   className="p-1.5 hover:bg-bg-card rounded text-secondary-text hover:text-primary transition-colors"
                   title={t("new_chat")}
+                  aria-label={t("new_chat")}
                 >
                   <FiPlus size={16} />
                 </button>
@@ -1928,6 +2006,7 @@ export default function CreativeCanvas({
                     onClick={handleToggleSidebar}
                     className="w-8 h-8 rounded-full rotate-270 hover:bg-bg-page hover:text-primary-text transition-all flex items-center justify-center text-secondary-text z-[60]"
                     title={t("open_chat")}
+                    aria-label={t("open_chat")}
                   >
                     <HiOutlineArrowUpTray size={18} />
                   </button>
@@ -1962,8 +2041,9 @@ export default function CreativeCanvas({
                   </div>
                   
                   <div className="py-1">
-                    <a 
-                      href="mailto:support@vadoo.tv"
+                    {/* P3：支持邮箱改为本产品域名——旧的 support@vadoo.tv 是上游模板遗留 */}
+                    <a
+                      href="mailto:support@picsmith.app"
                       className="w-full flex items-center gap-3 px-4 py-2 hover:bg-bg-page transition-colors text-[13px] font-semibold text-primary-text"
                     >
                       {t("support")}
@@ -2003,6 +2083,9 @@ export default function CreativeCanvas({
           <div className="flex-1 relative overflow-hidden bg-bg-page/50 w-full">
             <CanvasArea
               ref={canvasRef}
+              // P1-A：把当前会话 id 交给画布——删除/布局批次在【操作发生时】盖上会话戳，
+              // CanvasArea 也据此在会话切换时作废未决的 undo 批次/删除 toast（详见其内部 effect）。
+              sessionId={sessionId}
               theme={resolvedTheme}
               activeTasks={activeTasks}
               chatBusy={busy}  // 任务(含规划期)进行中 → 画布空态起点卡先让位，避免看着像「还要再输入一遍」
@@ -2013,6 +2096,9 @@ export default function CreativeCanvas({
               hasConversation={historyStatus === "error" || messages.length === 0 || messages.some((m) => m.role === "user")}
               setActiveTasks={setActiveTasks}
               onZoomChange={setZoomLevel}
+              // P1-A：直接透传——CanvasArea 回调形参 (moves, sid) / (labels, opts, sid)
+              // 与 persistLayout(moves, opSessionId) / persistDelete(labels, opts, opSessionId)
+              // 一一对位，会话戳原样进守卫，不需要再包一层箭头函数。
               onLayoutChange={persistLayout}
               onDeleteAssets={persistDelete}
               onRegionEdit={handleRegionEdit}
@@ -2072,6 +2158,7 @@ export default function CreativeCanvas({
                   }}
                   className="p-1.5 hover:bg-bg-page hover:text-primary-text transition-colors rounded text-secondary-text"
                   title={t("new_session")}
+                  aria-label={t("new_session")}
                 >
                   <FiPlus size={16} />
                 </button>
@@ -2080,6 +2167,7 @@ export default function CreativeCanvas({
                 onClick={handleToggleSidebar}
                 className={`w-8 h-8 rounded-full transition-all flex items-center justify-center shrink-0 ${showChat ? "bg-primary/10 text-primary" : "hover:bg-bg-page text-secondary-text hover:text-primary"}`}
                 title={showChat ? t("hide_chat") : t("open_chat")}
+                aria-label={showChat ? t("hide_chat") : t("open_chat")}
               >
                 <FiLayout size={16} />
               </button>
@@ -2164,12 +2252,16 @@ export default function CreativeCanvas({
                               </div>
                             ) : (
                               <div className="flex flex-col gap-2">
+                                {/* P2：渲染用户气泡时剥掉发送时拼给 LLM 的附件注记
+                                    「[Attached asset_N (image)]」——那是机器寻址用的内部 id，
+                                    气泡下方已渲染附件缩略图，再露一行 asset_N 只会让用户困惑
+                                    （与 retryLastMessage 用同一条正则）。 */}
                                 <div className="prose dark:prose-invert max-w-none text-primary-text prose-p:leading-relaxed">
                                   <ReactMarkdown
                                     remarkPlugins={[remarkGfm]}
                                     components={markdownComponents}
                                   >
-                                    {msg.content}
+                                    {(msg.content || "").replace(/\n\n\[Attached [^\]]*\]$/, "")}
                                   </ReactMarkdown>
                                 </div>
                                 {msg.attachments && msg.attachments.length > 0 && (
@@ -2210,7 +2302,8 @@ export default function CreativeCanvas({
                               onSend: (text) => sendMessage(text),
                               // P1-5.2 重试只挂在最后一条消息上：历史消息里的失败若也能点，
                               // 会重发「最新」指令而非当年那条，反而制造事故
-                              onRetry: idx === messages.length - 1 ? retryLastMessage : undefined,
+                              // P2：套图/拆图等操作型失败按 opKind 重放原操作（见 opRetryFor）
+                              onRetry: idx === messages.length - 1 ? opRetryFor(msg) : undefined,
                             }} />
                           ))}
                         </div>
@@ -2221,6 +2314,7 @@ export default function CreativeCanvas({
                           className={`absolute top-0 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded bg-bg-card border border-divider shadow-md hover:text-primary z-10
                             ${msg.role === "user" ? "right-full mr-2" : "left-full ml-2"}`}
                           title={t("copy_message")}
+                          aria-label={t("copy_message")}
                         >
                           <FiCopy size={12} />
                         </button>
@@ -2377,7 +2471,8 @@ export default function CreativeCanvas({
                             {asset.kind === "video" && <video src={asset.url} className="w-7 h-7 rounded border border-divider object-cover shadow-sm" />}
                             {asset.kind === "audio" && <div className="w-7 h-7 rounded flex items-center justify-center bg-primary/5 text-primary text-[8px] font-bold uppercase tracking-tight">{t("audio")}</div>}
                             <div className="flex flex-col">
-                              <span className="text-xs font-medium text-primary-text">{asset.asset_label}</span>
+                              {/* P2：主标题用友好名（图片 3）；插进输入框的仍是 @asset_N（后端寻址键） */}
+                              <span className="text-xs font-medium text-primary-text">{friendlyAssetName(asset)}</span>
                               <span className="text-[9px] text-secondary-text truncate max-w-[200px]">{asset.kind}</span>
                             </div>
                           </button>
@@ -2432,15 +2527,17 @@ export default function CreativeCanvas({
                 placeholder={activeSkill ? t("skill_placeholder", activeSkill.name.toLowerCase(), activeSkill.inputs?.[0]?.replace(/_/g, ' ') || t("idea")) : t("input_placeholder")}
                 className="w-full bg-transparent px-3 py-3 text-[13px] resize-none focus:outline-none min-h-[50px] max-h-[120px] scrollbar-subtle"
                 rows={1}
-                disabled={busy}
+                /* P3：任务进行中只禁「发送」不禁「输入」——生成动辄几十秒，用户此时
+                   最想干的就是把下一条指令先打好；禁用 textarea 还会让焦点丢失、
+                   看起来像卡死。发送闸由按钮 disabled + sendMessage 的 busy guard 把守。 */
               />
 
               {(uploading || attachments.length > 0 || input.includes("@")) && (
                 <div className="flex flex-wrap gap-2 border-b px-3 border-divider bg-bg-page/20">
                   {/* Real Attachments */}
                   {attachments.map((att) => (
-                    <div 
-                      key={att.asset_label} 
+                    <div
+                      key={att.asset_label}
                       className="relative group flex items-center gap-2 px-2 py-1 bg-bg-card border border-divider rounded-lg shadow-sm cursor-help transition-all hover:border-primary"
                       onMouseEnter={() => setHoveredAsset(att)}
                       onMouseLeave={() => setHoveredAsset(null)}
@@ -2448,7 +2545,20 @@ export default function CreativeCanvas({
                       <div className="w-5 h-5 rounded overflow-hidden">
                         {att.kind === "image" ? <img src={att.url} className="w-full h-full object-cover" /> : <FiTerminal size={10} />}
                       </div>
-                      <span className="text-[10px] font-bold text-secondary-text">{att.asset_label}</span>
+                      {/* P2：展示友好名（图片 3），不暴露内部 id asset_3 */}
+                      <span className="text-[10px] font-bold text-secondary-text">{friendlyAssetName(att)}</span>
+                      {/* P1-B：附件可删——removeAttachment 早已定义却没接线，传错图只能刷新页面。
+                          点 × 即从待发送列表移除（mousedown 不抢 textarea 焦点）。 */}
+                      <button
+                        type="button"
+                        onClick={() => { removeAttachment(att.asset_label); setHoveredAsset(null); }}
+                        onMouseDown={(e) => e.preventDefault()}
+                        aria-label={t("delete")}
+                        title={t("delete")}
+                        className="p-0.5 rounded-full text-secondary-text hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                      >
+                        <FiX size={11} />
+                      </button>
                     </div>
                   ))}
                   
@@ -2470,7 +2580,8 @@ export default function CreativeCanvas({
                           : <RiSparklingLine size={10} />
                         }
                       </div>
-                      <span className="text-[10px] font-bold text-primary">{a.asset_label}</span>
+                      {/* P2：@提及预览 chip 同样展示友好名（输入框里的 @asset_N 保持不动） */}
+                      <span className="text-[10px] font-bold text-primary">{friendlyAssetName(a)}</span>
                     </div>
                   ))}
                   {uploading && (
@@ -2497,7 +2608,8 @@ export default function CreativeCanvas({
                     </div>
                   )}
                   <div className="absolute inset-x-0 bottom-0 p-5 bg-gradient-to-t from-black/90 via-black/40 to-transparent">
-                    <div className="text-sm font-bold text-white tracking-tight">{hoveredAsset.asset_label}</div>
+                    {/* P2：大图预览同样用友好名 */}
+                    <div className="text-sm font-bold text-white tracking-tight">{friendlyAssetName(hoveredAsset)}</div>
                     <div className="text-[10px] text-white/70 mt-1 uppercase tracking-widest font-bold">{hoveredAsset.kind} • {t("creative_asset")}</div>
                   </div>
                 </div>
@@ -2518,6 +2630,7 @@ export default function CreativeCanvas({
                     disabled={uploading}
                     className="p-1.5 rounded hover:bg-bg-page text-secondary-text transition-all"
                     title={t("upload_image")}
+                    aria-label={t("upload_image")}
                   >
                     <FiUpload size={16} />
                   </button>
@@ -2548,6 +2661,7 @@ export default function CreativeCanvas({
                       className={`p-1.5 rounded hover:bg-bg-page transition-all flex items-center gap-1.5
                         ${showSkillsMenu ? "bg-bg-page text-primary shadow-inner" : "text-secondary-text"}`}
                       title={t("agent_skills")}
+                      aria-label={t("agent_skills")}
                     >
                       <GoBook size={16} />
                     </button>
@@ -2609,6 +2723,7 @@ export default function CreativeCanvas({
                       className={`p-1.5 rounded hover:bg-bg-page transition-all flex items-center gap-1.5
                         ${showAssetsMenu ? "bg-bg-page text-primary shadow-inner" : "text-secondary-text"}`}
                       title={t("session_assets")}
+                      aria-label={t("session_assets")}
                     >
                       <FiImage size={16} />
                     </button>
@@ -2639,7 +2754,8 @@ export default function CreativeCanvas({
                                 {asset.kind === "audio" && <div className="w-full h-full flex items-center justify-center bg-primary/5 text-primary text-[8px] font-bold uppercase tracking-tight">{t("audio")}</div>}
                                 
                                 <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-1 text-center">
-                                  <span className="text-[10px] text-white font-bold truncate w-full mb-1">{asset.asset_label}</span>
+                                  {/* P2：资产面板悬浮层展示友好名，不暴露 asset_N */}
+                                  <span className="text-[10px] text-white font-bold truncate w-full mb-1">{friendlyAssetName(asset)}</span>
                                   {/* AI 识别的图片描述（存在 prompt 字段），不展示就浪费了 */}
                                   {asset.prompt && (
                                     <span className="text-[8px] text-white/80 leading-tight line-clamp-3 w-full">{asset.prompt}</span>

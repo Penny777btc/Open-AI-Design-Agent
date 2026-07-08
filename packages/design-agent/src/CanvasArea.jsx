@@ -948,6 +948,10 @@ const CanvasArea = forwardRef(
   (
     {
       theme = "dark",
+      // P1-A 跨会话数据安全：宿主传入当前会话 id。删除/布局批次在【操作发生时】盖上会话戳
+      // 随回调传出（onDeleteAssets/onLayoutChange 第三/二参），宿主凭它丢弃「已切走会话」的落库；
+      // 本组件也据它在会话切换时作废未决删除批次、收掉删除撤销 toast（见下方 effect）。
+      sessionId = null,
       // v4 @theme 没有 text-sub/border-main（旧 token 静默失效），换成真实存在的语义 token
       colors = { textSecondary: "text-secondary-text", border: "border-divider" },
       activeTasks = [],
@@ -989,11 +993,30 @@ const CanvasArea = forwardRef(
 
     // ===== 框选多选（拖拽橡皮筋，默认行为）+ 空格平移 =====
     const pendingDeletesRef = useRef([]);  // undo 窗口内的待删批次（关页前冲刷落库）
+    // P1-A：会话戳。删除/布局的落库发生在操作之后（undo 5.4s / 防抖 800ms），期间可能已切会话；
+    // 各操作在【发生时】读这个 ref 盖戳，落库回调把戳传回宿主做归属校验。
+    const sessionIdRef = useRef(sessionId);
+    const deleteToastIdsRef = useRef(new Set()); // 本会话弹出的删除撤销 toast id（切会话要收掉）
+    useEffect(() => {
+      sessionIdRef.current = sessionId;
+      // P1-A：切会话 = 旧会话所有未决删除批次立刻作废，防 A 的删除/撤销污染 B：
+      // 1) undone 置 true → 5.4s 落库定时器与关页冲刷都会跳过这些批次；
+      // 2) 收掉删除撤销 toast → 防止在 B 会话点「撤销」把 A 的节点灌进 B 的画布（画布已 reset）。
+      pendingDeletesRef.current.forEach((b) => { b.undone.current = true; });
+      pendingDeletesRef.current = [];
+      deleteToastIdsRef.current.forEach((id) => toast.dismiss(id));
+      deleteToastIdsRef.current.clear();
+      // 布局基线归零：新会话首个快照只建基线不上报（否则旧基线 vs 新会话资产会被误报成「移动」）
+      layoutBaselineRef.current = null;
+    }, [sessionId]);
     useEffect(() => {
       const flush = () => {
-        const labels = pendingDeletesRef.current
-          .filter((b) => !b.undone.current).flatMap((b) => b.labels);
-        if (labels.length && onDeleteAssets) { try { onDeleteAssets(labels, { keepalive: true }); } catch {} }
+        // P1-A：冲刷也带批次自身的会话戳（切会话时 pending 已清空，这里都是当前会话的批次）
+        pendingDeletesRef.current
+          .filter((b) => !b.undone.current && b.labels.length)
+          .forEach((b) => {
+            if (onDeleteAssets) { try { onDeleteAssets(b.labels, { keepalive: true }, b.sid); } catch {} }
+          });
       };
       window.addEventListener("beforeunload", flush);
       window.addEventListener("pagehide", flush);
@@ -1046,11 +1069,14 @@ const CanvasArea = forwardRef(
       // 文字节点没有显式 height，用字号×行数估算——孤儿文字层也能被批量框中删除/对齐。
       const inBox = (x, y, w, h) =>
         x < box.x + box.w && x + w > box.x && y < box.y + box.h && y + h > box.y;
+      // P3：隐藏节点（hidden=true）不参与框选命中——它们在画布上不可见也不可点，
+      // 被框进多选后一起删除/对齐是「看不见的误伤」（用户根本不知道选中了它）。
       const hit = [
-        ...images.filter((n) => inBox(n.x, n.y, n.width || 200, n.height || 200)),
-        ...videos.filter((n) => inBox(n.x, n.y, n.width || 200, n.height || 200)),
-        ...audios.filter((n) => inBox(n.x, n.y, n.width || 240, n.height || 60)),
+        ...images.filter((n) => !n.hidden && inBox(n.x, n.y, n.width || 200, n.height || 200)),
+        ...videos.filter((n) => !n.hidden && inBox(n.x, n.y, n.width || 200, n.height || 200)),
+        ...audios.filter((n) => !n.hidden && inBox(n.x, n.y, n.width || 240, n.height || 60)),
         ...texts.filter((n) => {
+          if (n.hidden) return false;
           const lines = Math.max(1, String(n.text || "").split("\n").length);
           const h = n.height || (n.fontSize || 24) * 1.35 * lines;
           const w = n.width || Math.max(40, String(n.text || "").length * (n.fontSize || 24));
@@ -1068,7 +1094,14 @@ const CanvasArea = forwardRef(
     // 文字层随各自底图平移。位置/尺寸由布局持久化 watcher 自动落库——素材重叠随时自助修复。
     const tidyCanvas = () => {
       const CARD_H = 320, GAP = 32, ROW_CAP = 4;
-      const list = [...images].sort((a, b) => {
+      // P3：视频/音频也纳入整理——旧版只排图片，画布上有视频/音频时整理完它们
+      // 原地不动、继续和网格重叠（“一键整理”名不副实）。音频卡保持原生 180×60
+      // 不拉伸（拉到 320 高的音频卡很怪），视频与图片一样按比例统一卡高。
+      const list = [
+        ...images.map((n) => ({ ...n, _tidyKind: "img" })),
+        ...videos.map((n) => ({ ...n, _tidyKind: "vid" })),
+        ...audios.map((n) => ({ ...n, _tidyKind: "aud" })),
+      ].sort((a, b) => {
         const na = parseInt((a.assetLabel || "").split("_")[1]) || 1e9;
         const nb = parseInt((b.assetLabel || "").split("_")[1]) || 1e9;
         return na - nb;
@@ -1076,18 +1109,25 @@ const CanvasArea = forwardRef(
       if (!list.length) return;
       const minX = Math.min(...list.map((n) => n.x));
       const minY = Math.min(...list.map((n) => n.y));
-      const patch = {};   // id → {x,y,width,height}
+      const patch = {};   // id → {x,y,width?,height?}
       const delta = {};   // assetLabel → [dx,dy] 供文字层跟随
       let x = minX, y = minY, col = 0, rowH = 0;
       list.forEach((n) => {
-        const ratio = (n.width || 200) / (n.height || 200);
-        const h = CARD_H, w = Math.max(60, Math.round(ratio * CARD_H));
+        let w, h;
+        if (n._tidyKind === "aud") {
+          w = 180; h = 60;                       // 音频卡固定尺寸，只挪位置
+        } else {
+          const ratio = (n.width || 200) / (n.height || 200);
+          h = CARD_H; w = Math.max(60, Math.round(ratio * CARD_H));
+        }
         if (col >= ROW_CAP) { col = 0; x = minX; y += rowH + GAP; rowH = 0; }
-        patch[n.id] = { x, y, width: w, height: h };
+        patch[n.id] = n._tidyKind === "aud" ? { x, y } : { x, y, width: w, height: h };
         if (n.assetLabel) delta[n.assetLabel] = [x - n.x, y - n.y];
         x += w + GAP; rowH = Math.max(rowH, h); col += 1;
       });
       setImages((prev) => prev.map((n) => patch[n.id] ? { ...n, ...patch[n.id] } : n));
+      setVideos((prev) => prev.map((n) => patch[n.id] ? { ...n, ...patch[n.id] } : n));
+      setAudios((prev) => prev.map((n) => patch[n.id] ? { ...n, ...patch[n.id] } : n));
       setTexts((prev) => prev.map((tx) => {
         const d = tx.srcRef && delta[tx.srcRef];
         return d ? { ...tx, x: tx.x + d[0], y: tx.y + d[1] } : tx;
@@ -1150,12 +1190,8 @@ const CanvasArea = forwardRef(
       if (selectedId) setSelectedId(null);
     };
 
-    const deleteMultiSelected = () => {
-      if (setSel.size === 0) return;
-      setImages((prev) => prev.filter((i) => !setSel.has(i.id)));
-      setSetSel(new Set());
-      setSelectedId(null);
-    };
+    // （P3 清理）原 deleteMultiSelected 是死代码且是危险陷阱：只删 images、不走
+    // undo/落库通路——所有删除统一走 handleDelete/performDelete，故直接移除。
 
     // 拼长图：把多选的图按画布位置(上→下、左→右)纵向拼成一张长图导出（电商详情页用）。
     const [stitching, setStitching] = useState(false);
@@ -1394,7 +1430,10 @@ const CanvasArea = forwardRef(
     // 方向键微移：选中（单个或多选）的节点整体平移。Shift = 10px，否则 1px。
     const nudgeSelected = (dx, dy) => {
       if (setSel.size > 0) {
-        setImages((prev) => prev.map((i) => (setSel.has(i.id) ? { ...i, x: i.x + dx, y: i.y + dy } : i)));
+        // P3：多选集合可能含视频/音频/文字（框选命中所有类型）——旧版只移 images，
+        // 混合多选微移时其它节点原地不动、整体错位。四类全量平移。
+        const mv = (setter) => setter((prev) => prev.map((n) => (setSel.has(n.id) ? { ...n, x: n.x + dx, y: n.y + dy } : n)));
+        mv(setImages); mv(setVideos); mv(setAudios); mv(setTexts);
         return true;
       }
       if (!selectedId) return false;
@@ -1909,15 +1948,13 @@ const CanvasArea = forwardRef(
           {t("clear_canvas_confirm")}
           <button
             onClick={() => {
-              setImages([]);
-              setVideos([]);
-              setAudios([]);
-              setTexts([]);
-              setSelectedId(null);
-              // M5：清空画布也要清多选，否则空画布还挂着「已选 N 张」浮动操作条。
-              setSetSel(new Set());
               toast.dismiss(tt.id);
-              toast.success(t("canvas_cleared"));
+              // P3：清空画布并入统一删除通路（performDelete）——旧版直接 set 空数组，
+              // 不落库=刷新全部复活，也没有撤销。现在与 Delete 同样有 5s 撤销 + 落库，
+              // 也顺带清了多选（performDelete 内部收尾），M5 语义保持。
+              performDelete(new Set(
+                [...images, ...videos, ...audios, ...texts].map((n) => n.id)
+              ));
             }}
             className="px-2 py-1 bg-red-500 text-white rounded-sm text-[10px] font-bold shrink-0"
           >{t("confirm")}</button>
@@ -2340,7 +2377,11 @@ const CanvasArea = forwardRef(
       if (!tpl) return;
       const labels = images.filter((img) => setSel.has(img.id) && img.assetLabel).map((img) => img.assetLabel);
       if (labels.length === 0) {
+        // P2：过滤后为空（勾的全是未注册图/非图片节点）→ 收起面板再提示。
+        // 面板计数已统一按「带 label 的图」算，这里是最后一道兜底，别让用户对着
+        // 一个「说有图、点了没反应」的面板干瞪眼。
         toast.error(t("set_need_labeled"));
+        setShowSetPanel(false);
         return;
       }
       onSetTemplate?.({ assetLabels: labels, template: setTpl, templateLabel: t(tpl.labelKey), mode: setGenMode });
@@ -2376,9 +2417,12 @@ const CanvasArea = forwardRef(
         })
         .map(([k, v]) => ({ asset_label: k, ...v }));
       if (!moves.length) return;
+      // P1-A：会话戳在「变更发生的此刻」捕获——800ms 防抖窗口内用户可能切会话，
+      // 届时宿主 persistLayout 凭这个戳与当前会话比对，不符则丢弃（防写错会话）。
+      const sid = sessionIdRef.current;
       const timer = setTimeout(() => {
         layoutBaselineRef.current = snap;
-        try { onLayoutChange(moves); } catch {}
+        try { onLayoutChange(moves, sid); } catch {}
       }, 800);
       return () => clearTimeout(timer);
     }, [images, videos, audios, onLayoutChange]);
@@ -2645,11 +2689,10 @@ const CanvasArea = forwardRef(
       const id = contextMenu?.nodeId || selectedId;
       if (id) {
         setClipboardNode(getActiveNode(id));
-        setImages(images.filter((img) => img.id !== id));
-        setVideos(videos.filter((vid) => vid.id !== id));
-        setAudios(audios.filter((aud) => aud.id !== id));
-        setTexts(texts.filter((txt) => txt.id !== id));
-        if (selectedId === id) setSelectedId(null);
+        // P3：剪切的「移除」并入统一删除通路（performDelete）——旧版裸删不落库，
+        // 剪切后刷新素材复活；现在与 Delete 同样有 5s 撤销 + undo 窗口过后删资产行。
+        performDelete(new Set([id]));
+        return; // performDelete 已收尾（清选择/关菜单）
       }
       setContextMenu(null);
     };
@@ -2664,6 +2707,14 @@ const CanvasArea = forwardRef(
             id: `${node.id.split("-")[0]}-${Date.now()}`,
             x: node.x + 20,
             y: node.y + 20,
+            // P3：副本绝不能共享 assetLabel——label 是资产唯一键，两个节点同 label 会让
+            // 布局持久化互相覆写、删除原图时落库把副本也「视为已删」（刷新副本消失）。
+            // 副本是纯本地节点（后端没有它的资产行），label 置空、按未注册图对待。
+            assetLabel: null,
+            // 文字节点同理：srcRef/layerAsset 是回放幂等与落库归并的身份键，
+            // 副本带着它们会被 addTextLayers 重放误清、或跟着原文字层一起被落库删除。
+            srcRef: null,
+            layerAsset: null,
           };
           if (newNode.id.startsWith("img"))
             setImages((prev) => [...prev, newNode]);
@@ -2720,6 +2771,11 @@ const CanvasArea = forwardRef(
         const newNode = {
           ...clipboardNode,
           id: `${clipboardNode.id.split("-")[0]}-${Date.now()}`,
+          // P3：同 handleDuplicate——粘贴出的副本不能共享 assetLabel/srcRef/layerAsset
+          //（剪切场景原资产行已进入删除通路，粘贴节点顶着旧 label 会指向已删的行）。
+          assetLabel: null,
+          srcRef: null,
+          layerAsset: null,
         };
         newNode.x = x - (newNode.width || 0) / 2;
         newNode.y = y - (newNode.height || 0) / 2;
@@ -2819,12 +2875,11 @@ const CanvasArea = forwardRef(
       setContextMenu(null);
     };
 
-    const handleDelete = () => {
-      // 收集要删的节点（多选优先），删完给「撤销」toast——画布删除本是危险操作，之前裸删无挽回
-      const targetIds = (!contextMenu?.nodeId && setSel.size > 0)
-        ? setSel
-        : new Set([contextMenu?.nodeId || selectedId].filter(Boolean));
-      if (targetIds.size === 0) { setContextMenu(null); return; }
+    // （P3 重构）删除统一收口：handleDelete / handleCut / handleClearCanvas 都走这里——
+    // 同一套「乐观移除 + 5s 撤销 + undo 窗口过后落库」，不再存在绕过持久化的裸删路径
+    //（旧 handleCut/handleClearCanvas 裸删 = 刷新后素材复活）。
+    const performDelete = (targetIds) => {
+      if (!targetIds || targetIds.size === 0) { setContextMenu(null); return; }
       const delImgs = images.filter((i) => targetIds.has(i.id));
       const delVids = videos.filter((v) => targetIds.has(v.id));
       const delAuds = audios.filter((a) => targetIds.has(a.id));
@@ -2843,10 +2898,13 @@ const CanvasArea = forwardRef(
       ].filter(Boolean));
       const txtLabels = new Set(delTxts.map((tx) => tx.layerAsset).filter(Boolean));
       const undoneRef = { current: false };
+      // P1-A：删除发生「此刻」的会话戳——undo 窗口(5.4s)内切会话，宿主 persistDelete
+      // 凭它与当前会话比对，不符则丢弃，绝不硬删新会话里同名的 asset。
+      const opSid = sessionIdRef.current;
       if (delLabels.size || txtLabels.size) {
         // 待删批次登记：undo 窗口内刷新/关页 → beforeunload 冲刷(keepalive)兜底落库,
         // 否则「删完 5 秒内刷新」的删除会静默丢失、素材复活(用户实测)。
-        const batch = { labels: [...delLabels, ...txtLabels], undone: undoneRef };
+        const batch = { labels: [...delLabels, ...txtLabels], undone: undoneRef, sid: opSid };
         pendingDeletesRef.current.push(batch);
         setTimeout(() => {
           pendingDeletesRef.current = pendingDeletesRef.current.filter((b) => b !== batch);
@@ -2855,7 +2913,7 @@ const CanvasArea = forwardRef(
             // 在最新状态里核对：该文字资产还有存活节点就不删行
             txtLabels.forEach((l) => { if (now.some((tx) => tx.layerAsset === l)) txtLabels.delete(l); });
             const all = [...delLabels, ...txtLabels];
-            if (all.length) { try { onDeleteAssets(all); } catch {} }
+            if (all.length) { try { onDeleteAssets(all, {}, opSid); } catch {} }
             return now;
           });
         }, 5400);
@@ -2863,7 +2921,7 @@ const CanvasArea = forwardRef(
       setSetSel(new Set());
       setSelectedId(null);
       setContextMenu(null);
-      toast((tt) => (
+      const toastId = toast((tt) => (
         <span className="flex items-center gap-3 text-[12px]">
           {t("canvas_deleted", total)}
           <button
@@ -2879,6 +2937,16 @@ const CanvasArea = forwardRef(
           >{t("undo")}</button>
         </span>
       ), { duration: 5000 });
+      // P1-A：登记删除类 toast——切会话时统一 dismiss，防在新会话点「撤销」把旧会话节点灌进来
+      deleteToastIdsRef.current.add(toastId);
+    };
+
+    const handleDelete = () => {
+      // 收集要删的节点（多选优先），删完给「撤销」toast——画布删除本是危险操作，之前裸删无挽回
+      const targetIds = (!contextMenu?.nodeId && setSel.size > 0)
+        ? setSel
+        : new Set([contextMenu?.nodeId || selectedId].filter(Boolean));
+      performDelete(targetIds);
     };
 
     // Stage 尺寸跟随容器：必须可靠填满，否则会卡在默认 800×600 → 画布上出现一个
@@ -3617,7 +3685,12 @@ const CanvasArea = forwardRef(
         )}
 
         {/* 套图面板：勾选图片 + 选模板 + 应用 */}
-        {showSetPanel && (
+        {showSetPanel && (() => {
+          // P2：面板里所有计数/预估/CTA 统一按「真正会被发送的图」算——applySetTemplate
+          // 只发送 带 assetLabel 的图片；setSel 里可能混着未注册图/视频/文字（框选命中一切），
+          // 旧版按 setSel.size 显示 = 计数撒谎（说选了 3 张、实际只发 1 张照样扣费预估 3 张）。
+          const labeledSel = images.filter((img) => setSel.has(img.id) && img.assetLabel);
+          return (
           <div className="absolute inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-200" onClick={() => setShowSetPanel(false)}>
             <div className="bg-bg-card border border-divider rounded-2xl shadow-pop w-[min(680px,92%)] max-h-[86%] flex flex-col animate-in fade-in zoom-in-95 duration-200 ease-[var(--ease-out)]" onClick={(e) => e.stopPropagation()}>
               <div className="px-5 py-3 border-b border-divider flex items-center justify-between">
@@ -3680,11 +3753,11 @@ const CanvasArea = forwardRef(
               {/* 已选素材（只读预览）：选择在画布上完成（点选/框选），弹窗不再做二次挑选——
                   用户实测二次勾选是冗余步骤；无选中时给出画布选图的引导。 */}
               <div className="px-5 py-4 flex-1 overflow-y-auto scrollbar-subtle">
-                {setSel.size === 0 ? (
+                {labeledSel.length === 0 ? (
                   <div className="py-8 text-center text-secondary-strong text-[12px]">{t("set_pick_on_canvas")}</div>
                 ) : (
                   <div className="flex gap-2 flex-wrap">
-                    {images.filter((img) => setSel.has(img.id)).map((img) => (
+                    {labeledSel.map((img) => (
                       <div key={img.id} className="relative w-16 h-16 rounded overflow-hidden border border-primary/60">
                         <img src={img.src} className="w-full h-full object-cover" />
                       </div>
@@ -3695,14 +3768,14 @@ const CanvasArea = forwardRef(
               <div className="px-5 py-3 border-t border-divider flex items-center justify-between">
                 <span className="text-[11px] text-secondary-strong">
                   {SET_TEMPLATES[setTpl]?.single
-                    ? t("set_footer_single", setSel.size, t(SET_TEMPLATES[setTpl].ctaKey))
-                    : t("set_footer_multi", setSel.size)}
+                    ? t("set_footer_single", labeledSel.length, t(SET_TEMPLATES[setTpl].ctaKey))
+                    : t("set_footer_multi", labeledSel.length)}
                 </span>
                 <div className="flex items-center gap-3">
                   {/* 预估消耗：出图前给用户一个量级预期（怕乱扣分是套图最大心理门槛）。
-                      出图张数 = 单图模板固定张数(6/7)，多图模式 = 勾选张数。 */}
-                  {setSel.size > 0 && (() => {
-                    const outCount = SET_TEMPLATES[setTpl]?.single ? (SET_TEMPLATES[setTpl].count || 1) : setSel.size;
+                      出图张数 = 单图模板固定张数(6/7)，多图模式 = 实际会发送的张数。 */}
+                  {labeledSel.length > 0 && (() => {
+                    const outCount = SET_TEMPLATES[setTpl]?.single ? (SET_TEMPLATES[setTpl].count || 1) : labeledSel.length;
                     return (
                       <span className="text-[11px] text-secondary-strong tabular-nums whitespace-nowrap">
                         {t("set_estimated_cost", outCount * SET_EST_CREDITS_PER_IMAGE)}
@@ -3711,15 +3784,16 @@ const CanvasArea = forwardRef(
                   })()}
                   <div className="flex gap-2">
                     <button onClick={() => setShowSetPanel(false)} className="px-4 py-2 border border-divider text-secondary-text rounded text-[11px] font-bold hover:text-primary-text">{t("cancel")}</button>
-                    <button onClick={applySetTemplate} disabled={setSel.size === 0} className="px-5 py-2 bg-primary text-black rounded text-[11px] font-bold disabled:opacity-40 disabled:cursor-not-allowed">
-                      {SET_TEMPLATES[setTpl]?.single ? t("set_cta_single", t(SET_TEMPLATES[setTpl].ctaKey), SET_TEMPLATES[setTpl].count) : t("set_cta_multi", setSel.size)}
+                    <button onClick={applySetTemplate} disabled={labeledSel.length === 0} className="px-5 py-2 bg-primary text-black rounded text-[11px] font-bold disabled:opacity-40 disabled:cursor-not-allowed">
+                      {SET_TEMPLATES[setTpl]?.single ? t("set_cta_single", t(SET_TEMPLATES[setTpl].ctaKey), SET_TEMPLATES[setTpl].count) : t("set_cta_multi", labeledSel.length)}
                     </button>
                   </div>
                 </div>
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* 文字样式面板：选中文字时出现 */}
         {!maskMode && selectedId?.startsWith("txt") && (() => {
