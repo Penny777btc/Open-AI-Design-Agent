@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from app.db import SessionLocal
 from app.deps import get_or_create_dev_user
 from app.models import Job, UploadedFile
-from tests.conftest import make_pdf_bytes, new_session
+from tests.conftest import make_pdf_bytes, make_png_bytes, new_session
 
 pytestmark = pytest.mark.asyncio
 
@@ -54,18 +54,20 @@ async def test_doc_upload_rate_limit_blocks_sixth(client):
 # ---- A2: 媒体上传限流（每小时 60 次）----
 
 async def test_upload_binary_rate_limit_blocks_61st(client):
-    base = f"uploads/{uuid.uuid4().hex[:8]}"
+    async with SessionLocal() as db:
+        uid = (await get_or_create_dev_user(db)).id
+    base = f"uploads/{uid}"  # 端点校验 key 须落在本用户命名空间下
     for i in range(60):
         r = await client.post(
             "/api/v1/upload-binary",
             data={"key": f"{base}/{i}.png"},
-            files={"file": (f"{i}.png", io.BytesIO(b"\x89PNG\r\n" + bytes([i])), "image/png")},
+            files={"file": (f"{i}.png", io.BytesIO(make_png_bytes(i)), "image/png")},
         )
         assert r.status_code == 200, (i, r.text)
     r61 = await client.post(
         "/api/v1/upload-binary",
         data={"key": f"{base}/61.png"},
-        files={"file": ("61.png", io.BytesIO(b"\x89PNG\r\n61"), "image/png")},
+        files={"file": ("61.png", io.BytesIO(make_png_bytes(61)), "image/png")},
     )
     assert r61.status_code == 429, r61.text
 
@@ -110,8 +112,8 @@ async def test_storage_quota_blocks_over_limit(client):
     # 再传 1KB 就超限 → 413
     r = await client.post(
         "/api/v1/upload-binary",
-        data={"key": f"uploads/{uuid.uuid4().hex[:8]}/big.png"},
-        files={"file": ("big.png", io.BytesIO(b"\x89PNG\r\n" + b"x" * 1024), "image/png")},
+        data={"key": f"uploads/{uid}/big.png"},
+        files={"file": ("big.png", io.BytesIO(make_png_bytes(99)), "image/png")},
     )
     assert r.status_code == 413, r.text
     assert "存储空间不足" in r.json()["detail"]

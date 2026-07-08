@@ -390,8 +390,8 @@ export default function AssistantDashboard() {
                   {(uploading || attachments.length > 0 || input.includes("@")) && (
                     <div className="absolute bottom-full left-0 mb-1 flex flex-wrap gap-2 bg-bg-card border border-divider rounded shadow-xl z-10 animate-in slide-in-from-bottom-2 duration-300">
                       {attachments.map((att, i) => (
-                        <div 
-                          key={i} 
+                        <div
+                          key={i}
                           className="relative group flex items-center gap-2 px-2 py-1 bg-bg-page border border-divider rounded cursor-help hover:border-primary/50 transition-all ease-[var(--ease-standard)]"
                           onMouseEnter={() => setHoveredAsset(att)}
                           onMouseLeave={() => setHoveredAsset(null)}
@@ -399,7 +399,17 @@ export default function AssistantDashboard() {
                           <div className="w-5 h-5 rounded overflow-hidden">
                             {att.kind === "image" ? <img src={att.url} className="w-full h-full object-cover" /> : <FiTerminal size={10} />}
                           </div>
-                          <span className="text-[10px] font-bold text-secondary-strong">{`asset_${i+1}`}</span>
+                          {/* 友好名（附件 N / File N）替代内部标识 asset_N，缩略图在左侧已给出预览 */}
+                          <span className="text-[10px] font-bold text-secondary-strong">{t.attachment(i + 1)}</span>
+                          {/* 单个附件可删（接线 removeAttachment）：之前只有整组清空，传错一张只能全部重传 */}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setHoveredAsset(null); removeAttachment(att.url); }}
+                            title={t.removeAttachment}
+                            aria-label={t.removeAttachment}
+                            className="p-0.5 rounded text-secondary-text hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                          >
+                            <FiX size={12} />
+                          </button>
                         </div>
                       ))}
                       
@@ -418,7 +428,8 @@ export default function AssistantDashboard() {
                             <div className="w-5 h-5 rounded overflow-hidden bg-primary/10 flex items-center justify-center text-primary">
                               {asset.kind === "image" ? <img src={asset.url} className="w-full h-full object-cover" /> : <RiSparklingLine size={10} />}
                             </div>
-                            <span className="text-[10px] font-bold text-primary">{match}</span>
+                            {/* 提及 chip 同样用友好名展示（输入框里的 @asset_N 令牌保持不变，这里只是预览） */}
+                            <span className="text-[10px] font-bold text-primary">{t.attachment(index + 1)}</span>
                           </div>
                         );
                       })}
@@ -678,9 +689,10 @@ export default function AssistantDashboard() {
                     ))}
                   </div>
 
+                  {/* 触屏没有 hover：pointer-coarse（Tailwind v4）下删除按钮常显，否则手机上永远删不了项目 */}
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteSession(session.id, session.name); }}
-                    className="absolute top-2 right-2 z-10 p-1.5 rounded bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-all ease-[var(--ease-standard)]"
+                    className="absolute top-2 right-2 z-10 p-1.5 rounded bg-black/60 text-white opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 hover:bg-red-600 transition-all ease-[var(--ease-standard)]"
                     title={t.deleteChat}
                   >
                     <FiTrash2 size={14} />

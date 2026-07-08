@@ -75,7 +75,8 @@ async def approve_job(job_id: str, db: AsyncSession = Depends(get_db), user=Depe
     if total > 0:
         try:
             await credit_service.apply(
-                db, user.id, -total, "reserve", job_id=job_id, memo=f"reserve {total} for plan"
+                # QA P2：memo 在前端账单页直出，写中文人话而非后端行话
+                db, user.id, -total, "reserve", job_id=job_id, memo=f"预扣 {total} 积分（执行计划）"
             )
         except credit_service.InsufficientCredits as exc:
             await revert_claim()
@@ -89,7 +90,7 @@ async def approve_job(job_id: str, db: AsyncSession = Depends(get_db), user=Depe
     if not job_service.resolve_approval(job_id, approved=True):
         # 运行时丢失：退预扣并还原状态
         if total > 0:
-            await credit_service.apply(db, user.id, total, "refund", job_id=job_id, memo="runtime lost", enforce=False)
+            await credit_service.apply(db, user.id, total, "refund", job_id=job_id, memo="服务重启，退还预扣", enforce=False)
             await db.commit()
         await revert_claim()
         raise HTTPException(status_code=410, detail="Job runtime lost (server restarted); please retry the request")

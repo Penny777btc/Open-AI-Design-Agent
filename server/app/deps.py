@@ -29,7 +29,8 @@ async def get_or_create_dev_user(db: AsyncSession) -> User:
                     delta=settings.signup_grant_credits,
                     kind="grant",
                     balance_after=settings.signup_grant_credits,
-                    memo="signup grant",
+                    # QA P2：memo 在前端账单页直出，写中文人话（与 auth.py 注册赠送口径一致）
+                    memo="注册赠送",
                 )
             )
             await db.commit()

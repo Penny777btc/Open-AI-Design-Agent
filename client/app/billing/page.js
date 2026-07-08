@@ -12,6 +12,31 @@ import SiteFooter from "@/components/SiteFooter";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "";
 
+/* 历史流水 memo 的中文兜底映射（保守处理）：
+   后端已把新写入的 memo 中文化，但数据库里存量流水仍是英文模板
+   （见 server 端 "signup grant" / "purchase N credits" 等写入点）。
+   只在中文站按「已知模板精确/正则匹配」翻译，未命中原样透出，绝不猜译。 */
+const MEMO_ZH_EXACT = {
+  "signup grant": "注册赠送",
+  "runtime lost": "运行中断，积分退还",
+  "server restart: unused reserve": "服务重启，未使用预扣已退还",
+};
+const MEMO_ZH_PATTERNS = [
+  [/^purchase (\d+) credits$/, (m) => `充值 ${m[1]} 积分`],
+  [/^reserve (\d+) for plan$/, (m) => `生成计划预扣 ${m[1]} 积分`],
+  [/^region edit (\S+)$/, (m) => `局部编辑 ${m[1]}`],
+];
+function localizeMemo(memo, lang) {
+  if (!memo || lang !== "zh") return memo; // 英文站/空 memo 不动
+  const exact = MEMO_ZH_EXACT[memo];
+  if (exact) return exact;
+  for (const [re, fmt] of MEMO_ZH_PATTERNS) {
+    const m = memo.match(re);
+    if (m) return fmt(m);
+  }
+  return memo;
+}
+
 export default function BillingPage() {
   const { userData, fetchUserData } = useApi();
   const { lang } = useLang();
@@ -221,11 +246,13 @@ export default function BillingPage() {
             )}
             {ledgerState === "ready" && ledger.map((r, i) => (
               <div key={i} className="px-5 py-3 flex items-center gap-4 text-[12px]">
-                <span className="micro-label w-20 shrink-0">{t.kinds[r.kind] || r.kind}</span>
+                {/* kind 未命中不裸奔枚举值（后端新增 kind 时中文站会漏英文），统一显示「其他/Other」 */}
+                <span className="micro-label w-20 shrink-0">{t.kinds[r.kind] || t.kindOther}</span>
                 <span className={`font-mono font-bold w-16 ${r.delta >= 0 ? "text-white" : "text-gray-500"}`}>
                   {r.delta >= 0 ? `+${r.delta}` : r.delta}
                 </span>
-                <span className="text-gray-500 flex-1 truncate">{r.memo}</span>
+                {/* 存量英文 memo 在中文站做已知模板映射（见文件头 localizeMemo），未知内容原样透出 */}
+                <span className="text-gray-500 flex-1 truncate">{localizeMemo(r.memo, lang)}</span>
                 <span className="font-mono text-gray-600">→ {r.balance_after}</span>
                 <span className="text-gray-700 font-mono hidden sm:inline">{new Date(r.created_at).toLocaleString()}</span>
               </div>

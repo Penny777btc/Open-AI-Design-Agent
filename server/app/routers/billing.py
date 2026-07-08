@@ -204,7 +204,8 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     order.paid_at = datetime.now(timezone.utc)
     await credit_service.apply(
         db, order.user_id, order.credits, "purchase",
-        order_id=order.id, memo=f"purchase {order.credits} credits", enforce=False,
+        # QA P2：memo 在账单页直出，用中文
+        order_id=order.id, memo=f"充值购买 {order.credits} 积分", enforce=False,
     )
     await db.commit()
     return {"received": True}

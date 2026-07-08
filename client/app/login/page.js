@@ -37,7 +37,8 @@ function LoginForm() {
       const nxt = searchParams.get("next");
       router.push(nxt && nxt.startsWith("/") && !nxt.startsWith("//") ? nxt : "/dashboard");
     } catch (err) {
-      toast.error(err.response?.data?.detail || "Login failed");
+      // 兜底错误走 copy.js：中文站不再漏英文 "Login failed"
+      toast.error(err.response?.data?.detail || t.loginFailed);
       setBusy(false);
     }
   };

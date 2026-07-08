@@ -58,7 +58,8 @@ async def register(body: Credentials, db: AsyncSession = Depends(get_db)):
     db.add(user)
     await db.flush()
     balance = await credit_service.apply(
-        db, user.id, settings.signup_grant_credits, "grant", memo="signup grant"
+        # QA P2：memo 在账单页直出，用中文
+        db, user.id, settings.signup_grant_credits, "grant", memo="注册赠送"
     )
     await db.commit()
     return {"token": make_token(user.id), "user": _user_out(user, balance)}
@@ -269,7 +270,7 @@ async def google_oauth(request: Request, db: AsyncSession = Depends(get_db)):
         user = User(email=email, name=info.get("name"), google_id=info.get("id"))
         db.add(user)
         await db.flush()
-        await credit_service.apply(db, user.id, settings.signup_grant_credits, "grant", memo="signup grant")
+        await credit_service.apply(db, user.id, settings.signup_grant_credits, "grant", memo="注册赠送")  # QA P2：memo 在账单页直出，用中文
     elif not user.google_id:
         user.google_id = info.get("id")
     await db.commit()

@@ -187,6 +187,28 @@ async def upload_binary(request: Request, user=Depends(get_current_user)):
     if len(data) > 50 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 50MB)")
 
+    # QA P2：原来只验扩展名+mime+大小，0 字节/损坏图会存进 DB 变成画布上
+    # 永远渲染失败又删不掉的僵尸资产。图片在入库前加解码闸；
+    # 只管图片路径，视频/音频不动（PIL 不认识它们，且文档上传是另一个端点）。
+    if mime.startswith("image/"):
+        if ext in ("png", "jpg", "jpeg", "webp", "gif"):
+            # PIL verify() 是权威校验：0 字节/截断/「扩展名对但内容是垃圾」全能识破，
+            # 且只查文件结构不做全图解码，够便宜。不能再叠固定字节数下限——
+            # 合法的 1x1 PNG 才 ~69 字节，粗暴的 <100 会误杀真图。
+            import io
+
+            from PIL import Image
+
+            try:
+                # verify() 之后 Image 对象即作废（PIL 契约），我们只做校验不复用，直接丢弃。
+                Image.open(io.BytesIO(data)).verify()
+            except Exception:
+                raise HTTPException(status_code=400, detail="图片文件损坏或为空")
+        elif len(data) < 100:
+            # avif 解码依赖 pillow 插件、装没装因环境而异，PIL 打不开合法 avif 会误杀——
+            # 退而求其次只做最小字节校验（avif 的容器盒结构开销远超 100 字节）。
+            raise HTTPException(status_code=400, detail="图片文件损坏或为空")
+
     # 配额检查与落库分两段短事务：先读已用量（超限直接 413，不落盘），
     # 再写文件、写记录——SQLite 单写者，写库前不持有长事务
     async with SessionLocal() as db:

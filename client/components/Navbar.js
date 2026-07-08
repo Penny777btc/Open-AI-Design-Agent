@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useApi } from "@/context/ApiContext";
 import { PicsmithMark } from "@/components/Logo";
+import { LangSwitch } from "@/components/SiteFooter";
 import { useLang } from "@/context/LanguageContext";
 import { COPY } from "@/lib/copy";
 
@@ -31,6 +32,9 @@ const Navbar = () => {
         </div>
 
         <div className="flex items-center gap-4 justify-end">
+          {/* 语言切换入口：dashboard/billing/account 共用此顶栏，之前登录后站内无处切语言，
+              嗅探错语言的用户只能回落地页页脚找开关 */}
+          <LangSwitch />
           {mounted && !loading && userData && (
             <div className="flex items-center gap-3 relative">
               <Link

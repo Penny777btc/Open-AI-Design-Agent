@@ -345,7 +345,8 @@ async def _run_job(job_id: str) -> None:
             await asyncio.wait_for(state["approve"].wait(), timeout=settings.approval_timeout_seconds)
         except asyncio.TimeoutError:
             try:
-                await _refund_job_remainder(job_id, user_id, "approval timeout: full refund")
+                # QA P2：reason 直接作为 memo 写进账本、账单页直出 → 全部改中文人话
+                await _refund_job_remainder(job_id, user_id, "计划超时未审批，全额退还预扣")
             except Exception:
                 logger.error("job %s approval-timeout refund failed", job_id, exc_info=True)
             await emit(job_id, "info", {"content": "Plan expired without approval."})
@@ -354,7 +355,7 @@ async def _run_job(job_id: str) -> None:
 
         if state["cancelled"]:
             try:
-                await _refund_job_remainder(job_id, user_id, "cancelled before run: full refund")
+                await _refund_job_remainder(job_id, user_id, "执行前取消任务，全额退还预扣")
             except Exception:
                 logger.error("job %s cancel refund failed", job_id, exc_info=True)
             await emit(job_id, "info", {"content": "Cancelled by user."})
@@ -362,7 +363,7 @@ async def _run_job(job_id: str) -> None:
             return
         if not state["approved"]:
             try:
-                await _refund_job_remainder(job_id, user_id, "rejected before run: full refund")
+                await _refund_job_remainder(job_id, user_id, "拒绝执行计划，全额退还预扣")
             except Exception:
                 logger.error("job %s reject refund failed", job_id, exc_info=True)
             await emit(job_id, "info", {"content": "Plan rejected. Tell me what to change and I'll re-plan."})
@@ -386,7 +387,7 @@ async def _run_job(job_id: str) -> None:
         # 并兜底退掉未执行节点的余量（per-node 已退部分被 already_refunded 抵扣，不会双退）。
         if _runtime.get(job_id, {}).get("cancelled"):
             try:
-                await _refund_job_remainder(job_id, user_id, "cancelled during run: refund unexecuted")
+                await _refund_job_remainder(job_id, user_id, "运行中取消，退还未执行部分")
             except Exception:
                 logger.error("job %s mid-run cancel refund failed", job_id, exc_info=True)
             cancel_msg = (f"已取消：完成 {ok} 张，未执行步骤的积分已退回" if zh
@@ -410,7 +411,7 @@ async def _run_job(job_id: str) -> None:
         # 退款自身失败不能吞掉原始错误处理（error 事件 + failed 终态照常走）；
         # user_id 在极早期崩溃时可能未绑定 → 传 None 由 helper 从 job 行取。
         try:
-            await _refund_job_remainder(job_id, None, "job crashed: refund unused reserve")
+            await _refund_job_remainder(job_id, None, "任务异常中止，退还未消耗预扣")
         except Exception:
             logger.error("job %s crash refund failed", job_id, exc_info=True)
         # 失败要说人话（用户曾看到英文 "Internal error" 完全不知所措）：
@@ -464,10 +465,12 @@ async def _execute_plan(
             pass  # 取不到的留到节点里再报错/退款
 
     async def refund_node(node, reason: str) -> None:
+        # QA P2：reason 拼进 memo、账单页直出 → 调用方传中文（已取消/执行失败/…），
+        # 分隔符也用中文冒号，整条 memo 读起来是「执行失败：xx图」这样的人话
         async with SessionLocal() as db:
             await credit_service.apply(
                 db, user_id, node_cost(node), "refund",
-                job_id=job_id, memo=f"{reason}: {node.label[:80]}", enforce=False,
+                job_id=job_id, memo=f"{reason}：{node.label[:80]}", enforce=False,
             )
             await db.commit()
 
@@ -483,11 +486,11 @@ async def _execute_plan(
                 while dep not in done_nodes:
                     if _runtime.get(job_id, {}).get("cancelled"):
                         results[node.id] = False
-                        await refund_node(node, "cancelled")
+                        await refund_node(node, "已取消")
                         return
                     if waited > 600:  # 兜底：依赖 10 分钟未完成 → 放弃本节点，防 job 永久挂死
                         results[node.id] = False
-                        await refund_node(node, "dep_timeout")
+                        await refund_node(node, "依赖超时未执行")
                         await emit(job_id, "error", {"message": f"{node.label}: 依赖超时已跳过（积分已退还）"})
                         return
                     await asyncio.sleep(0.2)
@@ -495,7 +498,7 @@ async def _execute_plan(
             async with semaphore:
                 if _runtime.get(job_id, {}).get("cancelled"):
                     results[node.id] = False
-                    await refund_node(node, "cancelled")
+                    await refund_node(node, "已取消")
                     return
                 est = 180 if node.tool == "edit_image" else 60
                 if settings.provider_mode == "mock":
@@ -510,13 +513,13 @@ async def _execute_plan(
                         if st is not None:
                             st["settled"] = st.get("settled", 0) + node_cost(node)
                     else:  # 节点返回 False（如视频未开通）也退款——否则预扣积分白扣
-                        await refund_node(node, "failed")
+                        await refund_node(node, "执行失败")
                 except SkipLayer as skip:  # 元素判为「留在背景」是设计行为，非失败
                     results[node.id] = False
                     skipped.add(node.id)
                     # 与失败分支同理（审计 B5）：先退款后通知，emit 抛错不能吞掉退款
                     try:
-                        await refund_node(node, "skipped")
+                        await refund_node(node, "已跳过")
                     except Exception:
                         logger.error("node %s skip refund failed", node.id, exc_info=True)
                     try:
@@ -529,7 +532,7 @@ async def _execute_plan(
                     # 审计 B5：先 refund 再 emit——原顺序下 emit 抛错（DB 抖动）会跳过退款，
                     # 且异常被 gather(return_exceptions=True) 吞掉。两步各自兜底，互不牵连。
                     try:
-                        await refund_node(node, "failed")
+                        await refund_node(node, "执行失败")
                     except Exception:
                         logger.error("node %s refund failed", node.id, exc_info=True)
                     try:
@@ -1269,7 +1272,8 @@ async def mark_stale_jobs_failed() -> None:
                 if due > 0:
                     await credit_service.apply(
                         db, job.user_id, due, "refund",
-                        job_id=job.id, memo="server restart: unused reserve", enforce=False,
+                        # QA P2：memo 在账单页直出，用中文
+                        job_id=job.id, memo="服务重启，退还未消耗预扣", enforce=False,
                     )
                     refunded = due
             # 审计 B10：没退钱就别说「credits refunded」——无预扣/无余量时文案要如实

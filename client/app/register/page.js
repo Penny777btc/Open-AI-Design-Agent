@@ -48,7 +48,8 @@ function RegisterForm() {
       const nxt = searchParams.get("next");
       router.push(nxt && nxt.startsWith("/") && !nxt.startsWith("//") ? nxt : "/dashboard");
     } catch (err) {
-      toast.error(err.response?.data?.detail || "Register failed");
+      // 兜底错误走 copy.js：中文站不再漏英文 "Register failed"
+      toast.error(err.response?.data?.detail || t.registerFailed);
       setBusy(false);
     }
   };

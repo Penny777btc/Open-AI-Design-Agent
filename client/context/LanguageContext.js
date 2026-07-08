@@ -26,7 +26,16 @@ export function LanguageProvider({ children }) {
       setLangState(saved);
     } else {
       // 无记忆时对称判定：zh* → 中文，其余全部英文（不偏袒任何一侧）
-      setLangState(navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en");
+      const sniffed = navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en";
+      // 关键：嗅探结果必须回写 localStorage("lang" 这个 key 与画布包读取的一致）。
+      // 画布包(design-agent)只读 localStorage.getItem("lang") 且缺省 zh——若不回写，
+      // 英文用户没手动切过语言时会出现「落地页英文、进画布全中文」的分裂体验。
+      try {
+        localStorage.setItem("lang", sniffed);
+      } catch {
+        // Safari 隐私模式等场景 setItem 可能抛错，嗅探结果仍用于本次会话
+      }
+      setLangState(sniffed);
     }
   }, []);
 

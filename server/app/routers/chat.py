@@ -77,10 +77,44 @@ async def _enqueue(db: AsyncSession, user, session_id: str, kind: str, payload: 
 
 from app.services.rate_limit import rate_limit
 
+# QA P2：单条消息长度上限。规划 LLM 按 token 计费，超长输入既烧钱又容易把
+# 规划器撑爆；正常设计指令远小于此，8000 字符只拦滥用不误伤。
+MAX_CHAT_MESSAGE_CHARS = 8000
+
+
+def _payload_has_attachments(payload: dict) -> bool:
+    """判断这次 chat 请求有没有带附件/资产引用。
+
+    前端「只发图不打字」的正常场景里 message 为空串，附件信息不在顶层字段，
+    而是挂在 messages_snapshot 最后一条 user 消息的 attachments 里
+    （见 CreativeCanvas.jsx sendMessage）——所以除了顶层 attachments（向前兼容），
+    还要回看快照里本次发送的那条 user 消息。只看最后一条 user 消息而不是全量扫描，
+    避免「历史里有附件」让本次纯空消息蒙混过关。
+    """
+    if payload.get("attachments"):
+        return True
+    for m in reversed(payload.get("messages_snapshot") or []):
+        if isinstance(m, dict) and m.get("role") == "user":
+            return bool(m.get("attachments"))
+    return False
+
+
 # 审计 R3：规划阶段调用 LLM 有真实成本，限流防刷
 @router.post("/sessions/{session_id}/chat", dependencies=[Depends(rate_limit("chat", 20, 60))])
 async def chat(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
-    return await _enqueue(db, user, session_id, "chat", await request.json())
+    payload = await request.json()
+    # QA P1：前端有拦但 API 层没校验——空/纯空格消息会入队一个永远卡在 planning、
+    # 零事件的幽灵任务（规划器拿到空 brief 无从下手）。带附件但无文字是合法场景
+    # （如「以这张图为基础」的默认操作），只有【既无文字又无附件】才拒。
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="消息不能为空")
+    raw_message = payload.get("message")
+    message = raw_message.strip() if isinstance(raw_message, str) else ""
+    if not message and not _payload_has_attachments(payload):
+        raise HTTPException(status_code=422, detail="消息不能为空")
+    if len(message) > MAX_CHAT_MESSAGE_CHARS:
+        raise HTTPException(status_code=422, detail="消息过长，请精简")
+    return await _enqueue(db, user, session_id, "chat", payload)
 
 
 @router.post("/sessions/{session_id}/set-template", dependencies=[Depends(rate_limit("chat", 20, 60))])
@@ -183,7 +217,8 @@ async def region_edit(session_id: str, request: Request, db: AsyncSession = Depe
     # 用户显式操作：直接预扣（操作面板已展示消耗），余额不足 402
     cost = tool_cost("edit_image")
     try:
-        await credit_service.apply(db, user.id, -cost, "reserve", job_id=job.id, memo=f"region edit {source_asset}")
+        # QA P2：memo 会在前端账单页直出，必须是中文人话而非后端行话
+        await credit_service.apply(db, user.id, -cost, "reserve", job_id=job.id, memo=f"局部编辑 {source_asset}")
     except credit_service.InsufficientCredits as exc:
         await db.rollback()
         raise HTTPException(

@@ -408,7 +408,9 @@ export default function Landing() {
           <a href="#cases" className="text-[11px] font-mono uppercase tracking-[0.15em] text-gray-500 hover:text-white transition-colors hidden sm:inline">{t.nav.cases}</a>
           <a href="#pricing" className="text-[11px] font-mono uppercase tracking-[0.15em] text-gray-500 hover:text-white transition-colors hidden sm:inline">{t.nav.pricing}</a>
           <a href="#faq" className="text-[11px] font-mono uppercase tracking-[0.15em] text-gray-500 hover:text-white transition-colors hidden sm:inline">{t.nav.faq}</a>
-          <LangSwitch className="hidden sm:inline-flex" />
+          {/* 移动端不再隐藏：语言开关很小，窄屏导航锚点已隐藏留出了空间；
+              否则手机用户只能滚到页脚才能切语言 */}
+          <LangSwitch />
           <Link href={startHref(authed)} className="px-5 py-2 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-[0.15em] hover:bg-gray-200 transition-all shadow-[0_0_20px_rgba(255,255,255,0.1)]">
             {t.nav.enter}
           </Link>

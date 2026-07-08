@@ -59,6 +59,17 @@ async def client():
             yield c
 
 
+def make_png_bytes(marker: int = 0) -> bytes:
+    """真实可解码的最小 PNG（1x1，随 marker 变颜色 → 不同 sha256）。
+    上传端已加 PIL.verify 解码校验，测试必须用真图而非伪字节。"""
+    import io as _io
+    from PIL import Image as _Image
+    im = _Image.new("RGB", (1, 1), (marker % 256, (marker * 7) % 256, (marker * 13) % 256))
+    buf = _io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
 def make_pdf_bytes(marker: str = "x") -> bytes:
     """最小合法 PDF 字节。内容随 marker 变化，便于造出不同 sha256。"""
     return (

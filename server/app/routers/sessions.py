@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps import get_current_user, get_db
 from app.models import Asset, DesignSession, SessionMessages
+from app.services.rate_limit import rate_limit
 
 router = APIRouter()
 
@@ -58,7 +59,9 @@ async def list_sessions(
     ]
 
 
-@router.post("/sessions")
+# QA P2：建会话原先完全无限流（实测并发建 20 个全过），脚本可无限灌垃圾会话行。
+# 正常用户一分钟建不了几个会话，30/分钟只拦滥用；按 IP 与 chat 限流口径一致。
+@router.post("/sessions", dependencies=[Depends(rate_limit("create-session", 30, 60))])
 async def create_session(db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     session = DesignSession(user_id=user.id, name="Untitled")
     db.add(session)
