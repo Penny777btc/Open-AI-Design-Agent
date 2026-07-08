@@ -361,7 +361,7 @@ const dict = {
     set_need_labeled: "请选择带标签的生成图（上传的本地图暂不支持）",
 
     // 清空画布确认 toast
-    clear_canvas_confirm: "确定要清空整个画布吗？",
+    clear_canvas_confirm: (n) => `清空画布将永久删除全部 ${n} 个素材（5 秒内可撤销）。确定？`,
     confirm: "确定",
 
     // 右键菜单
@@ -738,7 +738,7 @@ const dict = {
     set_need_labeled: "Please select generated images with labels (local uploads not supported yet)",
 
     // Clear canvas confirm toast
-    clear_canvas_confirm: "Clear the entire canvas?",
+    clear_canvas_confirm: (n) => `Clearing removes all ${n} items permanently (undo within 5s). Continue?`,
     confirm: "Confirm",
 
     // Context menu

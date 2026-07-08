@@ -1943,9 +1943,12 @@ const CanvasArea = forwardRef(
 
     const handleClearCanvas = () => {
       setContextMenu(null);
+      // 清空=永久删全部素材(5s可撤销),确认文案必须明示数量与不可逆,避免用户当"清视图"误删
+      const _total = images.length + videos.length + audios.length + texts.length;
+      if (_total === 0) return;
       toast((tt) => (
         <span className="flex items-center gap-3 text-[12px]">
-          {t("clear_canvas_confirm")}
+          {t("clear_canvas_confirm", _total)}
           <button
             onClick={() => {
               toast.dismiss(tt.id);
