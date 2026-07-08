@@ -246,3 +246,78 @@ async def region_edit(session_id: str, request: Request, db: AsyncSession = Depe
 @router.post("/sessions/{session_id}/run-skill", dependencies=[Depends(rate_limit("chat", 20, 60))])
 async def run_skill(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     return await _enqueue(db, user, session_id, "skill", await request.json())
+
+
+@router.post("/sessions/{session_id}/canvas-skill", dependencies=[Depends(rate_limit("chat", 20, 60))])
+async def canvas_skill(session_id: str, request: Request, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    """画布技能包（对标 Lovart）：移除物体 / 场景 mockup / 扩图。用户显式操作、面板已展示消耗，
+    直接预扣执行（与 region-edit 同流程），跳过计划审批。"""
+    import base64
+
+    from fastapi import HTTPException
+
+    from app.config import tool_cost
+    from app.services import credit_service
+
+    payload = await request.json()
+    session = await _owned_session(db, user, session_id)
+    skill = payload.get("skill")
+    source_asset = payload.get("source_asset")
+    if skill not in ("object_remove", "mockup", "outpaint") or not source_asset:
+        raise HTTPException(status_code=422, detail="缺少 skill 或 source_asset")
+
+    # 幂等
+    request_id = payload.get("client_request_id")
+    if request_id:
+        from sqlalchemy import select
+        existing = (
+            await db.execute(select(Job).where(
+                Job.session_id == session_id, Job.client_request_id == request_id))
+        ).scalars().first()
+        if existing:
+            return {"job_id": existing.id, "deduplicated": True}
+
+    label_map = {"object_remove": "移除物体", "mockup": "场景合成", "outpaint": "扩图"}
+    job_input = {"skill": skill, "source_asset": source_asset}
+
+    if skill == "object_remove":
+        mask_b64 = payload.get("mask_b64") or ""
+        if not mask_b64:
+            raise HTTPException(status_code=422, detail="移除物体需要涂抹待移除区域")
+        try:
+            raw = base64.b64decode(mask_b64.split(",")[-1])
+            job_input["mask_key"] = _write_mask(session_id, raw)
+        except Exception:
+            raise HTTPException(status_code=422, detail="蒙版数据无效")
+    elif skill == "mockup":
+        job_input["mockup_type"] = payload.get("mockup_type", "tshirt")
+    elif skill == "outpaint":
+        job_input["target_aspect"] = payload.get("target_aspect", "1:1")
+
+    job = Job(session_id=session_id, user_id=user.id, kind="canvas_skill",
+              client_request_id=request_id, input=job_input)
+    db.add(job)
+    await db.flush()
+
+    cost = tool_cost("edit_image")
+    try:
+        await credit_service.apply(db, user.id, -cost, "reserve", job_id=job.id,
+                                   memo=f"{label_map[skill]} {source_asset}")
+    except credit_service.InsufficientCredits as exc:
+        await db.rollback()
+        raise HTTPException(status_code=402,
+                            detail=f"积分不足：需要 {exc.required}，当前余额 {exc.balance}。请先充值。")
+    job.credits_reserved = cost
+
+    # 历史消息落库
+    message_text = f"🎨 {label_map[skill]}"
+    row = await db.get(SessionMessages, session_id)
+    user_msg = {"role": "user", "content": message_text, "timestamp": datetime.now(timezone.utc).isoformat()}
+    if row is None:
+        db.add(SessionMessages(session_id=session_id, payload=[user_msg]))
+    else:
+        row.payload = list(row.payload or []) + [user_msg]
+
+    await db.commit()
+    job_service.start_job(job.id)
+    return {"job_id": job.id}

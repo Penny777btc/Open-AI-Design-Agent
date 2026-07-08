@@ -101,6 +101,75 @@ def pad_to_aspect(src: bytes, ar_label: str) -> bytes:
     return out.getvalue()
 
 
+# ============================================================================
+# 画布技能包（对标 Lovart canvas skills，纯 gpt-image edit，无需新模型 API）：
+# 扩图 outpaint / 移除物体 object-remove / 场景 mockup。移除与 mockup 是 edit_image
+# 的 prompt 变体（移除带用户蒙版），扩图需服务端把源图垫到目标画幅 + 挖出新增区域蒙版。
+# ============================================================================
+
+# 各技能的编辑指令（面向 gpt-image /images/edits；移除/扩图配蒙版，mockup 整图重绘）
+SKILL_REMOVE_PROMPT = (
+    "Remove the object inside the masked (transparent) area completely. Seamlessly fill it with the "
+    "surrounding background and scene — matching texture, color, lighting, shadows and perspective — "
+    "so it looks like the object was never there. Do NOT add any new object, text or artifact."
+)
+SKILL_OUTPAINT_PROMPT = (
+    "Outpaint and extend the scene naturally into the transparent (masked) border areas. Continue the "
+    "existing image seamlessly outward — same style, lighting, color grading, perspective and content "
+    "type — as if the photo were simply framed wider. Do NOT add any text, watermark, new subject or "
+    "person; only extend what is already there."
+)
+# 场景 mockup 类型 → 英文场景描述（可扩展）
+MOCKUP_SCENES = {
+    "tshirt": "a person wearing a plain t-shirt, the design printed naturally on the chest, realistic fabric wrinkles and lighting",
+    "mug": "a ceramic coffee mug on a clean desk, the design wrapped naturally on the mug surface with correct curvature",
+    "phone_case": "a smartphone back case, the design printed edge-to-edge with realistic material and reflections",
+    "tote_bag": "a canvas tote bag held or standing, the design printed on the front panel with natural fabric texture",
+    "poster_frame": "a framed poster hanging on a stylish interior wall, soft ambient lighting and slight perspective",
+    "packaging_box": "a premium product packaging box on a studio surface, the design applied on the front face with soft shadows",
+    "store_sign": "a storefront sign board above a shop entrance, the design as the sign, realistic outdoor lighting",
+}
+
+
+def build_outpaint_source_and_mask(src: bytes, ar_label: str) -> tuple[bytes, bytes]:
+    """扩图预处理：把源图边缘延展垫到目标画幅（原像素零缩放居中），并生成一张蒙版——
+    原图区域不透明(=保留)、垫出来的新增边缘透明(=让 gpt-image 向外续画)。返回 (padded_png, mask_png)。
+
+    与 pad_to_aspect 同垫法（edge+高糊，无形体先验），此处额外产出配套蒙版。若目标比例≈源图
+    （无需扩），返回原图 + 全不透明蒙版（等价不改，调用方可据此跳过）。纯本地 PIL/numpy。
+    """
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    target = _AR_VALUE.get(ar_label, 1.0)
+    im = Image.open(io.BytesIO(src)).convert("RGB")
+    w, h = im.size
+    if h < 1 or abs(w / h - target) < 0.02:
+        # 无需扩图：全不透明蒙版（无重绘区）
+        m = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+        b1, b2 = io.BytesIO(), io.BytesIO()
+        im.save(b1, "PNG"); m.save(b2, "PNG")
+        return b1.getvalue(), b2.getvalue()
+    if w / h < target:
+        W, H = max(w, int(round(h * target))), h
+    else:
+        W, H = w, max(h, int(round(w / target)))
+    arr = np.array(im)
+    px, py = (W - w) // 2, (H - h) // 2
+    padded = np.pad(arr, ((py, H - h - py), (px, W - w - px), (0, 0)), mode="edge")
+    bg = Image.fromarray(padded).filter(ImageFilter.GaussianBlur(25))
+    bg.paste(im, (px, py))
+    # 蒙版：原图矩形不透明(保留)，四周垫边透明(重绘)；边界羽化几像素让续画自然过渡
+    m = np.zeros((H, W), dtype="uint8")
+    m[py:py + h, px:px + w] = 255
+    mask_im = Image.fromarray(m, "L").filter(ImageFilter.GaussianBlur(3))
+    rgba = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    rgba.putalpha(mask_im)
+    b1, b2 = io.BytesIO(), io.BytesIO()
+    bg.save(b1, "PNG"); rgba.save(b2, "PNG")
+    return b1.getvalue(), b2.getvalue()
+
+
 def _held_objects_alpha(padded_png: bytes, person_a, fg_png: bytes | None = None) -> "object":
     """纯本地找「人物手里拿着的东西」（盘子/杯子/产品）：isnet 通用前景 − 人物 = 候选物件，
     保留满足两个几何条件的连通块：①主体落在人物躯干带（人物 bbox 高度 15%~80%、横向外扩 20%

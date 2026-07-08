@@ -202,6 +202,65 @@ async def _run_job(job_id: str) -> None:
             await _set_status(job_id, "done" if ok else "failed")
             return
 
+        # 画布技能包（对标 Lovart）：移除物体 / 场景 mockup / 扩图。都归结为单节点 edit_image，
+        # 差异在 prompt 与源图/蒙版预处理——统一在此分发，走既有 _execute_plan（含心跳/退款/落位）。
+        if job.kind == "canvas_skill":
+            from app.agents.planner import PlanNode
+            from app.agents.split import (
+                MOCKUP_SCENES, SKILL_OUTPAINT_PROMPT, SKILL_REMOVE_PROMPT,
+                build_outpaint_source_and_mask,
+            )
+
+            skill = job_input.get("skill")
+            src_label = job_input.get("source_asset")
+            args = {"source_asset": src_label}
+            skill_labels = {"object_remove": "移除物体", "mockup": "场景合成", "outpaint": "扩图"}
+
+            if skill == "object_remove":
+                args["prompt"] = SKILL_REMOVE_PROMPT
+                args["mask_key"] = job_input.get("mask_key")  # 用户涂抹的待移除区域
+            elif skill == "mockup":
+                scene = MOCKUP_SCENES.get(job_input.get("mockup_type", "tshirt"), MOCKUP_SCENES["tshirt"])
+                args["prompt"] = (
+                    f"Take the provided design/product image and realistically place it onto {scene}. "
+                    "Keep the design's colors and details faithful; photorealistic composite, natural "
+                    "shadows and lighting, clean professional presentation."
+                )
+                args["aspect_ratio"] = job_input.get("aspect_ratio", "1:1")
+            elif skill == "outpaint":
+                # 服务端预处理：垫画幅 + 挖新增区蒙版，落盘后用 source_key/mask_key 交给 edit_image
+                target_ar = job_input.get("target_aspect", "1:1")
+                src_bytes = await _load_asset_bytes(session_id, src_label)
+                _loop = asyncio.get_running_loop()  # _run_job 无 loop 变量（那是 _generate_node 的）
+                padded, mask = await _loop.run_in_executor(
+                    None, lambda: build_outpaint_source_and_mask(src_bytes, target_ar))
+                import uuid as _uuidlib
+                pk = f"masks/{session_id}/outpaint_src_{_uuidlib.uuid4().hex[:12]}.png"
+                mk = f"masks/{session_id}/outpaint_mask_{_uuidlib.uuid4().hex[:12]}.png"
+                storage.save_bytes(pk, padded)
+                storage.save_bytes(mk, mask)
+                args["source_key"] = pk
+                args["mask_key"] = mk
+                args["prompt"] = SKILL_OUTPAINT_PROMPT
+                args["aspect_ratio"] = target_ar
+            else:
+                await emit(job_id, "error", {"message": "未知画布技能"})
+                await _set_status(job_id, "failed")
+                return
+
+            node = PlanNode(id="node_1", tool="edit_image",
+                            label=f"{skill_labels.get(skill, skill)} {src_label}", args=args)
+            await _set_status(job_id, "running", approved=True)
+            beat = _start_heartbeat(job_id)
+            try:
+                ok, failed = await _execute_plan(job_id, session_id, user_id, Plan(nodes=[node]))
+            finally:
+                await _stop_heartbeat(beat)
+            if ok:
+                await emit(job_id, "text", {"content": f"✅ {skill_labels.get(skill, '处理')}完成，结果已放在原图旁"})
+            await _set_status(job_id, "done" if ok else "failed")
+            return
+
         await _set_status(job_id, "planning")
         brief = job_input.get("message") or ""  # 末尾总结的语言检测用；set_template 也需有值
 
@@ -810,7 +869,11 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
         source = mask = None
         if node.tool == "edit_image":
             source_label = node.args.get("source_asset", "")
-            if source_cache is not None and source_label in source_cache:
+            if src_key := node.args.get("source_key"):
+                # 扩图等技能预处理好的源图（垫过画幅）直接读盘覆盖——不走 asset 加载，
+                # 因为它不是一张已注册资产，只是本次编辑的临时输入。过 _safe_path 防穿越。
+                source = storage._safe_path(src_key).read_bytes()
+            elif source_cache is not None and source_label in source_cache:
                 source = source_cache[source_label]
             else:
                 source = await _load_asset_bytes(session_id, source_label)

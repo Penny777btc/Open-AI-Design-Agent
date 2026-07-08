@@ -20,7 +20,7 @@ import {
   Arc,
 } from "react-konva";
 import toast from "react-hot-toast";
-import { FiType, FiGrid, FiAlignJustify, FiLayers, FiScissors, FiTrash2, FiX, FiEdit3 } from "react-icons/fi";
+import { FiType, FiGrid, FiAlignJustify, FiLayers, FiScissors, FiTrash2, FiX, FiEdit3, FiPackage, FiMaximize2 } from "react-icons/fi";
 import { t } from "./i18n";
 
 // ── 画布选中态语义色（去蓝归白）────────────────────────────────────
@@ -966,6 +966,8 @@ const CanvasArea = forwardRef(
       onDeleteAssets = null,
       // 局部编辑：用户在选中图片上涂抹蒙版后回调 { assetLabel, prompt, maskDataUrl }
       onRegionEdit = null,
+      // 画布技能（对标 Lovart）：移除物体/场景mockup/扩图 → { skill, assetLabel, maskDataUrl?, mockupType?, targetAspect? }
+      onCanvasSkill = null,
       // 套图：选中一批产品图 + 模板后回调 { assetLabels, template, templateLabel } → 后端批量 AI 生成
       onSetTemplate = null,
       // AI 拆图：选中一张 AI 图回调 { assetLabel } → 后端拆成 背景层 + 主体层(透明)
@@ -1664,6 +1666,8 @@ const CanvasArea = forwardRef(
     const [maskStrokes, setMaskStrokes] = useState([]); // 世界坐标笔迹 [{size, points:[x,y,...]}]
     const [brushSize, setBrushSize] = useState(48); // 屏幕像素
     const [maskPrompt, setMaskPrompt] = useState("");
+    const [maskIntent, setMaskIntent] = useState("edit");  // 蒙版意图：edit 局部编辑 / remove 移除物体
+    const [skillMenu, setSkillMenu] = useState(null);      // 画布技能选择菜单：'mockup' | 'outpaint' | null
     const paintingRef = useRef(false);
 
     const maskWorldPos = () => {
@@ -1695,8 +1699,9 @@ const CanvasArea = forwardRef(
 
     const maskPaintEnd = () => { paintingRef.current = false; };
 
-    const enterMaskMode = (imageId) => {
+    const enterMaskMode = (imageId, intent = "edit") => {
       setMaskMode(imageId);
+      setMaskIntent(intent);   // 'edit'=局部编辑(带prompt) | 'remove'=移除物体(无prompt)
       setMaskStrokes([]);
       setMaskPrompt("");
       setSelectedId(null); // 隐藏变换手柄，避免与笔刷视觉冲突
@@ -1717,10 +1722,10 @@ const CanvasArea = forwardRef(
       return () => window.removeEventListener("keydown", onKey);
     }, [maskMode]);
 
-    const applyRegionEdit = () => {
-      const img = images.find((i) => i.id === maskMode);
-      if (!img || !img.assetLabel || !maskPrompt.trim() || maskStrokes.length === 0) return;
-      // 界外涂抹拦截：笔迹（含笔刷半径）必须与图片相交，否则蒙版为空白白扣费
+    // 涂抹蒙版 → dataURL（局部编辑与移除物体共用）：全图不透明(保留)、涂抹处打穿透明(重绘/移除范围)。
+    // 返回 null 表示界外涂抹（蒙版空白），调用方据此报错、不白扣费。
+    const buildMaskDataUrl = (img) => {
+      if (!img || maskStrokes.length === 0) return null;
       const intersects = maskStrokes.some((s) => {
         const half = s.size / 2;
         for (let i = 0; i < s.points.length; i += 2) {
@@ -1730,40 +1735,45 @@ const CanvasArea = forwardRef(
         }
         return false;
       });
-      if (!intersects) {
-        toast.error(t("paint_within_image"));
-        return;
-      }
+      if (!intersects) return null;
       const nw = img.image?.naturalWidth || 1024;
       const nh = img.image?.naturalHeight || 1024;
       const canvas = document.createElement("canvas");
-      canvas.width = nw;
-      canvas.height = nh;
+      canvas.width = nw; canvas.height = nh;
       const ctx = canvas.getContext("2d");
-      // 全图不透明（保留），涂抹处打穿成透明（= 重绘范围，OpenAI mask 规范）
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, nw, nh);
       ctx.globalCompositeOperation = "destination-out";
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      const sx = nw / img.width;
-      const sy = nh / img.height;
+      ctx.lineCap = "round"; ctx.lineJoin = "round";
+      const sx = nw / img.width, sy = nh / img.height;
       maskStrokes.forEach((s) => {
         ctx.lineWidth = s.size * ((sx + sy) / 2);
         ctx.beginPath();
         for (let i = 0; i < s.points.length; i += 2) {
-          const px = (s.points[i] - img.x) * sx;
-          const py = (s.points[i + 1] - img.y) * sy;
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
+          const px = (s.points[i] - img.x) * sx, py = (s.points[i + 1] - img.y) * sy;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
         }
         ctx.stroke();
       });
-      onRegionEdit?.({
-        assetLabel: img.assetLabel,
-        prompt: maskPrompt.trim(),
-        maskDataUrl: canvas.toDataURL("image/png"),
-      });
+      return canvas.toDataURL("image/png");
+    };
+
+    const applyRegionEdit = () => {
+      const img = images.find((i) => i.id === maskMode);
+      if (!img || !img.assetLabel || !maskPrompt.trim() || maskStrokes.length === 0) return;
+      const maskDataUrl = buildMaskDataUrl(img);
+      if (!maskDataUrl) { toast.error(t("paint_within_image")); return; }
+      onRegionEdit?.({ assetLabel: img.assetLabel, prompt: maskPrompt.trim(), maskDataUrl });
+      exitMaskMode();
+    };
+
+    // 移除物体（画布技能）：涂抹要移除的物体 → 后端 inpaint 抹除。复用同一套蒙版构造，无需 prompt。
+    const applyMaskRemove = () => {
+      const img = images.find((i) => i.id === maskMode);
+      if (!img || !img.assetLabel || maskStrokes.length === 0) return;
+      const maskDataUrl = buildMaskDataUrl(img);
+      if (!maskDataUrl) { toast.error(t("paint_within_image")); return; }
+      onCanvasSkill?.({ skill: "object_remove", assetLabel: img.assetLabel, maskDataUrl });
       exitMaskMode();
     };
     const [editingTextId, setEditingTextId] = useState(null);
@@ -3590,6 +3600,34 @@ const CanvasArea = forwardRef(
           </div>
         )}
 
+        {/* 画布技能选择菜单（mockup 场景 / 扩图画幅）：浮在操作条上方，选中即触发对应技能 */}
+        {skillMenu && onCanvasSkill && (() => {
+          const oneId = setSel.size === 1 ? [...setSel][0]
+            : (setSel.size === 0 && selectedId?.startsWith("img") ? selectedId : null);
+          const target = oneId ? images.find((i) => i.id === oneId && i.assetLabel) : null;
+          if (!target) { return null; }
+          const opts = skillMenu === "mockup"
+            ? [["tshirt", t("mk_tshirt")], ["mug", t("mk_mug")], ["phone_case", t("mk_phone")],
+               ["tote_bag", t("mk_tote")], ["poster_frame", t("mk_poster")], ["packaging_box", t("mk_box")], ["store_sign", t("mk_sign")]]
+            : [["1:1", t("ar_square")], ["16:9", t("ar_landscape")], ["9:16", t("ar_portrait")], ["3:4", t("ar_34")], ["4:3", t("ar_43")]];
+          const fire = (val) => {
+            setSkillMenu(null);
+            if (skillMenu === "mockup") onCanvasSkill({ skill: "mockup", assetLabel: target.assetLabel, mockupType: val });
+            else onCanvasSkill({ skill: "outpaint", assetLabel: target.assetLabel, targetAspect: val });
+          };
+          return (
+            <div className="absolute bottom-20 inset-x-0 mx-auto w-fit max-w-[94%] z-40 flex items-center gap-1 flex-wrap justify-center bg-bg-card border border-divider rounded-2xl shadow-pop px-2.5 py-2">
+              <span className="text-[11px] text-secondary-text px-1.5">{skillMenu === "mockup" ? t("skill_mockup") : t("skill_outpaint")}</span>
+              {opts.map(([val, label]) => (
+                <button key={val} onClick={() => fire(val)}
+                  className="px-2.5 py-1.5 rounded-lg text-[12px] text-primary-text hover:bg-primary hover:text-black transition-colors"
+                >{label}</button>
+              ))}
+              <button onClick={() => setSkillMenu(null)} className="px-2 py-1.5 text-secondary-text hover:text-primary-text" aria-label={t("dismiss")}><FiX size={13} /></button>
+            </div>
+          );
+        })()}
+
         {/* 浮动操作条：框选多张 或 单击选中一张图片 都出现（单张也能套图/导出/删除）*/}
         {!maskMode && !showSetPanel && (setSel.size > 0 || selectedId?.startsWith("img")) && (
           <div className="absolute bottom-6 inset-x-0 mx-auto w-fit max-w-[94%] overflow-x-auto z-30 flex items-center gap-1.5 whitespace-nowrap bg-bg-card border border-divider rounded-2xl shadow-pop px-2.5 py-2">
@@ -3669,6 +3707,34 @@ const CanvasArea = forwardRef(
                   title={reason}
                   aria-label={t("edit_region")}
                 ><FiEdit3 size={13} /> {t("edit_region")}</button>
+              );
+            })()}
+            {/* 画布技能包（对标 Lovart）：移除物体 / 场景合成 / 扩图。均作用于恰好选中的一张带 assetLabel 的图 */}
+            {onCanvasSkill && (() => {
+              const oneId = setSel.size === 1
+                ? [...setSel][0]
+                : (setSel.size === 0 && selectedId?.startsWith("img") ? selectedId : null);
+              const target = oneId ? images.find((i) => i.id === oneId && i.assetLabel) : null;
+              const disabledCls = "flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-primary-text hover:bg-bg-page disabled:opacity-50 disabled:cursor-not-allowed transition-colors";
+              const need = !target ? t("skill_need_one") : null;
+              return (
+                <>
+                  <button
+                    onClick={() => { if (target) { setSetSel(new Set()); enterMaskMode(target.id, "remove"); } }}
+                    disabled={!target} className={disabledCls}
+                    title={need || t("skill_remove")} aria-label={t("skill_remove")}
+                  ><FiScissors size={13} /> {t("skill_remove")}</button>
+                  <button
+                    onClick={() => { if (target) setSkillMenu(skillMenu === "mockup" ? null : "mockup"); }}
+                    disabled={!target} className={disabledCls}
+                    title={need || t("skill_mockup")} aria-label={t("skill_mockup")}
+                  ><FiPackage size={13} /> {t("skill_mockup")}</button>
+                  <button
+                    onClick={() => { if (target) setSkillMenu(skillMenu === "outpaint" ? null : "outpaint"); }}
+                    disabled={!target} className={disabledCls}
+                    title={need || t("skill_outpaint")} aria-label={t("skill_outpaint")}
+                  ><FiMaximize2 size={13} /> {t("skill_outpaint")}</button>
+                </>
               );
             })()}
             <div className="w-px h-5 bg-divider mx-0.5" />
@@ -3881,23 +3947,37 @@ const CanvasArea = forwardRef(
                 {t("cancel")}
               </button>
             </div>
-            <div className="flex items-center gap-2 w-full px-3 py-2 rounded bg-bg-card border border-divider shadow-2xl">
-              <input
-                value={maskPrompt}
-                onChange={(e) => setMaskPrompt(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") applyRegionEdit(); }}
-                placeholder={t("region_prompt_placeholder")}
-                className="flex-1 bg-transparent text-[13px] text-primary-text placeholder:text-secondary-text/50 focus:outline-none"
-                autoFocus
-              />
-              <button
-                onClick={applyRegionEdit}
-                disabled={!maskPrompt.trim() || maskStrokes.length === 0}
-                className="shrink-0 px-4 py-1.5 bg-white text-black rounded text-[11px] font-bold uppercase tracking-wider hover:bg-gray-200 transition-all disabled:opacity-40"
-              >
-                {t("apply_credits", 15)}
-              </button>
-            </div>
+            {maskIntent === "remove" ? (
+              /* 移除物体：无 prompt，涂抹待移除区域后一键抹除 */
+              <div className="flex items-center gap-2 w-full px-3 py-2 rounded bg-bg-card border border-divider shadow-2xl">
+                <span className="flex-1 text-[12px] text-secondary-text">{t("mask_remove_title")}</span>
+                <button
+                  onClick={applyMaskRemove}
+                  disabled={maskStrokes.length === 0}
+                  className="shrink-0 px-4 py-1.5 bg-white text-black rounded text-[11px] font-bold uppercase tracking-wider hover:bg-gray-200 transition-all disabled:opacity-40"
+                >
+                  {t("mask_remove_cta")} · {t("credits_label", 15)}
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 w-full px-3 py-2 rounded bg-bg-card border border-divider shadow-2xl">
+                <input
+                  value={maskPrompt}
+                  onChange={(e) => setMaskPrompt(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") applyRegionEdit(); }}
+                  placeholder={t("region_prompt_placeholder")}
+                  className="flex-1 bg-transparent text-[13px] text-primary-text placeholder:text-secondary-text/50 focus:outline-none"
+                  autoFocus
+                />
+                <button
+                  onClick={applyRegionEdit}
+                  disabled={!maskPrompt.trim() || maskStrokes.length === 0}
+                  className="shrink-0 px-4 py-1.5 bg-white text-black rounded text-[11px] font-bold uppercase tracking-wider hover:bg-gray-200 transition-all disabled:opacity-40"
+                >
+                  {t("apply_credits", 15)}
+                </button>
+              </div>
+            )}
           </div>
         )}
 

@@ -893,6 +893,58 @@ export default function CreativeCanvas({
     }
   };
 
+  // 画布技能包（对标 Lovart）：移除物体 / 场景mockup / 扩图。结构对齐 handleRegionEdit
+  // （busy闸/幂等/402/H3会话守卫/失败pill不重放）——都是用户显式操作、后端直接预扣执行。
+  const handleCanvasSkill = async ({ skill, assetLabel, maskDataUrl, mockupType, targetAspect }) => {
+    if (busy || sendingRef.current) { toast.error(t("another_task_running")); return; }
+    sendingRef.current = true;
+    setBusy(true);
+    const skillLabel = { object_remove: t("skill_remove"), mockup: t("skill_mockup"), outpaint: t("skill_outpaint") }[skill] || skill;
+    const userMsg = { role: "user", content: `🎨 ${skillLabel}`, timestamp: new Date().toISOString() };
+    let aIdx = -1;
+    setMessages(prev => {
+      aIdx = prev.length + 1;
+      // 技能操作参数（mask/类型）不适合存进消息流重放 → 失败 pill 不给「重试」，重新操作即可
+      return [...prev, userMsg, { role: "assistant", content: "", events: [], timestamp: new Date().toISOString(), opKind: "skill" }];
+    });
+    let opSessionId = sessionIdRef.current;
+    try {
+      const activeSessionId = await ensureSession();
+      opSessionId = activeSessionId;
+      const body = {
+        skill, source_asset: assetLabel,
+        client_request_id: (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+      };
+      if (skill === "object_remove") body.mask_b64 = maskDataUrl;
+      if (skill === "mockup") body.mockup_type = mockupType;
+      if (skill === "outpaint") body.target_aspect = targetAspect;
+      const { data } = await axios.post(`${API}/sessions/${activeSessionId}/canvas-skill`, body, { headers: getHeaders() });
+      sendingRef.current = false;
+      await resumePolling(data.job_id, aIdx, activeSessionId);
+    } catch (err) {
+      if (err.response?.status === 402) {
+        toast((tt) => (
+          <span className="flex items-center gap-3 text-[12px]">
+            {err.response?.data?.detail || t("insufficient_credits")}
+            <a href="/billing" className="px-2 py-1 bg-white text-black rounded-sm text-[10px] font-bold uppercase tracking-wider shrink-0" onClick={() => toast.dismiss(tt.id)}>{t("top_up")}</a>
+          </span>
+        ), { duration: 8000 });
+      } else {
+        toast.error(err.response?.data?.detail || t("skill_failed"));
+      }
+      setMessages(prev => {
+        const arr = [...prev];
+        if (aIdx >= 0 && aIdx < arr.length) arr[aIdx] = { ...arr[aIdx], content: `❌ ${skillLabel}` };
+        return arr;
+      });
+    } finally {
+      if (sessionIdRef.current === opSessionId) {
+        sendingRef.current = false;
+        if (activePollsRef.current.size === 0) setBusy(false);
+      }
+    }
+  };
+
   // 自动批准失败（如积分不足）时，撤掉计划卡上的「已自动执行」说明、把手动按钮还给用户，
   // 否则卡片会停留在一个「说已开始、其实没开始」的撒谎态。
   const revertAutoApproved = (jobId) => {
@@ -2102,6 +2154,7 @@ export default function CreativeCanvas({
               onLayoutChange={persistLayout}
               onDeleteAssets={persistDelete}
               onRegionEdit={handleRegionEdit}
+              onCanvasSkill={handleCanvasSkill}
               onSetTemplate={handleSetTemplate}
               onSplitImage={handleSplitImage}
               // P0-3a：画布本地图注册成后端资产（复用聊天区上传管线）
