@@ -227,3 +227,22 @@ class UploadedFile(Base):
     mime: Mapped[str | None] = mapped_column(String(64), nullable=True)
     size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class BrandKit(Base):
+    """品牌套件（对标 Lovart Brand Kit）：每用户一份，激活后 planner 生成时自动注入品牌规范
+    （主色/辅助色/字体气质/品牌名/slogan/logo 说明），让整套设计风格统一。"""
+
+    __tablename__ = "brand_kits"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), unique=True, index=True)
+    name: Mapped[str | None] = mapped_column(String(80), nullable=True)          # 品牌名
+    primary_color: Mapped[str | None] = mapped_column(String(16), nullable=True)  # 主色 #RRGGBB
+    accent_colors: Mapped[list | None] = mapped_column(JSON, nullable=True)       # 辅助色 ["#..","#.."]
+    font_hint: Mapped[str | None] = mapped_column(String(80), nullable=True)      # 字体气质（如"圆润无衬线"）
+    slogan: Mapped[str | None] = mapped_column(String(160), nullable=True)        # 品牌 slogan / 调性
+    logo_asset_label: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 会话内 logo 资产（可选）
+    active: Mapped[bool] = mapped_column(Boolean, default=False)                  # 是否在生成时注入
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

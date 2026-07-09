@@ -69,11 +69,39 @@ def _extract_json(text: str) -> dict:
     return json.loads(text)
 
 
+def _brand_directive(brand: dict) -> str:
+    """把品牌套件转成注入 planner 的中文规范段（对标 Lovart：整套设计配色/字体/调性统一）。"""
+    parts = []
+    if brand.get("name"):
+        parts.append(f"品牌名「{brand['name']}」")
+    if brand.get("primary_color"):
+        parts.append(f"主色 {brand['primary_color']}")
+    if brand.get("accent_colors"):
+        parts.append("辅助色 " + "、".join(brand["accent_colors"]))
+    if brand.get("font_hint"):
+        parts.append(f"字体气质：{brand['font_hint']}")
+    if brand.get("slogan"):
+        parts.append(f"品牌调性/slogan：{brand['slogan']}")
+    if not parts:
+        return ""
+    body = "；".join(parts)
+    tail = ""
+    if brand.get("logo_asset_label"):
+        tail = (f" 会话中已有品牌 logo 资产「{brand['logo_asset_label']}」，如构图适合可在角落"
+                "留出干净位置放置 logo（不强制）。")
+    return (
+        "\n\n【品牌规范（用户已激活的品牌套件，本次设计须遵循以保持整套一致）】\n"
+        f"{body}。配色请以主色为主、辅助色点缀，字体气质统一，整体调性贴合品牌。"
+        "在 prompt 里明确写出要用的品牌色（英文十六进制）与风格倾向。" + tail
+    )
+
+
 async def make_plan(
     brief: str,
     history: list[dict] | None = None,
     assets: list[dict] | None = None,
     docs: list[dict] | None = None,
+    brand: dict | None = None,
 ) -> Plan:
     llm = get_llm()
     # 人物海报文字策略（settings.person_text_layers）：开=文案走可编辑文字层（prompt 禁字留装饰区）；
@@ -102,6 +130,8 @@ async def make_plan(
                 "\n\n用户上传的参考资料（设计中的产品名/卖点/参数/品牌信息以此为准，"
                 "可直接引用其中文案）：\n" + "\n---\n".join(chunks)
             )
+    if brand:
+        system += _brand_directive(brand)  # 已激活品牌套件 → 注入配色/字体/调性规范
     messages = [{"role": "system", "content": system}]
     for msg in (history or [])[-6:]:
         if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):

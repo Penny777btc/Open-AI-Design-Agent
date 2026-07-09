@@ -377,7 +377,12 @@ async def _run_job(job_id: str) -> None:
                     )
                 ).scalars().all()
             docs_ctx = [{"filename": d.filename, "text": d.extracted_text} for d in doc_rows]
-            plan = await make_plan(brief, job_input.get("messages_snapshot"), assets_ctx, docs_ctx)
+            # 品牌套件（对标 Lovart）：用户已激活则注入品牌规范，让整套设计配色/字体/调性统一
+            brand_ctx = None
+            async with SessionLocal() as db:
+                from app.routers.brand import load_active_brand
+                brand_ctx = await load_active_brand(db, user_id)
+            plan = await make_plan(brief, job_input.get("messages_snapshot"), assets_ctx, docs_ctx, brand_ctx)
 
         if plan.mode == "direct":
             await emit(job_id, "text", {"content": plan.reply or "好的。"})

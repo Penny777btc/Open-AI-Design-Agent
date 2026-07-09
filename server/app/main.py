@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.db import Base, engine
-from app.routers import admin, assets, auth, billing, chat, jobs, misc, sessions, uploads
+from app.routers import admin, assets, auth, billing, brand, chat, jobs, misc, sessions, uploads
 from app.services.job_service import mark_stale_jobs_failed
 
 logging.basicConfig(level=logging.INFO)
@@ -101,6 +101,7 @@ app.include_router(uploads.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
+app.include_router(brand.router, prefix=PREFIX)  # 品牌套件（对标 Lovart Brand Kit）
 
 settings.storage_dir.mkdir(parents=True, exist_ok=True)
 

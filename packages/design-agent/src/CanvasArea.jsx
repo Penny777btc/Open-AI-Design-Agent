@@ -20,7 +20,7 @@ import {
   Arc,
 } from "react-konva";
 import toast from "react-hot-toast";
-import { FiType, FiGrid, FiAlignJustify, FiLayers, FiScissors, FiTrash2, FiX, FiEdit3, FiPackage, FiMaximize2 } from "react-icons/fi";
+import { FiType, FiGrid, FiAlignJustify, FiLayers, FiScissors, FiTrash2, FiX, FiEdit3, FiPackage, FiMaximize2, FiDroplet } from "react-icons/fi";
 import { t } from "./i18n";
 
 // ── 画布选中态语义色（去蓝归白）────────────────────────────────────
@@ -968,6 +968,8 @@ const CanvasArea = forwardRef(
       onRegionEdit = null,
       // 画布技能（对标 Lovart）：移除物体/场景mockup/扩图 → { skill, assetLabel, maskDataUrl?, mockupType?, targetAspect? }
       onCanvasSkill = null,
+      // 品牌套件（对标 Lovart）：打开品牌设置面板（面板与 API 在宿主 CreativeCanvas）
+      onOpenBrandKit = null,
       // 套图：选中一批产品图 + 模板后回调 { assetLabels, template, templateLabel } → 后端批量 AI 生成
       onSetTemplate = null,
       // AI 拆图：选中一张 AI 图回调 { assetLabel } → 后端拆成 背景层 + 主体层(透明)
@@ -3592,6 +3594,15 @@ const CanvasArea = forwardRef(
               title={t("tidy_canvas_title")}
               aria-label={t("tidy_canvas")}
             ><FiGrid size={14} /> {t("tidy_canvas")}</button>
+            {/* 品牌套件（对标 Lovart）：设一次品牌色/字体/调性，激活后整套生成自动统一 */}
+            {onOpenBrandKit && (
+              <button
+                onClick={() => { onOpenBrandKit(); setShowTextMenu(false); }}
+                className="mt-2 w-full flex items-center gap-2 px-3.5 py-2.5 bg-bg-card border border-divider rounded-xl text-[12px] font-semibold text-primary-text hover:border-secondary-text transition-colors"
+                title={t("brand_kit_title")}
+                aria-label={t("brand_kit")}
+              ><FiDroplet size={14} /> {t("brand_kit")}</button>
+            )}
             {/* 操作提示（自然交互，无需按钮）：拖拽=框选，空格+拖拽=平移 */}
             <div className="mt-2 px-3 py-2 rounded-lg bg-bg-card/70 border border-divider/60 text-[11px] text-secondary-strong leading-relaxed select-none">
               <div><span className="text-primary-text font-semibold">{t("hint_drag")}</span> {t("hint_marquee")} · <span className="text-primary-text font-semibold">{t("hint_shift_drag")}</span> {t("hint_add_select")} · <span className="text-primary-text font-semibold">{t("hint_space_drag")}</span> {t("hint_pan")}</div>

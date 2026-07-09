@@ -1184,6 +1184,32 @@ export default function CreativeCanvas({
     } catch {}
   }, [getHeaders]);
 
+  // ── 品牌套件（对标 Lovart Brand Kit）：设一次品牌规范，激活后整套生成自动统一 ──
+  const [showBrand, setShowBrand] = useState(false);
+  const [brand, setBrand] = useState({ name: "", primary_color: "#E8743B", accent_colors: [], font_hint: "", slogan: "", active: false });
+  const [brandSaving, setBrandSaving] = useState(false);
+  const openBrandKit = useCallback(async () => {
+    setShowBrand(true);
+    try {
+      const { data } = await axios.get(`${API}/brand-kit`, { headers: getHeaders() });
+      if (data?.exists) setBrand({
+        name: data.name || "", primary_color: data.primary_color || "#E8743B",
+        accent_colors: data.accent_colors || [], font_hint: data.font_hint || "",
+        slogan: data.slogan || "", active: !!data.active,
+      });
+    } catch {}
+  }, [getHeaders]);
+  const saveBrandKit = useCallback(async () => {
+    setBrandSaving(true);
+    try {
+      await axios.put(`${API}/brand-kit`, brand, { headers: getHeaders() });
+      toast.success(t("brand_saved"));
+      setShowBrand(false);
+    } catch {
+      toast.error(t("brand_save_failed"));
+    } finally { setBrandSaving(false); }
+  }, [brand, getHeaders]);
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
@@ -2155,6 +2181,7 @@ export default function CreativeCanvas({
               onDeleteAssets={persistDelete}
               onRegionEdit={handleRegionEdit}
               onCanvasSkill={handleCanvasSkill}
+              onOpenBrandKit={openBrandKit}
               onSetTemplate={handleSetTemplate}
               onSplitImage={handleSplitImage}
               // P0-3a：画布本地图注册成后端资产（复用聊天区上传管线）
@@ -2162,6 +2189,72 @@ export default function CreativeCanvas({
               // P0-4 空态「描述需求」：聚焦聊天输入框，让卖家直接说需求
               onRequestDescribe={() => textareaRef.current?.focus()}
             />
+
+            {/* 品牌套件面板（对标 Lovart Brand Kit）：设主色/辅助色/字体/调性，激活后整套生成自动统一 */}
+            {showBrand && (
+              <div className="absolute inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-6" onClick={() => setShowBrand(false)}>
+                <div className="bg-bg-card border border-divider rounded-2xl shadow-pop w-[min(440px,94%)] max-h-[90%] overflow-y-auto p-5 flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-[14px] font-bold text-primary-text">{t("brand_kit")}</div>
+                      <div className="text-[11px] text-secondary-text mt-0.5">{t("brand_kit_desc")}</div>
+                    </div>
+                    <button onClick={() => setShowBrand(false)} className="text-secondary-text hover:text-primary-text text-lg leading-none">✕</button>
+                  </div>
+                  {/* 品牌名 */}
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px] text-secondary-text">{t("brand_name")}</span>
+                    <input value={brand.name} onChange={(e) => setBrand({ ...brand, name: e.target.value })}
+                      className="bg-bg-page border border-divider rounded-lg px-3 py-2 text-[13px] text-primary-text focus:outline-none focus:border-primary/60" placeholder={t("brand_name_ph")} />
+                  </label>
+                  {/* 主色 + 辅助色 */}
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[11px] text-secondary-text">{t("brand_colors")}</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <input type="color" value={brand.primary_color} onChange={(e) => setBrand({ ...brand, primary_color: e.target.value })}
+                          className="w-9 h-9 rounded cursor-pointer bg-transparent border border-divider" title={t("brand_primary")} />
+                        <span className="text-[10px] text-secondary-strong">{t("brand_primary")}</span>
+                      </div>
+                      {brand.accent_colors.map((c, i) => (
+                        <div key={i} className="relative">
+                          <input type="color" value={c} onChange={(e) => { const a = [...brand.accent_colors]; a[i] = e.target.value; setBrand({ ...brand, accent_colors: a }); }}
+                            className="w-9 h-9 rounded cursor-pointer bg-transparent border border-divider" />
+                          <button onClick={() => setBrand({ ...brand, accent_colors: brand.accent_colors.filter((_, j) => j !== i) })}
+                            className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] flex items-center justify-center">×</button>
+                        </div>
+                      ))}
+                      {brand.accent_colors.length < 5 && (
+                        <button onClick={() => setBrand({ ...brand, accent_colors: [...brand.accent_colors, "#2B4C6F"] })}
+                          className="w-9 h-9 rounded border border-dashed border-divider text-secondary-text hover:border-primary/60 hover:text-primary-text text-lg" title={t("brand_add_accent")}>+</button>
+                      )}
+                    </div>
+                  </div>
+                  {/* 字体气质 */}
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px] text-secondary-text">{t("brand_font")}</span>
+                    <input value={brand.font_hint} onChange={(e) => setBrand({ ...brand, font_hint: e.target.value })}
+                      className="bg-bg-page border border-divider rounded-lg px-3 py-2 text-[13px] text-primary-text focus:outline-none focus:border-primary/60" placeholder={t("brand_font_ph")} />
+                  </label>
+                  {/* Slogan / 调性 */}
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px] text-secondary-text">{t("brand_slogan")}</span>
+                    <input value={brand.slogan} onChange={(e) => setBrand({ ...brand, slogan: e.target.value })}
+                      className="bg-bg-page border border-divider rounded-lg px-3 py-2 text-[13px] text-primary-text focus:outline-none focus:border-primary/60" placeholder={t("brand_slogan_ph")} />
+                  </label>
+                  {/* 激活开关 */}
+                  <label className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-bg-page border border-divider cursor-pointer">
+                    <span className="text-[12px] text-primary-text">{t("brand_active")}</span>
+                    <input type="checkbox" checked={brand.active} onChange={(e) => setBrand({ ...brand, active: e.target.checked })} className="w-4 h-4 accent-primary" />
+                  </label>
+                  <div className="text-[10px] text-secondary-strong -mt-2">{t("brand_active_hint")}</div>
+                  <div className="flex gap-2 justify-end">
+                    <button onClick={() => setShowBrand(false)} className="px-4 py-2 border border-divider text-secondary-text rounded-lg text-[12px] font-bold hover:text-primary-text">{t("cancel")}</button>
+                    <button onClick={saveBrandKit} disabled={brandSaving} className="px-5 py-2 bg-primary text-black rounded-lg text-[12px] font-bold disabled:opacity-50">{brandSaving ? t("saving") : t("save")}</button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* 缩放工具条：放右下角，避免与画布底部居中的多选操作条(CanvasArea)同位重叠 */}
             <div className="absolute bottom-6 right-6 flex items-center gap-1 bg-bg-card border border-divider shadow-2xl px-2 py-1.5 rounded z-20">
