@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # 视频生成：供应商加白后给的 endpoint；为空 = 视频未开通（执行层优雅提示）
     video_api_base: str = ""
     video_api_key: str = ""
-    video_model: str = "seedance-2-480p"
+    video_model: str = "seedance-video"  # 默认 fal 经济档图生视频（对标 Lovart）
 
     # development | production（production 下启动时强校验安全配置）
     environment: str = "development"

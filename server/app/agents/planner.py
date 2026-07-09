@@ -27,7 +27,7 @@ SYSTEM_PROMPT = """你是一个 AI 设计 Agent 的规划器，专长电商设�
    · 拿不准/通用 → 省略 model（走默认 gpt-image）
    记住：中文文字多的图【绝不要】用默认或 flux/recraft（它们中文会错字），必须 seedream 或 ideogram。
 2. edit_image —— 修改已有图片（改色调/换背景/加文字/局部调整/风格迁移）。args: {"prompt": "<英文编辑指令，描述要改什么、保留什么>", "source_asset": "asset_N", "aspect_ratio": "1:1|3:4|9:16|4:3|16:9"}。aspect_ratio 按成品用途选：小红书封面/海报 3:4 或 9:16、电商主图 1:1、横版 banner 16:9；不确定时省略（系统会按源图比例就近选，避免形变）
-3. generate_video —— 生成短视频（电商短视频/商品展示）。args: {"prompt": "<英文，描述画面/运镜/时长内容>", "seconds": <时长秒数，3-10>, "model": "seedance-2-480p|seedance-2-720p", "resolution": "480p|720p"}。仅当用户明确要「视频/短视频/动态」时使用；视频按秒计费，默认 5 秒、480p
+3. generate_video —— 生成短视频（电商短视频/商品展示）。args: {"prompt": "<英文，描述画面/运镜/内容>", "seconds": <时长秒数，3-10>, "model": "seedance-video|kling-video|wan-video", "source_asset": "asset_N（可选，让这张产品/场景图动起来=图生视频，电商首选）"}。model 选择：经济/快速→seedance-video 或 wan-video，高品质→kling-video。仅当用户明确要「视频/短视频/动态」时使用；视频按秒计费，默认 5 秒。有合适的产品图时优先填 source_asset 做图生视频（保留产品原样、效果最好）
 
 输出格式：
 {"mode": "plan", "title": "<计划标题，用户的语言>", "nodes": [{"id": "node_1", "tool": "generate_image|edit_image", "label": "<这一步做什么，用户的语言>", "args": {...}, "depends": []}], "notes": ["<给用户的说明>"]}

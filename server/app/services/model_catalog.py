@@ -56,6 +56,19 @@ MODELS = {
         "label": "Seedance 2.0 · 720p（无音频）", "kind": "video", "unit": "second",
         "cost_rmb": 0.07, "credits": 4,
     },
+    # ── fal 视频模型（对标 Lovart；用现有 fal key）。按秒计费，cost_rmb=fal单价×汇率上浮留边际。
+    "seedance-video": {  # 经济档：ByteDance Seedance lite，图生/文生，~$0.05/s
+        "label": "Seedance · 经济图生视频", "kind": "video", "unit": "second",
+        "cost_rmb": 0.5, "credits": 22,
+    },
+    "kling-video": {     # 品质档：Kling 2.5 Turbo Pro，~$0.07/s
+        "label": "Kling · 高品质图生视频", "kind": "video", "unit": "second",
+        "cost_rmb": 0.7, "credits": 30,
+    },
+    "wan-video": {       # 快速档：Wan 2.2，~$0.05/s
+        "label": "Wan · 快速图生视频", "kind": "video", "unit": "second",
+        "cost_rmb": 0.5, "credits": 22,
+    },
 }
 
 # 编辑用图片模型的 edits 端点，成本与生图同量级，单独计价（默认 gpt-image edits，保留原 15 积分）

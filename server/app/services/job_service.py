@@ -687,7 +687,15 @@ async def _video_node(job_id: str, session_id: str, user_id: str, node, planner:
     model = node.args.get("model") or settings.video_model
     seconds = float(node.args.get("seconds") or 5)
     resolution = node.args.get("resolution") or ("480p" if "480" in model else "720p")
-    video = await provider.generate(prompt, seconds=seconds, model=model, resolution=resolution)
+    # 图生视频（电商刚需：让一张产品/场景图动起来）：源图存在则加载传入，让视频保留产品原样。
+    input_image = None
+    if src_label := node.args.get("source_asset"):
+        try:
+            input_image = await _load_asset_bytes(session_id, src_label)
+        except Exception:
+            input_image = None  # 取不到源图 → 退化为文生视频，不硬失败
+    video = await provider.generate(prompt, seconds=seconds, model=model, resolution=resolution,
+                                    input_image=input_image)
 
     key = f"assets/{session_id}/{job_id}_{node.id}.mp4"
     storage.save_bytes(key, video.data)
