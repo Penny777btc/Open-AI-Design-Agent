@@ -112,11 +112,32 @@ async def make_plan(
               .replace("{max_nodes}", str(settings.max_plan_nodes))
               .replace("{person_text_rule}", _rule))
     if assets:
-        lines = "\n".join(
-            f"- {a['asset_label']} ({a.get('kind', 'image')}): {(a.get('prompt') or a.get('source_tool') or '')[:120]}"
-            for a in assets[-20:]
+        # 画布感知（对标 Lovart「canvas as context」）：让 planner 不只看到标签列表，而是
+        # 知道「画布上有什么、哪张是最近生成的」——用户说「跟刚才那张一样/再来一张/这套风格」
+        # 时能引用最近产物、沿用其构图配色，保持整套一致。
+        recent = assets[-20:]
+        imgs = [a for a in recent if a.get("kind") == "image"]
+        # 最近生成（非上传）的图 = 用户「刚才那张」最可能指代的对象
+        gen_imgs = [a for a in imgs if (a.get("source_tool") or "") != "upload"]
+        last_gen = gen_imgs[-1] if gen_imgs else None
+        n_up = sum(1 for a in imgs if (a.get("source_tool") or "") == "upload")
+
+        def _desc(a, full=False):
+            p = (a.get("prompt") or a.get("source_tool") or "").strip()
+            tag = "【上传】" if (a.get("source_tool") or "") == "upload" else "【生成】"
+            mark = " ⟵ 最近生成" if a is last_gen else ""
+            return f"- {a['asset_label']} ({a.get('kind', 'image')}){tag}: {p[:(400 if full else 110)]}{mark}"
+
+        lines = "\n".join(_desc(a, full=(a is last_gen)) for a in recent)
+        summary = f"画布现有 {len(imgs)} 张图（{n_up} 张上传素材、{len(gen_imgs)} 张已生成）"
+        if len(recent) > len(imgs):
+            summary += f" + {len(recent) - len(imgs)} 个其它资产（文字层等）"
+        system += (
+            f"\n\n【画布感知】{summary}。清单（edit_image 的 source_asset 只能从这里选）：\n{lines}\n"
+            "- 用户说「跟刚才/上一张一样风格」「再来一张/几张」「保持这套风格」时，参照【最近生成】那张"
+            "（及其 prompt 描述的构图/配色/风格），沿用一致的视觉语言产出；需要在它基础上改动时用 edit_image。"
+            "- 同一会话内多次生成应尽量风格协调，除非用户明确要换风格。"
         )
-        system += f"\n\n当前会话已有资产（edit_image 的 source_asset 只能从这里选）：\n{lines}"
     if docs:
         # 用户上传的参考文档：产品信息/品牌资料优先于一般假设
         budget = 6000  # 控制上下文长度
