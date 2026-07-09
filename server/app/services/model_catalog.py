@@ -30,6 +30,24 @@ MODELS = {
         "label": "Nano Banana · Gemini 3.1 Flash Image", "kind": "image", "unit": "image",
         "cost_rmb": 0.8, "credits": 40,
     },
+    # ── fal 专长文生图模型（对标 Lovart 多模型；用现有 fal key）。cost_rmb 为保守估价
+    #    （按 fal 计费口径×汇率上浮 ~30% 留安全边际），实际以 fal 账单校准；credits 保证毛利≥地板。
+    "seedream": {
+        "label": "Seedream · 中文写实（治中文错字）", "kind": "image", "unit": "image",
+        "cost_rmb": 0.3, "credits": 15,
+    },
+    "ideogram": {
+        "label": "Ideogram · 中文插画", "kind": "image", "unit": "image",
+        "cost_rmb": 0.6, "credits": 28,
+    },
+    "flux": {
+        "label": "Flux · 写实极速", "kind": "image", "unit": "image",
+        "cost_rmb": 0.05, "credits": 10,
+    },
+    "recraft": {
+        "label": "Recraft · 英文矢量", "kind": "image", "unit": "image",
+        "cost_rmb": 0.4, "credits": 18,
+    },
     "seedance-2-480p": {
         "label": "Seedance 2.0 · 480p", "kind": "video", "unit": "second",
         "cost_rmb": 0.45, "credits": 22,

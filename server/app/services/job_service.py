@@ -18,7 +18,7 @@ from app.config import settings, tool_cost, node_cost
 from app.db import SessionLocal
 from app.services import credit_service
 from app.models import Asset, CreditLedger, Job, JobEvent
-from app.providers import get_image_provider, get_person_edit_provider, get_video_provider
+from app.providers import get_gen_provider_for, get_image_provider, get_person_edit_provider, get_video_provider
 from app.services import storage
 from app.services.placement import PlacementPlanner, display_size
 
@@ -1027,6 +1027,7 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
 
         last_exc = None
         person_failed = False  # nano 抛错/解析失败 → 降级 gpt-image 重试一次（宁可变形也别整节点失败）
+        gen_failed = False   # 专长模型(fal seedream/ideogram/...)生成失败 → 降级默认，之后不再重试专长
         # image 已由「锁人物合成」产出时跳过重试循环；否则按路由走 nano/gpt/generate。
         for _ in range(0 if image is not None else 2):  # 节点级重试
             try:
@@ -1082,7 +1083,23 @@ async def _generate_node(job_id: str, session_id: str, user_id: str, node, plann
                     elif image is None:
                         image = await provider.edit(edit_prompt, edit_source, edit_ar, mask=mask)
                 else:
-                    image = await provider.generate(prompt, node.args.get("aspect_ratio", "1:1"))
+                    # 多模型路由（对标 Lovart）：planner 按任务选了专长模型(seedream/ideogram/
+                    # flux/recraft)就走 fal，否则默认 gpt-image。专长模型失败 → 降级默认，绝不硬失败。
+                    ar = node.args.get("aspect_ratio", "1:1")
+                    gen_p = get_gen_provider_for(node.args.get("model")) if not gen_failed else None
+                    if gen_p is not None:
+                        try:
+                            image = await gen_p.generate(prompt, ar)
+                            edit_model = node.args.get("model")
+                        except Exception as exc:
+                            last_exc = exc
+                            gen_failed = True
+                            logger.warning("专长模型 %s 生成失败，降级默认：%s",
+                                           node.args.get("model"), str(exc)[:160])
+                            image = await provider.generate(prompt, ar)
+                            edit_model = None
+                    else:
+                        image = await provider.generate(prompt, ar)
                 break
             except ValueError:
                 raise  # 资产不存在没必要重试

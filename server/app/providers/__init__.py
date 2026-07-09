@@ -26,6 +26,19 @@ def get_image_provider() -> ImageProvider:
     return PlaceholderImage()
 
 
+# fal 专长文生图模型（对标 Lovart 多模型；需 fal_api_key）——供 generate 节点按 planner
+# 选出的 model 路由。仅这些 key 命中 fal；其它/空 → None（调用方回落默认 gpt-image）。
+def get_gen_provider_for(model: str | None):
+    """按模型名返回专长 generate provider；非 fal 模型返回 None（走默认）。含真人/局部编辑不走这里。"""
+    from app.providers.fal_image import FAL_GEN_MODELS
+
+    if model and model in FAL_GEN_MODELS and settings.fal_api_key and settings.provider_mode != "mock":
+        from app.providers.fal_image import FalTextToImage
+
+        return FalTextToImage(model)
+    return None
+
+
 def get_person_edit_provider() -> ImageProvider:
     """含真人编辑专用 provider：gemini 系（nano-banana）人物一致性最强。
 

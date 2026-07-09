@@ -63,3 +63,61 @@ class FalNanoBanana:
             fmt = (im.format or "PNG").lower()
         return GeneratedImage(data=raw, mime=f"image/{fmt}", width=w, height=h,
                               model="nano-banana-2")
+
+
+# fal 各专长模型的 endpoint + 画幅参数风格（实测：seedream/flux 用 image_size 枚举；
+# ideogram 用 image_size 但枚举不同；统一在下方按 aspect→各家枚举映射，不认就去参重试）。
+FAL_GEN_MODELS = {
+    "seedream": "fal-ai/bytedance/seedream/v3/text-to-image",  # 中文写实+中式审美（治中文错字首选）
+    "ideogram": "fal-ai/ideogram/v3",                          # 中文插画/扁平矢量
+    "flux": "fal-ai/flux/schnell",                             # 写实无字，1.4s 超快超便宜
+    "recraft": "fal-ai/recraft/v3/text-to-image",              # 英文文字/矢量（中文不行）
+}
+# aspect_ratio → fal image_size 枚举（多数 fal t2i 模型通用；不认时去 image_size 用默认方图）
+_SIZE_MAP = {
+    "1:1": "square_hd", "4:3": "landscape_4_3", "3:4": "portrait_4_3",
+    "16:9": "landscape_16_9", "9:16": "portrait_16_9", "3:2": "landscape_4_3", "2:3": "portrait_4_3",
+}
+
+
+class FalTextToImage:
+    """fal 专长模型的文生图（Seedream/Ideogram/Flux/Recraft）。按 model key 选 endpoint。
+    only generate（无 edit）——含真人/局部编辑等仍走原有 gpt-image/nano 路由。"""
+
+    def __init__(self, model_key: str):
+        self.api_key = settings.fal_api_key
+        self.model_key = model_key
+        self.endpoint = FAL_GEN_MODELS.get(model_key)
+        if not self.endpoint:
+            raise ValueError(f"未知 fal 模型：{model_key}")
+
+    async def generate(self, prompt: str, aspect_ratio: str = "1:1", input_images=None) -> GeneratedImage:
+        headers = {"Authorization": f"Key {self.api_key}", "Content-Type": "application/json"}
+        payload: dict = {"prompt": prompt}
+        size = _SIZE_MAP.get(aspect_ratio)
+        if size:
+            payload["image_size"] = size
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            resp = await client.post(f"https://fal.run/{self.endpoint}", headers=headers, json=payload)
+            if resp.status_code in (400, 422) and "image_size" in payload:
+                payload.pop("image_size")  # 该模型不认此画幅枚举 → 去参用默认方图重试
+                resp = await client.post(f"https://fal.run/{self.endpoint}", headers=headers, json=payload)
+            resp.raise_for_status()
+            d = resp.json()
+            imgs = d.get("images") or []
+            if not imgs or not imgs[0].get("url"):
+                raise RuntimeError(f"fal 返回无图片: {str(d)[:200]}")
+            url = imgs[0]["url"]
+            if url.startswith("data:"):
+                raw = base64.b64decode(url.split(",", 1)[1])
+            else:
+                resp2 = await client.get(url)
+                resp2.raise_for_status()
+                raw = resp2.content
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(raw)) as im:
+            w, h = im.size
+            fmt = (im.format or "PNG").lower()
+        return GeneratedImage(data=raw, mime=f"image/{fmt}", width=w, height=h, model=self.model_key)
